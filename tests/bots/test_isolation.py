@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from estimation.bots import Bot, HeuristicBot, RandomBot
+from estimation.bots import Bot, HeuristicBot, PIMCBot, PIMCConfig, RandomBot
 from estimation.engine import Bola, Phase, Round
 from estimation.engine.cards import SUIT_MASKS
 
@@ -112,7 +112,11 @@ def swapped_positions(seed: int) -> list[tuple[Round, Round, int]]:
 
 @pytest.mark.parametrize(
     ("name", "make"),
-    [("heuristic", lambda: HeuristicBot()), ("random", lambda: RandomBot(5))],
+    [
+        ("heuristic", lambda: HeuristicBot()),
+        ("random", lambda: RandomBot(5)),
+        ("pimc", lambda: PIMCBot(5, PIMCConfig(samples=4, oversample=2))),
+    ],
 )
 def test_a_bots_choice_ignores_other_seats_hidden_cards(name: str, make: Callable[[], Bot]):
     checked = 0

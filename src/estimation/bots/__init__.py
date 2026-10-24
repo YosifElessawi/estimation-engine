@@ -3,6 +3,7 @@ own Observation."""
 
 from .base import Bot, BotFactory
 from .heuristic import HeuristicBot, HeuristicConfig
+from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
 from .registry import BOT_NAMES, make_bot
 
@@ -12,6 +13,8 @@ __all__ = [
     "BotFactory",
     "HeuristicBot",
     "HeuristicConfig",
+    "PIMCBot",
+    "PIMCConfig",
     "RandomBot",
     "make_bot",
 ]
