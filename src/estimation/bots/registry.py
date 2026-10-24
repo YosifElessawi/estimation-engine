@@ -7,6 +7,9 @@ HeuristicBot with ``HeuristicConfig(risk_aversion=0.5)``.
 import dataclasses
 from typing import TYPE_CHECKING
 
+from estimation.engine import RulesConfig
+from estimation.engine.config import DEFAULT_CONFIG
+
 from .base import Bot, BotFactory
 from .heuristic import HeuristicBot, HeuristicConfig
 from .pimc import PIMCBot, PIMCConfig
@@ -16,26 +19,29 @@ if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 
-def _random(seed: int, options: dict[str, str]) -> Bot:
+def _random(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     if options:
         raise ValueError(f"the random bot takes no options, got {', '.join(sorted(options))}")
     return RandomBot(seed)
 
 
-def _heuristic(seed: int, options: dict[str, str]) -> Bot:
-    return HeuristicBot(configure(HeuristicConfig(), options, "heuristic"))
+def _heuristic(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    config = HeuristicConfig(super_call_min=rules.super_call_min)
+    return HeuristicBot(configure(config, options, "heuristic"))
 
 
-def _pimc(seed: int, options: dict[str, str]) -> Bot:
-    return PIMCBot(seed, configure(PIMCConfig(), options, "pimc"))
+def _pimc(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
+    return PIMCBot(seed, configure(PIMCConfig(heuristic=heuristic, rules=rules), options, "pimc"))
 
 
 _FACTORIES: dict[str, BotFactory] = {"random": _random, "heuristic": _heuristic, "pimc": _pimc}
 BOT_NAMES = tuple(_FACTORIES)
 
 
-def make_bot(spec: str, seed: int) -> Bot:
-    """The bot named by ``spec`` (``name`` or ``name:key=value:...``), seeded with ``seed``."""
+def make_bot(spec: str, seed: int, rules: RulesConfig = DEFAULT_CONFIG) -> Bot:
+    """The bot named by ``spec`` (``name`` or ``name:key=value:...``), seeded with ``seed``, for
+    a game played by ``rules``."""
     name, *pairs = spec.split(":")
     factory = _FACTORIES.get(name)
     if factory is None:
@@ -46,7 +52,7 @@ def make_bot(spec: str, seed: int) -> Bot:
         if not sep or not key:
             raise ValueError(f"bot option {pair!r} must look like key=value")
         options[key] = value
-    return factory(seed, options)
+    return factory(seed, options, rules)
 
 
 def configure[T: DataclassInstance](config: T, options: dict[str, str], name: str) -> T:

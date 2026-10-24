@@ -23,7 +23,7 @@ from .timing import DEFAULT_BUDGET, Timing
 
 ROTATIONS = 4
 
-BotMaker = Callable[[str, int], Bot]
+BotMaker = Callable[[str, int, RulesConfig], Bot]  # bot name, seed, the rules being played
 Progress = Callable[[int, int, float], None]  # sets done, sets in all, seconds elapsed
 
 
@@ -82,7 +82,9 @@ def play_set(
     rounds: list[int] = []
     for rotation in range(ROTATIONS):
         names = [lineup[slot_at(seat, rotation)] for seat in range(4)]
-        bots = [make(names[seat], bot_seed(seed, index, rotation, seat)) for seat in range(4)]
+        bots = [
+            make(names[seat], bot_seed(seed, index, rotation, seat), config) for seat in range(4)
+        ]
         record = play_bola(seed_of_deals, bots, config, [timings[name] for name in names])
         scores.append(record.scores)
         rounds.append(record.rounds)
@@ -105,7 +107,7 @@ def run_arena(
     if sets < 1 or workers < 1:
         raise ValueError("a run needs at least one set and one worker")
     for name in dict.fromkeys(names):
-        make_bot(name, 0)  # fail fast on an unknown bot or a bad option
+        make_bot(name, 0, config)  # fail fast on an unknown bot or a bad option
     task = partial(_play_set_task, names, seed, config, budget)
     timings = {name: Timing(budget) for name in dict.fromkeys(names)}
     results: list[SetResult] = []

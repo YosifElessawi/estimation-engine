@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Protocol
 
-from estimation.engine import Observation
+from estimation.engine import Observation, RulesConfig
 
 
 class Bot(Protocol):
@@ -13,5 +13,6 @@ class Bot(Protocol):
     def act(self, obs: Observation, legal: list[int]) -> int: ...
 
 
-BotFactory = Callable[[int, dict[str, str]], Bot]
-"""Builds a bot from a seed and its command-line options (``name:key=value``)."""
+BotFactory = Callable[[int, dict[str, str], RulesConfig], Bot]
+"""Builds a bot from a seed, its command-line options (``name:key=value``) and the rules of the
+game it will play."""

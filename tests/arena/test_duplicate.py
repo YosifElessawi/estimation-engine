@@ -25,6 +25,7 @@ class Spy:
     """Plays like the bot it wraps and records the seats it acted from."""
 
     log: ClassVar[list[tuple[str, int]]] = []
+    rules: ClassVar[list[RulesConfig]] = []
 
     def __init__(self, name: str, inner: Bot) -> None:
         self.name = name
@@ -35,9 +36,10 @@ class Spy:
         return self.inner.act(obs, legal)
 
 
-def spy_maker(spec: str, seed: int) -> Bot:
+def spy_maker(spec: str, seed: int, rules: RulesConfig) -> Bot:
     name, _, inner = spec.partition("=")
-    return Spy(name, make_bot(inner, seed))
+    Spy.rules.append(rules)
+    return Spy(name, make_bot(inner, seed, rules))
 
 
 def test_rotation_k_seats_slot_i_plus_k_at_seat_i():
@@ -51,6 +53,13 @@ def test_every_lineup_slot_plays_every_seat_once_per_set():
     play_set(lineup, seed=0, index=0, config=RulesConfig(), make=spy_maker)
     seats = {name: {seat for who, seat in Spy.log if who == name} for name in "abcd"}
     assert seats == {name: {0, 1, 2, 3} for name in "abcd"}
+
+
+def test_bots_are_built_for_the_rules_being_played():
+    rules = RulesConfig(super_call_min=11, carry_stacks=False)
+    Spy.rules = []
+    play_set(("a=heuristic", "b=random", "c=pimc:samples=2", "d=heuristic"), 0, 0, rules, spy_maker)
+    assert Spy.rules == [rules] * 16
 
 
 def test_each_rotation_replays_the_same_deals_with_the_rotated_lineup():
@@ -116,3 +125,9 @@ def test_heuristic_beats_random_in_a_short_duplicate_run():
 
 def set_rsa_interval(run: ArenaRun, bot: str) -> Interval:
     return mean_ci([set_rsa(result, run.lineup)[bot] for result in run.results])
+
+
+def test_pimc_runs_give_the_same_results_on_any_number_of_workers():
+    lineup = ("pimc:samples=4", "heuristic", "heuristic", "heuristic")
+    serial = run_arena(lineup, sets=2, seed=5, workers=1)
+    assert run_arena(lineup, sets=2, seed=5, workers=2).results == serial.results

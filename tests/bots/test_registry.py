@@ -6,6 +6,7 @@ from estimation.bots import BOT_NAMES, Bot, make_bot
 from estimation.bots.heuristic import HeuristicBot, HeuristicConfig
 from estimation.bots.pimc import PIMCBot, PIMCConfig
 from estimation.bots.random_bot import RandomBot
+from estimation.engine import RulesConfig
 
 
 def test_random_heuristic_and_pimc_are_registered():
@@ -25,6 +26,20 @@ def test_pimc_takes_its_search_settings_as_options():
     assert isinstance(bot, PIMCBot)
     assert bot.seed == 3
     assert bot.config == PIMCConfig(samples=10, oversample=1, enforce_budget=True)
+
+
+def test_bots_are_built_for_the_rules_being_played():
+    rules = RulesConfig(super_call_min=11)
+    heuristic = make_bot("heuristic", 0, rules)
+    assert isinstance(heuristic, HeuristicBot)
+    assert heuristic.config.super_call_min == 11
+    pimc = make_bot("pimc", 0, rules)
+    assert isinstance(pimc, PIMCBot)
+    assert pimc.config.rules == rules
+    assert pimc.config.heuristic.super_call_min == 11
+    override = make_bot("heuristic:super_call_min=9", 0, rules)
+    assert isinstance(override, HeuristicBot)
+    assert override.config.super_call_min == 9
 
 
 def test_every_bot_satisfies_the_bot_interface():
