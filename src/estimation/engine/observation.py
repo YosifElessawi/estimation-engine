@@ -41,7 +41,9 @@ class Observation:
     estimates leave out every other seat's choice until all four have chosen (DSH-2).
 
     ``scores`` are the game scores before this round. ``fixed_left`` lists the fixed trumps not
-    yet played, the current round's included. ``top_bid`` and ``top_bidder`` describe the
+    yet played, the current round's included. ``super_call`` is true once a super call (FIX-4)
+    has opened bidding in this fixed-trump round; a Caller or With player at 8 or more is
+    scored as a super call either way (SCR-6). ``top_bid`` and ``top_bidder`` describe the
     highest bid so far and, once the auction ends, the winning bid; both are ``None`` when
     nobody bid. ``with_players`` are the current With declarations during an auction and the
     players scored like the Caller after it. ``total``, ``over`` and ``risks`` are known once
