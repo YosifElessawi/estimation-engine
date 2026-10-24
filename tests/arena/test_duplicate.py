@@ -131,3 +131,10 @@ def test_pimc_runs_give_the_same_results_on_any_number_of_workers():
     lineup = ("pimc:samples=4", "heuristic", "heuristic", "heuristic")
     serial = run_arena(lineup, sets=2, seed=5, workers=1)
     assert run_arena(lineup, sets=2, seed=5, workers=2).results == serial.results
+
+
+def test_pimc_beats_heuristic_bot_in_a_short_duplicate_run():
+    """M3 Done when, in miniature: PIMC's RSA interval against HeuristicBot is above 0, which
+    also shows its search plays better than copying HeuristicBot's card."""
+    run = run_arena(("pimc:samples=8", "heuristic", "heuristic", "heuristic"), sets=3, seed=21)
+    assert set_rsa_interval(run, "pimc:samples=8").low > 0
