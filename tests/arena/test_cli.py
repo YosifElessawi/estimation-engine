@@ -74,9 +74,14 @@ def test_elo_can_include_earlier_runs(tmp_path: Path, capsys: pytest.CaptureFixt
 
 
 def test_a_clean_sweep_is_reported_as_a_lower_bound(capsys: pytest.CaptureFixture[str]):
-    out = run_cli(capsys, "--lineup", LINEUP, "--sets", "3", "--seed", "0")
-    assert "heuristic won all 3 sets against random" in out
-    assert "at least" in out
+    out = run_cli(capsys, "--lineup", LINEUP, "--sets", "6", "--seed", "0")
+    assert "heuristic won all 6 sets against random" in out
+    assert "at least 75 Elo above random" in out
+
+
+def test_a_sweep_of_very_few_sets_bounds_nothing(capsys: pytest.CaptureFixture[str]):
+    out = run_cli(capsys, "--lineup", LINEUP, "--sets", "2", "--seed", "0")
+    assert "heuristic won all 2 sets against random, too few to bound" in out
 
 
 def test_the_elo_prior_is_configurable(tmp_path: Path, capsys: pytest.CaptureFixture[str]):

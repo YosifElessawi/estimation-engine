@@ -161,10 +161,17 @@ def _sweep_notes(report: Report) -> list[str]:
         sets = pair.a_wins + pair.draws + pair.b_wins
         if pair.a_wins == sets or pair.b_wins == sets:
             winner, loser = (pair.a, pair.b) if pair.a_wins == sets else (pair.b, pair.a)
+            gap = sweep_gap(sets)
+            if gap <= 0:
+                notes.append(
+                    f"{winner} won all {sets:,} sets against {loser}, too few to bound the Elo "
+                    "gap; the fitted gap above comes from the virtual draws."
+                )
+                continue
             notes.append(
                 f"{winner} won all {sets:,} sets against {loser}, so the data put {winner} at "
-                f"least {sweep_gap(sets):,.0f} Elo above {loser} (95% confidence); the fitted "
-                "gap above comes from the virtual draws."
+                f"least {gap:,.0f} Elo above {loser} (95% confidence); the fitted gap above "
+                "comes from the virtual draws."
             )
     return notes
 
