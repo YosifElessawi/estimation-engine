@@ -29,7 +29,7 @@ A bot that plays **Estimation**, the 4-player trick-taking card game, by the rul
 ## 1. Rules at a Glance
 
 - Four players, each for themselves, 13 cards each; play goes counterclockwise. A game is 13 open rounds and then 5 fixed-trump rounds, and the most points wins.
-- Rounds 1-13 open with an optional **Dash Call**: a promise to take zero tricks. Everyone decides at the same time, then every Dash Call is public.
+- Rounds 1-13 open with an optional **Dash Call**: a promise to take zero tricks. Starting with the first seat, each player decides in turn, and everyone sees each Dash Call as it is made.
 - Then an **auction** for trump. A bid is a number of tricks (4 to 13) plus a trump: Sans (no trump) > Spades > Hearts > Diamonds > Clubs. When everyone else has passed, the top bidder may still raise once. The winner is the **Caller**. Saying **With** at the top bid's number joins it and scores like the Caller, as long as the final bid stays in that trump. Saying With does not stop you bidding later.
 - The others **estimate** how many tricks they will take, never more than the Caller. Estimates can never total 13, so someone always fails. A total of 14 or more is an **Over** round, 12 or less an **Under** round. The last estimator takes a **Risk** for every 2 the total is off 13.
 - Take exactly your estimate to win: +10 plus your estimate. Miss and you lose the difference. Being Caller or With, each Risk, and being the only winner or only loser each add or subtract 10. In place of the +10 plus estimate, a Dash Call is worth 25 (Over) or 33 (Under), and a **super call** of 8 or more is worth the estimate squared (8 gives +64, or -32 on a miss). A round where 3 or more players are Caller or With counts double.
@@ -107,7 +107,7 @@ stateDiagram-v2
 ### 2.5 Dash Call (Open Rounds)
 
 - **DSH-1** At the start of every open round, each player decides whether to Dash Call: a commitment to take zero tricks. Fixed-trump rounds have no Dash Call (FIX-2). `[Page]`, `[Play]` none in fixed-trump rounds
-- **DSH-2** Everyone decides at the same time, then every Dash Call is public. The engine asks each seat in turn from F, but no seat sees another's choice until all four have chosen. `[Play]`
+- **DSH-2** Starting with F and going counterclockwise, each player decides in turn. Every Dash Call is public as soon as it is made, so later players see the earlier choices. `[Play]`
 - **DSH-3** Any number of players may Dash Call in the same round. `[Play]`
 - **DSH-4** A Dash caller sits out the auction, is never Caller or With, and has a fixed estimate of 0 that counts toward the total. `[Play]`
 - **DSH-5** If all four players Dash Call, the round is skipped (GAM-3). `[Default]`
@@ -375,7 +375,7 @@ Python package `estimation`, engine code in `estimation.engine`.
   - `clone()`, and `Round.replay(round_no, hands, fixed_trump, carry, scores, config, actions)` to rebuild a round from its action log. Two rounds are in the same state when `phase`, `current_player`, `observation(seat)` for all four seats and (once `DONE`) `result()` are all equal.
   - `result() -> RoundResult`, once `phase == DONE`.
 - `Bola(seed, config=RulesConfig())`: a full game. It has the same `phase`, `current_player`, `legal_actions`, `step` and `observation`, plus `round_no`, `scores`, `history` (one `RoundResult` per round, skipped and replayed rounds included), `is_over` and `winners()` (every seat tied for the top score, GAM-5). It deals, picks each round's fixed trump, applies the carry, replays fixed-trump rounds whose trump changed (FIX-5) and moves to the next round by itself. Once `is_over`, it behaves like a round in `DONE`.
-- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, Dash callers, Caller and bid, With players with their `w` and trump, estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. During `DASH`, a seat sees only its own Dash choice: no field (the log, Dash callers, estimates, role flags) may reveal another seat's choice until all four have chosen (DSH-2).
+- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, Dash callers, Caller and bid, With players with their `w` and trump, estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. Dash Calls are public as soon as they are made (DSH-2).
 - `RoundResult`: per seat: estimate, tricks, won, role flags (Dash caller, Caller, With, super call, last estimator), Risks, the points from each of SCR-1 to SCR-6, the multiplier and the final score. Per round: skipped, trump changed by a super call (so `Bola` replays it), estimate total, Over/Under, special-call count, all-lose and the carry for the next round. Under SCR-9 an all-lose round has multiplier 0, so components times multiplier always equals the final score.
 
 ### 5.5 Performance
@@ -414,7 +414,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
    - `legal_actions()` is never empty before the game ends
    - every `RoundResult`'s components times its multiplier give its final score, and game scores equal the sum of round scores
    - each fixed trump is eventually played without its trump changing, unless the replay cap was reached
-   - no observation reveals another seat's cards or a pending Dash choice
+   - no observation reveals another seat's cards
 5. `Round.replay` of a recorded action log reproduces the same state (as defined in §5.4), and two `Bola`s with the same seed and actions have identical `scores` and `history`.
 6. The benchmark reaches 5,000 rounds per second (§5.5); report the number.
 7. ruff, pyright and pytest pass through pre-commit.

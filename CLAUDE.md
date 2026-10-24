@@ -22,7 +22,7 @@ When asked to execute a milestone (for example "Execute Milestone 1 from SPEC.md
 - **Spec changes need Yosif.** SPEC.md changes only when Yosif confirms a rule or answers a question. When that happens, update the rule text, its source tag (`[Page]`, `[Play]`, `[Default]`), §4 if a question stays open, the `RulesConfig` default in §5.3, and every worked example it affects.
 - **Config mirrors the spec.** `RulesConfig` defaults (§5.3) must equal the rules in §2-§3, and every bool flag is tested both on and off.
 - **The action space is frozen.** The 120 action ids in §5.2 never change; RL milestones depend on them.
-- **Bots see only their own `Observation`.** Nothing may leak another seat's cards or a pending Dash Call.
+- **Bots see only their own `Observation`.** Nothing may leak another seat's cards.
 
 ## Commands
 
