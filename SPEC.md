@@ -260,7 +260,7 @@ Total 12: Under, 0 Risks (seat 3 could not estimate 5). With `dash_replaces_base
 
 With `super_call_scoring=False`, seat 0 scores 28 in (a) and -21 in (b). With `only_bonus_for_super_calls=False`, seat 0 scores -42 in (b).
 
-**G6. Everyone loses.** F = seat 0. Auction: seat 0 bids 4 Clubs, seat 1 says With, seats 2 and 3 pass, and seat 0 keeps its bid on its final turn. Estimates: seat 1 estimates 4 (its only option), seat 2 estimates 4 (so it is With too), seat 3 (last) estimates 0 (1 would make 13). Total 12: Under, 0 Risks. Tricks: 5, 3, 2, 3, so every player lost.
+**G6. Everyone loses.** F = seat 0. Auction: seat 0 bids 4 Clubs, seat 1 says With, seats 2 and 3 pass, seat 1 then passes too (keeping its With), and seat 0 keeps its bid on its final turn. Estimates: seat 1 estimates 4 (its only option), seat 2 estimates 4 (so it is With too), seat 3 (last) estimates 0 (1 would make 13). Total 12: Under, 0 Risks. Tricks: 5, 3, 2, 3, so every player lost.
 
 | Config | Scores (seats 0, 1, 2, 3) | Next round |
 | :--- | :--- | :--- |
