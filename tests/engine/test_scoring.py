@@ -435,6 +435,8 @@ def test_GAM_3_skipped_round_scores_zero_for_everyone():
     result = score_round(RoundOutcome(skipped=True, dash_callers=(0, 1, 2, 3), carry=2))
     assert result.scores == (0, 0, 0, 0)
     assert all(s.points == 0 for s in result.seats)
+    assert result.multiplier == 2  # the carry it was played at; every component is 0
+    assert all(s.multiplier == 2 and s.is_dash for s in result.seats)
     assert result.over is None
     assert result.total is None
     assert result.caller is None

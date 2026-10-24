@@ -1,14 +1,17 @@
 """Trick play inside a Round (PLY-1 to PLY-5) and the open golden rounds G1-G6 end to end."""
 
+import random
+
 import pytest
 
-from estimation.engine.actions import PASS, WITH, card_of, play_action
+from estimation.engine.actions import PASS, WITH, card_of, is_play, play_action
 from estimation.engine.cards import (
     CLUBS,
     DIAMONDS,
     HEARTS,
     SPADES,
     SUIT_MASKS,
+    deal,
     suit_of,
     trick_winner,
 )
@@ -25,6 +28,19 @@ def play_round(round_no: int = 1, seed: int = 0) -> Round:
         rnd.step(rnd.legal_actions()[0])
     assert rnd.phase is Phase.PLAY
     return rnd
+
+
+def test_TBL_2_every_turn_in_a_round_passes_counterclockwise():
+    for seed in range(20):
+        rnd = Round.new(1 + seed % 13, deal(seed, 1 + seed % 13))
+        rng = random.Random(seed)
+        while rnd.phase is not Phase.DONE:
+            rnd.step(rng.choice(rnd.legal_actions()))
+        assert [seat for seat, _ in rnd.log[:4]] == [(rnd.first + k) % 4 for k in range(4)]
+        plays = [seat for seat, action in rnd.log if is_play(action)]
+        for start in range(0, len(plays), 4):
+            leader = plays[start]
+            assert plays[start : start + 4] == [(leader + k) % 4 for k in range(4)]
 
 
 def test_PLY_1_caller_leads_the_first_trick():

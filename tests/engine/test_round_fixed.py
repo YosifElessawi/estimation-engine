@@ -104,6 +104,21 @@ def test_FIX_4_with_and_final_turn_work_in_the_super_call_auction():
     assert legal_estimates(rnd) == [8, 9]
 
 
+def test_FIX_4_super_caller_may_raise_into_the_fixed_trump_on_its_final_turn():
+    """AUC-3 allows any higher bid on the final turn, so a raise into the fixed trump keeps it
+    and the fixed trump is not replayed."""
+    rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), PASS, PASS, PASS)
+    assert rnd.current_player == 0
+    assert bid(9, HEARTS) in rnd.legal_actions()
+    rnd.step(bid(9, HEARTS))
+    obs = rnd.observation(0)
+    assert (obs.caller, obs.trump, obs.estimates[0]) == (0, HEARTS, 9)
+    run(rnd, est(0), est(0), est(0))
+    while rnd.phase is Phase.PLAY:
+        rnd.step(rnd.legal_actions()[0])
+    assert not rnd.result().trump_changed
+
+
 def test_FIX_4_estimation_after_the_auction_allows_no_new_super_call():
     rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), PASS, PASS, PASS, PASS)
     assert rnd.phase is Phase.ESTIMATION
