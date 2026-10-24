@@ -7,9 +7,10 @@ import pytest
 
 from estimation.engine.actions import NUM_ACTIONS, PASS, play_action
 from estimation.engine.cards import CLUBS, DIAMONDS, FULL_DECK, HEARTS, SANS, SPADES, deal
+from estimation.engine.config import RulesConfig
 from estimation.engine.round import FIXED_ORDER, IllegalActionError, Phase, Round
 
-from .helpers import DASH, NO, NO_DASH_ROUND, bid, new_round, run
+from .helpers import DASH, NO, NO_DASH_ROUND, bid, est, new_round, run
 
 
 def random_round(seed: int, round_no: int = 1, fixed_trump: int | None = None) -> Round:
@@ -170,6 +171,23 @@ def test_observation_shows_own_hand_shrinking_as_cards_are_played():
 def test_observation_rejects_a_bad_seat():
     with pytest.raises(ValueError, match="seat"):
         new_round(1).observation(4)
+
+
+def test_clone_copies_every_slot_mid_super_call_auction():
+    """With the switch off, a copy must still know the super caller and keep it out of the
+    fixed trump; every other slot must match too, with no list shared between the two."""
+    config = RulesConfig(super_caller_may_bid_fixed=False)
+    rnd = run(Round.new(16, deal(0, 16), HEARTS, config=config), est(2), bid(8, SPADES))
+    run(rnd, bid(9, HEARTS), PASS, PASS)
+    copy = rnd.clone()
+    for name in Round.__slots__:
+        original, copied = getattr(rnd, name), getattr(copy, name)
+        assert copied == original, name
+        if isinstance(original, list):
+            assert copied is not original, name
+    assert copy.current_player == 0
+    assert copy.legal_actions() == rnd.legal_actions()
+    assert bid(10, HEARTS) not in copy.legal_actions()
 
 
 def test_clone_is_independent():
