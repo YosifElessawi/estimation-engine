@@ -4,11 +4,12 @@ import pytest
 
 from estimation.bots import BOT_NAMES, Bot, make_bot
 from estimation.bots.heuristic import HeuristicBot, HeuristicConfig
+from estimation.bots.pimc import PIMCBot, PIMCConfig
 from estimation.bots.random_bot import RandomBot
 
 
-def test_random_and_heuristic_are_registered():
-    assert {"random", "heuristic"} <= set(BOT_NAMES)
+def test_random_heuristic_and_pimc_are_registered():
+    assert {"random", "heuristic", "pimc"} <= set(BOT_NAMES)
     assert isinstance(make_bot("random", 1), RandomBot)
     assert isinstance(make_bot("heuristic", 1), HeuristicBot)
 
@@ -17,6 +18,13 @@ def test_options_after_a_colon_set_config_fields():
     bot = make_bot("heuristic:risk_aversion=0.5:dash_max_suit=3", 0)
     assert isinstance(bot, HeuristicBot)
     assert bot.config == HeuristicConfig(risk_aversion=0.5, dash_max_suit=3)
+
+
+def test_pimc_takes_its_search_settings_as_options():
+    bot = make_bot("pimc:samples=10:oversample=1:enforce_budget=true", 3)
+    assert isinstance(bot, PIMCBot)
+    assert bot.seed == 3
+    assert bot.config == PIMCConfig(samples=10, oversample=1, enforce_budget=True)
 
 
 def test_every_bot_satisfies_the_bot_interface():

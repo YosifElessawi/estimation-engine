@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from .base import Bot, BotFactory
 from .heuristic import HeuristicBot, HeuristicConfig
+from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
 
 if TYPE_CHECKING:
@@ -25,7 +26,11 @@ def _heuristic(seed: int, options: dict[str, str]) -> Bot:
     return HeuristicBot(configure(HeuristicConfig(), options, "heuristic"))
 
 
-_FACTORIES: dict[str, BotFactory] = {"random": _random, "heuristic": _heuristic}
+def _pimc(seed: int, options: dict[str, str]) -> Bot:
+    return PIMCBot(seed, configure(PIMCConfig(), options, "pimc"))
+
+
+_FACTORIES: dict[str, BotFactory] = {"random": _random, "heuristic": _heuristic, "pimc": _pimc}
 BOT_NAMES = tuple(_FACTORIES)
 
 
