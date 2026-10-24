@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Training and arena output (M2+)
+checkpoints/
+runs/
+*.pt
+
+# Web (M6)
+node_modules/
+.next/
+
+# Local and secrets
+.env
+.env.*
+.DS_Store
+.claude/settings.local.json
