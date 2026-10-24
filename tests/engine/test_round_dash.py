@@ -55,41 +55,35 @@ def test_DSH_2_engine_asks_each_seat_in_turn_from_F():
     assert asked == [2, 3, 0, 1]
 
 
-def test_DSH_2_no_seat_sees_another_dash_choice_until_all_four_chose():
+def test_DSH_2_every_dash_call_is_public_as_soon_as_it_is_made():
     rnd = run(new_round(1), DASH)
-    assert rnd.observation(0).dash_callers == (0,)
-    assert rnd.observation(0).log == ((0, DASH),)
-    for seat in (1, 2, 3):
-        obs = rnd.observation(seat)
-        assert obs.dash_callers == ()
-        assert obs.log == ()
-        assert obs.estimates == (None, None, None, None)
-    run(rnd, NO, DASH)
-    assert rnd.observation(1).log == ((1, NO),)
-    assert rnd.observation(3).dash_callers == ()
-    rnd.step(NO)
     for seat in range(4):
         obs = rnd.observation(seat)
-        assert obs.dash_callers == (0, 2)
-        assert obs.log == ((0, DASH), (1, NO), (2, DASH), (3, NO))
-        assert obs.estimates == (0, None, 0, None)
+        assert obs.dash_callers == (0,)
+        assert obs.log == ((0, DASH),)
+        assert obs.estimates == (0, None, None, None)
+    run(rnd, NO, DASH)
+    assert rnd.current_player == 3
+    obs = rnd.observation(3)
+    assert obs.dash_callers == (0, 2)
+    assert obs.log == ((0, DASH), (1, NO), (2, DASH))
+    assert obs.estimates == (0, None, 0, None)
 
 
-@pytest.mark.parametrize("choices", list(itertools.product((NO, DASH), repeat=3)))
-def test_DSH_2_observation_during_dash_ignores_other_seats_choices(choices: tuple[int, ...]):
-    """Flipping another seat's pending choice leaves every seat's observation unchanged."""
-    for made in range(1, 4):
-        prefix = choices[:made]
-        rnd = run(new_round(2), *prefix)
-        for seat in range(4):
-            mine = (seat - rnd.first) % 4
-            for flip in range(made):
-                if flip == mine:
-                    continue
-                other = list(prefix)
-                other[flip] = DASH if other[flip] == NO else NO
-                alt = run(new_round(2), *other)
-                assert alt.observation(seat) == rnd.observation(seat)
+@pytest.mark.parametrize("choices", list(itertools.product((NO, DASH), repeat=4)))
+def test_DSH_2_every_seat_sees_the_same_dash_calls_while_the_others_decide(
+    choices: tuple[int, ...],
+):
+    rnd = new_round(2)
+    for made, choice in enumerate(choices, start=1):
+        rnd.step(choice)
+        seats = [(rnd.first + k) % 4 for k in range(made)]
+        callers = tuple(sorted(s for s, c in zip(seats, choices, strict=False) if c == DASH))
+        views = [rnd.observation(seat) for seat in range(4)]
+        for obs in views:
+            assert obs.dash_callers == callers
+            assert obs.log == tuple(zip(seats, choices[:made], strict=True))
+            assert all(obs.estimates[s] == 0 for s in callers)
 
 
 def test_DSH_3_any_number_of_players_may_dash_call():

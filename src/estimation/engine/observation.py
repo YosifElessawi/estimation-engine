@@ -37,8 +37,7 @@ class Observation:
     """One seat's view of a round.
 
     ``hand`` is the seat's own remaining hand as a bitmask; no field holds another seat's
-    unplayed cards. During DASH a seat sees only its own Dash choice: the log, Dash callers and
-    estimates leave out every other seat's choice until all four have chosen (DSH-2).
+    unplayed cards. Every Dash Call is public as soon as it is made (DSH-2).
 
     ``scores`` are the game scores before this round. ``fixed_left`` lists the fixed trumps not
     yet played, the current round's included. ``super_call`` is true once a super call (FIX-4)

@@ -4,8 +4,9 @@
 must end without exceptions, and each played round must use all 52 cards once, never total 13
 in estimates, have a loser, and score components x multiplier = score. Game scores must be the
 sum of round scores and the fixed trumps must follow FIX-1 and FIX-5. Under the default config
-the run also checks that no observation reveals another seat's cards or a pending Dash choice,
-and that replaying a recorded action log reproduces the same round and the same game.
+the run also checks that no observation reveals another seat's cards, that every seat sees each
+Dash Call as soon as it is made, and that replaying a recorded action log reproduces the same
+round and the same game.
 """
 
 import dataclasses
@@ -13,7 +14,7 @@ import random
 
 import pytest
 
-from estimation.engine.actions import DASH_CALL, NO_DASH_CALL
+from estimation.engine.actions import DASH_CALL
 from estimation.engine.bola import Bola
 from estimation.engine.cards import FULL_DECK, SUIT_MASKS
 from estimation.engine.config import RulesConfig
@@ -86,8 +87,8 @@ def run_bola(seed: int, config: RulesConfig, *, deep: bool) -> tuple[Bola, list[
         assert legal, f"seed {seed}: no legal action before the game ended"
         rnd = bola.round
         if deep:
-            if rnd.phase is Phase.DASH and len(rnd.log) == 3:
-                check_dash_privacy(rnd)
+            if rnd.phase is Phase.DASH and rnd.log:
+                check_dash_calls_are_public(rnd)
             if sampler.random() < CARD_CHECK_RATE:
                 check_card_privacy(rnd, sampler)
         action = policy.choice(legal)
@@ -151,21 +152,15 @@ def check_game(bola: Bola) -> None:
     assert replays == bola.replays
 
 
-def check_dash_privacy(rnd: Round) -> None:
-    """With three Dash choices made, no seat's view depends on another seat's choice."""
-    made = [action for _, action in rnd.log]
+def check_dash_calls_are_public(rnd: Round) -> None:
+    """DSH-2: every seat sees each Dash Call made so far, and its fixed estimate of 0."""
+    made = rnd.log
+    callers = tuple(sorted(seat for seat, action in made if action == DASH_CALL))
     for seat in range(4):
         obs = rnd.observation(seat)
-        assert all(entry_seat == seat for entry_seat, _ in obs.log)
-        assert set(obs.dash_callers) <= {seat}
-        assert obs.estimates == (None, None, None, None)
-        mine = (seat - rnd.first) % 4
-        for k in range(len(made)):
-            if k == mine:
-                continue
-            flipped = made.copy()
-            flipped[k] = DASH_CALL if made[k] == NO_DASH_CALL else NO_DASH_CALL
-            assert replay(rnd, rnd.hands, flipped).observation(seat) == obs
+        assert obs.log == made
+        assert obs.dash_callers == callers
+        assert all(obs.estimates[caller] == 0 for caller in callers)
 
 
 def check_card_privacy(rnd: Round, sampler: random.Random) -> None:

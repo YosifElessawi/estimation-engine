@@ -424,7 +424,9 @@ class Round:
         if action != NO_DASH_CALL and action != DASH_CALL:
             raise IllegalActionError(f"{_describe(action)} is not a Dash Call decision")
         seat = self._cur
-        self._dash[seat] = action == DASH_CALL
+        if action == DASH_CALL:  # DSH-2: public as soon as it is made
+            self._dash[seat] = True
+            self._est[seat] = 0  # DSH-4: a fixed estimate of 0
         self._log.append((seat, action))
         self._chosen += 1
         if self._chosen < 4:
@@ -435,9 +437,6 @@ class Round:
     def _start_auction(self) -> None:
         dash = self._dash
         callers = dash.count(True)
-        for seat in range(4):
-            if dash[seat]:
-                self._est[seat] = 0  # DSH-4: a fixed estimate of 0
         if callers == 4:
             self._skip()  # DSH-5
             return
@@ -682,21 +681,7 @@ class Round:
             raise ValueError(f"no seat {seat}")
         phase = self.phase
         dash = self._dash
-        estimates: tuple[int | None, int | None, int | None, int | None]
-        if phase is DASH:  # DSH-2: only this seat's own Dash choice is visible
-            log = tuple(entry for entry in self._log if entry[0] == seat)
-            dash_callers: tuple[int, ...] = (seat,) if dash[seat] else ()
-            estimates = (None, None, None, None)
-        else:
-            log = tuple(self._log)
-            dash_callers = tuple(s for s in range(4) if dash[s])
-            e0, e1, e2, e3 = self._est
-            estimates = (
-                e0 if e0 >= 0 else None,
-                e1 if e1 >= 0 else None,
-                e2 if e2 >= 0 else None,
-                e3 if e3 >= 0 else None,
-            )
+        e0, e1, e2, e3 = self._est
         if phase is AUCTION:
             with_players = tuple(
                 WithInfo(s, (b - FIRST_BID) // 5 + 4, (b - FIRST_BID) % 5)
@@ -727,14 +712,19 @@ class Round:
             super_call=self._super,
             trump=self._trump if self._trump >= 0 else None,
             hand=self._hands[seat],
-            log=log,
-            dash_callers=dash_callers,
+            log=tuple(self._log),
+            dash_callers=tuple(s for s in range(4) if dash[s]),
             top_bid=self._top if self._top_seat >= 0 else None,
             top_bidder=self._top_seat if self._top_seat >= 0 else None,
             passed=tuple(s for s in range(4) if self._passed[s] and not dash[s]),
             caller=caller if caller >= 0 else None,
             with_players=with_players,
-            estimates=estimates,
+            estimates=(
+                e0 if e0 >= 0 else None,
+                e1 if e1 >= 0 else None,
+                e2 if e2 >= 0 else None,
+                e3 if e3 >= 0 else None,
+            ),
             last_estimator=last if last >= 0 and (phase is ESTIMATION or settled) else None,
             total=total,
             over=None if total is None else total > 13,
