@@ -8,13 +8,15 @@ round score minus the mean of the other three. Dash Call, bidding and estimation
 HeuristicBot.
 
 Search is deterministic for a given seed: the time budget is only measured, unless
-``enforce_budget`` cuts sampling short at the deadline, which makes play depend on timing.
+``enforce_budget`` cuts the search short, which makes play depend on timing. Even then the budget
+is checked between deals, after drawing the deals, so a decision can run a little over it.
 """
 
 import dataclasses
 import math
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from estimation.engine import (
@@ -43,8 +45,8 @@ class PIMCConfig:
     oversample: int = 3  # deals drawn per deal kept, to keep those that fit the estimates
     estimate_sigma: float = 1.0  # how closely a sampled hand must fit its estimate, in tricks
     budget_ms: float = 250.0  # time budget per card decision
-    enforce_budget: bool = False  # stop sampling at the budget (play then depends on timing)
-    merge_equivalent: bool = False  # search one card per run of touching cards (faster)
+    enforce_budget: bool = False  # stop rolling out new deals once the budget is spent
+    merge_equivalent: bool = False  # roll out one card per run of touching cards
     heuristic: HeuristicConfig = DEFAULT_HEURISTIC  # rollouts, bidding and estimation
     rules: RulesConfig = DEFAULT_CONFIG  # the rules rollouts are scored by
 
@@ -77,52 +79,50 @@ class PIMCBot:
         return play_action(self.choose(obs, [action - PLAY_BASE for action in legal]))
 
     def choose(self, obs: Observation, cards: list[int]) -> int:
-        """The card to play from the legal ``cards``."""
+        """The card to play from the legal ``cards``: the best total over the sampled deals,
+        HeuristicBot's own card on a tie."""
         config = self.config
         start = time.perf_counter()
         know = read_knowledge(obs)
-        me = obs.seat
         trump = obs.trump
-        leader = obs.leader
-        estimates = _estimates(obs)
-        if trump is None or leader is None:
+        if trump is None:
             raise ValueError("PIMC searches only during card play")
-        unseen = know.unseen
+        estimates = _estimates(obs)
         trick = [card for _, card in obs.trick]
-        won = list(obs.tricks_won)
-        hint = choose_card(know.hand, trick, trump, estimates[me] > won[me], unseen)
+        me = obs.seat
+        want = estimates[me] > obs.tricks_won[me]
+        hint = choose_card(know.hand, trick, trump, want, know.unseen)
         candidates = (
-            representatives(cards, unseen, hint)
+            representatives(cards, know.unseen, hint)
             if config.merge_equivalent
             else sorted(cards, key=lambda card: card != hint)
         )
         if len(candidates) == 1:
             return candidates[0]
-        samples = self._sample(know, obs, estimates, trump)
-        scorer = _Scorer(obs, estimates, config.rules)
-        totals = [0.0] * len(candidates)
-        deadline = start + config.budget_ms / 1000
-        for sample in samples:
-            for k, card in enumerate(candidates):
-                hands = sample.copy()
-                hands[me] ^= 1 << card
-                tricks = finish_round(hands, [*trick, card], leader, trump, estimates, won.copy())
-                totals[k] += scorer.value(tricks)
-            if config.enforce_budget and time.perf_counter() > deadline:
-                break
+        deals = self.sample_deals(obs, know)
+        deadline = start + config.budget_ms / 1000 if config.enforce_budget else None
+        totals = self.evaluate(obs, candidates, deals, deadline)
         best = 0
         for k in range(1, len(candidates)):
             if totals[k] > totals[best]:
                 best = k
         return candidates[best]
 
-    def _sample(
-        self, know: Knowledge, obs: Observation, estimates: tuple[int, int, int, int], trump: int
-    ) -> list[list[int]]:
-        """``samples`` full deals; with ``oversample`` > 1, the ones that best fit the estimates,
-        picked by weighted sampling without replacement."""
+    def sample_deals(self, obs: Observation, know: Knowledge | None = None) -> list[list[int]]:
+        """``samples`` full deals (four remaining hands, own hand included) that fit the hand
+        sizes, voids and played cards. With ``oversample`` > 1 it draws that many times more
+        and keeps the ones whose hands best fit the estimates, by weighted sampling without
+        replacement: a deal's weight falls with the squared gap, over the other three seats,
+        between each player's whole hand valued by HeuristicBot's hand model and its estimate
+        (a Dash caller's Sans value against 0)."""
         config = self.config
         rng = self._rng
+        if know is None:
+            know = read_knowledge(obs)
+        trump = obs.trump
+        if trump is None:
+            raise ValueError("PIMC samples deals only during card play")
+        estimates = _estimates(obs)
         me = know.seat
         others = ((me + 1) & 3, (me + 2) & 3, (me + 3) & 3)
         sizes = [know.sizes[seat] for seat in others]
@@ -153,8 +153,39 @@ class PIMCBot:
                 misfit += miss * miss
             # Efraimidis-Spirakis: keep the largest u ** (1 / weight), compared as logarithms.
             keys.append(math.log(1.0 - rng.random()) * math.exp(min(misfit / spread, 700.0)))
-        kept = sorted(range(len(deals)), key=keys.__getitem__, reverse=True)[: config.samples]
+        kept = sorted(range(len(deals)), key=keys.__getitem__, reverse=True)[: self.config.samples]
         return [deals[k] for k in sorted(kept)]
+
+    def evaluate(
+        self,
+        obs: Observation,
+        cards: Sequence[int],
+        deals: Sequence[list[int]],
+        deadline: float | None = None,
+    ) -> list[float]:
+        """For each card, the sum over ``deals`` of own round score minus the mean of the other
+        three, playing the card and then the rest of the round with HeuristicBot card play for
+        every seat. Every card is rolled out on the same deals; with a ``deadline`` (a
+        ``time.perf_counter`` value) no new deal is started after it passes."""
+        trump = obs.trump
+        leader = obs.leader
+        if trump is None or leader is None:
+            raise ValueError("PIMC evaluates cards only during card play")
+        estimates = _estimates(obs)
+        me = obs.seat
+        trick = [card for _, card in obs.trick]
+        won = list(obs.tricks_won)
+        scorer = RoundScorer(obs, self.config.rules)
+        totals = [0.0] * len(cards)
+        for sample in deals:
+            for k, card in enumerate(cards):
+                hands = sample.copy()
+                hands[me] ^= 1 << card
+                tricks = finish_round(hands, [*trick, card], leader, trump, estimates, won.copy())
+                totals[k] += scorer.value(tricks)
+            if deadline is not None and time.perf_counter() > deadline:
+                break
+        return totals
 
 
 def _estimates(obs: Observation) -> tuple[int, int, int, int]:
@@ -168,8 +199,9 @@ def representatives(cards: list[int], out: int, hint: int) -> list[int]:
     """One card from each run of touching cards, with the hint's run first.
 
     Two cards of a suit touch when every card ranked between them is played or in the same
-    hand (``out`` holds the cards in other hands), so either one plays exactly like the other.
-    The hint represents its own run, so a tie in search falls back to the hinted card.
+    hand (``out`` holds the cards in other hands). They take the same tricks against any
+    holding, though a rollout that discards by rank across suits may later play them
+    differently. The hint represents its own run, so a tie in search falls back to it.
     """
     runs: list[list[int]] = []
     for card in sorted(cards):
@@ -189,19 +221,18 @@ def representatives(cards: list[int], out: int, hint: int) -> list[int]:
     return picks
 
 
-class _Scorer:
-    """Own round score minus the mean of the other three, per final trick count, by SPEC §3."""
+class RoundScorer:
+    """Scores final trick counts of the round in ``obs`` by SPEC §3, from ``obs.seat``'s side:
+    its own round score minus the mean round score of the other three."""
 
     __slots__ = ("_cache", "_me", "_outcome", "_rules")
 
-    def __init__(
-        self, obs: Observation, estimates: tuple[int, int, int, int], rules: RulesConfig
-    ) -> None:
+    def __init__(self, obs: Observation, rules: RulesConfig = DEFAULT_CONFIG) -> None:
         self._me = obs.seat
         self._rules = rules
         self._cache: dict[tuple[int, ...], float] = {}
         self._outcome = RoundOutcome(
-            estimates=estimates,
+            estimates=_estimates(obs),
             tricks=(13, 0, 0, 0),
             caller=obs.caller,
             dash_callers=obs.dash_callers,
@@ -214,7 +245,7 @@ class _Scorer:
             fixed_trump=obs.fixed_trump,
         )
 
-    def value(self, tricks: list[int]) -> float:
+    def value(self, tricks: Sequence[int]) -> float:
         key = tuple(tricks)
         cached = self._cache.get(key)
         if cached is not None:
