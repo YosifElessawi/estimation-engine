@@ -160,7 +160,7 @@ class Round:
 
     _cur: int  # seat to act
     _hands: list[int]  # remaining hands
-    _log: list[tuple[int, int]]  # every (seat, action), hidden Dash choices included
+    _log: list[tuple[int, int]]  # every (seat, action), all public
     _dash: list[bool]
     _chosen: int  # Dash choices made so far
     _passed: list[bool]  # out of the auction: passed, or a Dash caller
@@ -308,7 +308,7 @@ class Round:
 
     @property
     def log(self) -> tuple[tuple[int, int], ...]:
-        """Every ``(seat, action)`` so far, hidden Dash choices included. Not for bots."""
+        """Every ``(seat, action)`` so far, all public: the same as an observation's log."""
         return tuple(self._log)
 
     def result(self) -> RoundResult:
