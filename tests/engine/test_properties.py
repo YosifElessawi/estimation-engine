@@ -95,6 +95,7 @@ def run_bola(seed: int, config: RulesConfig, *, deep: bool) -> tuple[Bola, list[
         actions.append(action)
         if bola.round is not rnd or bola.is_over:
             check_round(rnd)
+            assert bola.round.replays == bola.replays
             if deep and sampler.random() < ROUND_REPLAY_RATE:
                 check_round_replay(rnd)
     assert bola.is_over, f"seed {seed}: the game did not end in {MAX_STEPS} steps"
@@ -217,8 +218,6 @@ def replay(rnd: Round, hands: tuple[int, int, int, int], actions: list[int]) -> 
         rnd.scores,
         rnd.config,
         actions,
-        fixed_left=rnd.fixed_left,
-        replays=rnd.replays,
     )
 
 

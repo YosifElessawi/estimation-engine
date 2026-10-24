@@ -5,7 +5,7 @@ import dataclasses
 import pytest
 
 from estimation.engine.actions import PASS, WITH, bid_action, is_bid
-from estimation.engine.cards import CLUBS, DIAMONDS, HEARTS, SANS, SPADES
+from estimation.engine.cards import CLUBS, DIAMONDS, HEARTS, SANS, SPADES, deal
 from estimation.engine.config import RulesConfig
 from estimation.engine.observation import WithInfo
 from estimation.engine.round import IllegalActionError, Phase, Round
@@ -82,7 +82,7 @@ def test_FIX_4_super_call_is_8_or_more_in_another_trump():
 
 def test_FIX_4_super_call_minimum_follows_config():
     config = dataclasses.replace(RulesConfig(), super_call_min=10)
-    rnd = Round.new(15, new_round(15).hands, SPADES, config=config)
+    rnd = Round.new(15, deal(0, 15), SPADES, config=config)
     assert legal_bids(rnd) == super_calls(SPADES, minimum=10)
 
 

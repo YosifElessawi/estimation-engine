@@ -34,9 +34,14 @@ def test_GAM_2_first_seat_to_act_is_round_minus_one_mod_4(round_no: int, first: 
     assert rnd.current_player == first
 
 
-@pytest.mark.parametrize(("round_no", "first"), [(14, 1), (15, 2), (16, 3), (17, 0), (22, 1)])
-def test_GAM_2_F_estimates_first_in_a_fixed_trump_round(round_no: int, first: int):
-    rnd = new_round(round_no, SPADES)
+@pytest.mark.parametrize(
+    ("round_no", "fixed_trump", "first"),
+    [(14, SANS, 1), (15, SPADES, 2), (16, SPADES, 3), (17, SPADES, 0), (22, SPADES, 1)],
+)
+def test_GAM_2_F_estimates_first_in_a_fixed_trump_round(
+    round_no: int, fixed_trump: int, first: int
+):
+    rnd = new_round(round_no, fixed_trump)
     assert rnd.current_player == first
     assert all(is_estimate(a) or is_bid(a) for a in rnd.legal_actions())
 

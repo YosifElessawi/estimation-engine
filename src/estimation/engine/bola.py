@@ -6,10 +6,8 @@ import numpy.typing as npt
 from .cards import deal
 from .config import DEFAULT_CONFIG, RulesConfig
 from .observation import Observation, Phase
-from .round import FIXED_ORDER, IllegalActionError, Round
+from .round import FIXED_ORDER, OPEN_ROUNDS, IllegalActionError, Round
 from .scoring import RoundResult
-
-OPEN_ROUNDS = 13
 
 
 def top_seats(scores: tuple[int, int, int, int]) -> tuple[int, ...]:
@@ -115,12 +113,5 @@ class Bola:
         round_no = self.round_no
         fixed_trump = FIXED_ORDER[self._fixed_index] if round_no > OPEN_ROUNDS else None
         return Round.new(
-            round_no,
-            deal(self.seed, round_no),
-            fixed_trump,
-            self.carry,
-            self.scores,
-            self.config,
-            fixed_left=FIXED_ORDER[self._fixed_index :],
-            replays=self.replays,
+            round_no, deal(self.seed, round_no), fixed_trump, self.carry, self.scores, self.config
         )

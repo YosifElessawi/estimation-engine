@@ -118,13 +118,40 @@ def test_new_keeps_the_deal_and_context():
     assert obs.replays == 0
 
 
-def test_fixed_round_context_defaults_to_the_remaining_fixed_trumps():
-    obs = Round.new(16, deal(0, 16), HEARTS).observation(0)
-    assert (obs.fixed_trump, obs.trump) == (HEARTS, HEARTS)
-    assert obs.fixed_left == (HEARTS, DIAMONDS, CLUBS)
-    custom = Round.new(20, deal(0, 20), SPADES, fixed_left=(SPADES, HEARTS), replays=3)
-    assert custom.observation(1).fixed_left == (SPADES, HEARTS)
-    assert custom.observation(1).replays == 3
+@pytest.mark.parametrize(
+    ("round_no", "fixed_trump", "fixed_left", "replays"),
+    [
+        (14, SANS, FIXED_ORDER, 0),
+        (16, HEARTS, (HEARTS, DIAMONDS, CLUBS), 0),
+        (17, HEARTS, (HEARTS, DIAMONDS, CLUBS), 1),  # G9: Hearts replayed once
+        (20, SPADES, FIXED_ORDER[1:], 5),
+        (38, CLUBS, (CLUBS,), 20),
+    ],
+)
+def test_fixed_round_context_follows_from_round_number_and_fixed_trump(
+    round_no: int, fixed_trump: int, fixed_left: tuple[int, ...], replays: int
+):
+    """GAM-2 counts every round, replays included, so each fixed-trump round either completes a
+    fixed trump or replays one: replays so far = round_no - 14 - position of the fixed trump."""
+    obs = Round.new(round_no, deal(0, round_no), fixed_trump).observation(0)
+    assert (obs.fixed_trump, obs.trump) == (fixed_trump, fixed_trump)
+    assert obs.fixed_left == fixed_left
+    assert obs.replays == replays
+
+
+@pytest.mark.parametrize(
+    ("round_no", "fixed_trump"),
+    [
+        (14, None),  # rounds after 13 are fixed-trump rounds (FIX-1)
+        (13, SANS),  # rounds 1-13 are open
+        (14, SPADES),  # Spades comes after Sans, so not before round 15
+        (17, CLUBS),
+        (39, CLUBS),  # 21 replays: more than max_fixed_replays allows
+    ],
+)
+def test_GAM_1_round_must_fit_the_game_schedule(round_no: int, fixed_trump: int | None):
+    with pytest.raises(ValueError, match="round"):
+        Round.new(round_no, deal(0, round_no), fixed_trump)
 
 
 def test_observation_shows_own_hand_shrinking_as_cards_are_played():
@@ -171,7 +198,7 @@ def test_clone_mid_play_then_finish_both_identically():
 @pytest.mark.parametrize("seed", range(25))
 def test_replay_of_the_action_log_reproduces_the_same_state(seed: int):
     fixed = None if seed % 3 else FIXED_ORDER[seed % 5]
-    round_no = 14 + seed if fixed is not None else 1 + seed
+    round_no = 14 + seed if fixed is not None else 1 + seed % 13
     original = random_round(seed, round_no, fixed)
     actions = [action for _, action in original.log]
     replayed = Round.replay(

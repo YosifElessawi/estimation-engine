@@ -26,15 +26,26 @@ from .actions import (
     action_str,
     bid_action,
 )
-from .cards import CLUBS, DIAMONDS, FULL_DECK, HEARTS, SANS, SPADES, SUIT_MASKS, card_str
+from .cards import (
+    CLUBS,
+    DIAMONDS,
+    FULL_DECK,
+    HEARTS,
+    SANS,
+    SPADES,
+    SUIT_MASKS,
+    TRUMP_NAMES,
+    card_str,
+)
 from .config import DEFAULT_CONFIG, RulesConfig
 from .observation import Observation, Phase, TrickRecord, WithInfo
 from .scoring import RoundOutcome, RoundResult, score_round
 
-__all__ = ["FIXED_ORDER", "IllegalActionError", "Phase", "Round"]
+__all__ = ["FIXED_ORDER", "OPEN_ROUNDS", "IllegalActionError", "Phase", "Round"]
 
+OPEN_ROUNDS = 13
 FIXED_ORDER = (SANS, SPADES, HEARTS, DIAMONDS, CLUBS)
-"""The fixed trumps of rounds 14 onward, in the order they are played (FIX-1)."""
+"""The fixed trumps of the rounds after 13, in the order they are played (FIX-1)."""
 
 DASH = Phase.DASH
 AUCTION = Phase.AUCTION
@@ -184,15 +195,14 @@ class Round:
         carry: int = 1,
         scores: tuple[int, int, int, int] = (0, 0, 0, 0),
         config: RulesConfig = DEFAULT_CONFIG,
-        *,
-        fixed_left: tuple[int, ...] | None = None,
-        replays: int = 0,
     ) -> Self:
         """Start round ``round_no`` from the dealt ``hands``.
 
-        ``fixed_trump`` is ``None`` in open rounds. ``fixed_left`` (the fixed trumps still to
-        play, this round's included) and ``replays`` are game context shown in observations;
-        ``fixed_left`` defaults to the fixed trumps from this round's onward.
+        ``fixed_trump`` is ``None`` in open rounds (1-13) and the round's fixed trump after
+        that (FIX-1). The game context shown in observations follows from the two: round
+        numbers count every round, replays included (GAM-2), so a fixed-trump round comes after
+        ``round_no - 14 - FIXED_ORDER.index(fixed_trump)`` replays, and the fixed trumps still to
+        play are its own and those after it. A round that cannot occur in a game is rejected.
         """
         if round_no < 1:
             raise ValueError("round_no must be 1 or more")
@@ -203,17 +213,25 @@ class Round:
             FULL_DECK
         ):
             raise ValueError("hands must split the 52 cards into four hands of 13")
-        if fixed_trump is not None and not 0 <= fixed_trump <= SANS:
-            raise ValueError(f"no trump with index {fixed_trump}")
         if carry < 1:
             raise ValueError("carry must be at least 1")
         if len(scores) != 4:
             raise ValueError("scores must have one entry per seat")
-        if replays < 0:
-            raise ValueError("replays must be 0 or more")
-        if fixed_left is None:
-            start = 0 if fixed_trump is None else FIXED_ORDER.index(fixed_trump)
-            fixed_left = FIXED_ORDER[start:]
+        if fixed_trump is None:
+            if round_no > OPEN_ROUNDS:
+                raise ValueError(f"round {round_no} is a fixed-trump round and needs its trump")
+            fixed_left = FIXED_ORDER
+            replays = 0
+        else:
+            if not 0 <= fixed_trump <= SANS:
+                raise ValueError(f"no trump with index {fixed_trump}")
+            position = FIXED_ORDER.index(fixed_trump)
+            replays = round_no - OPEN_ROUNDS - 1 - position
+            if round_no <= OPEN_ROUNDS or not 0 <= replays <= config.max_fixed_replays:
+                raise ValueError(
+                    f"round {round_no} cannot be a {TRUMP_NAMES[fixed_trump]} round (FIX-1, FIX-5)"
+                )
+            fixed_left = FIXED_ORDER[position:]
 
         rnd = object.__new__(cls)
         rnd.round_no = round_no
@@ -222,7 +240,7 @@ class Round:
         rnd.carry = carry
         rnd.scores = (scores[0], scores[1], scores[2], scores[3])
         rnd.config = config
-        rnd.fixed_left = tuple(fixed_left)
+        rnd.fixed_left = fixed_left
         rnd.replays = replays
         rnd.hands = deal
         rnd._cur = first
@@ -273,21 +291,9 @@ class Round:
         scores: tuple[int, int, int, int],
         config: RulesConfig,
         actions: Iterable[int],
-        *,
-        fixed_left: tuple[int, ...] | None = None,
-        replays: int = 0,
     ) -> Self:
         """Rebuild a round from its action log."""
-        rnd = cls.new(
-            round_no,
-            hands,
-            fixed_trump,
-            carry,
-            scores,
-            config,
-            fixed_left=fixed_left,
-            replays=replays,
-        )
+        rnd = cls.new(round_no, hands, fixed_trump, carry, scores, config)
         for action in actions:
             rnd.step(action)
         return rnd
