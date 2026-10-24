@@ -5,10 +5,26 @@ import time
 
 import pytest
 
+from estimation.bots.hand_eval import expected_tricks
 from estimation.bots.heuristic import HeuristicBot
-from estimation.bots.pimc import PIMCBot, PIMCConfig, representatives
-from estimation.engine import Bola, Observation, Phase, Round, deal, parse_card, parse_hand
+from estimation.bots.knowledge import read_knowledge
+from estimation.bots.pimc import PIMCBot, PIMCConfig, RoundScorer, representatives
+from estimation.engine import (
+    SANS,
+    SPADES,
+    Bola,
+    Observation,
+    Phase,
+    Round,
+    TrickRecord,
+    deal,
+    parse_card,
+    parse_hand,
+    play_action,
+)
 from estimation.engine.cards import SUIT_MASKS
+
+from .helpers import play_observation
 
 FAST = PIMCConfig(samples=6, oversample=2)
 
@@ -148,3 +164,160 @@ def test_an_enforced_budget_cuts_the_search_short():
     action = bot.act(obs, rnd.legal_actions())
     assert time.perf_counter() - start < 2.0  # 2,000 full samples would take far longer
     assert action in rnd.legal_actions()
+
+
+# What PIMC decides
+
+
+def test_the_defaults_are_the_specs_30_deals_and_250_ms():
+    config = PIMCConfig()
+    assert config.samples == 30
+    assert config.budget_ms == 250.0
+    assert not config.enforce_budget
+
+
+def test_a_card_is_worth_own_score_minus_the_mean_of_the_other_three():
+    # G1: Caller seat 0 at 5 Spades, estimates 5, 3, 4, 2 and tricks 5, 3, 3, 2 score
+    # 25, 13, -11, 12 (SPEC §3.3).
+    estimates, tricks = (5, 3, 4, 2), (5, 3, 3, 2)
+    for seat, expected in [(0, 25 - (13 - 11 + 12) / 3), (2, -11 - (25 + 13 + 12) / 3)]:
+        obs = play_observation(
+            hand=0, estimates=estimates, tricks_won=(0, 0, 0, 0), caller=0, trump=SPADES, seat=seat
+        )
+        assert RoundScorer(obs).value(tricks) == pytest.approx(expected)
+
+
+def endgame(estimates: tuple[int, int, int, int], won: tuple[int, int, int, int]) -> Observation:
+    """Two tricks left in Sans. Seat 0 is on lead with AS and 2H; the other three hold 3H-8H,
+    two each. The 44 other cards went in 11 tricks that show no Heart voids."""
+    left = parse_hand("AS 2H 3H 4H 5H 6H 7H 8H")
+    played = [card for card in range(52) if not left >> card & 1]
+    winners = [0, 1, 2, 1, 2, 1, 2, 1, 3, 0, 0]
+    records: list[TrickRecord] = []
+    leader = 0
+    for i, winner in enumerate(winners):
+        cards = (played[4 * i], played[4 * i + 1], played[4 * i + 2], played[4 * i + 3])
+        records.append(TrickRecord(leader, cards, winner))
+        leader = winner
+    return play_observation(
+        hand=parse_hand("AS 2H"),
+        estimates=estimates,
+        tricks_won=won,
+        caller=0,
+        trump=SANS,
+        tricks=tuple(records),
+    )
+
+
+def test_plays_the_card_that_makes_its_contract():
+    # Seat 0 needs one more trick. AS takes trick 12 and makes the contract (seat 0 is then the
+    # only winner); leading 2H loses both tricks and every player fails.
+    obs = endgame(estimates=(4, 2, 1, 0), won=(3, 4, 3, 1))
+    legal = [play_action(parse_card("2H")), play_action(parse_card("AS"))]
+    for seed in range(5):
+        assert PIMCBot(seed).act(obs, legal) == play_action(parse_card("AS"))
+
+
+def test_scores_a_card_on_a_deal_exactly_as_the_engine_plays_it_out():
+    """With the true deal as its only sample, PIMC's value for each legal card equals the score
+    advantage the engine gives when that card is played and four HeuristicBots finish."""
+    bot = PIMCBot(0)
+    heuristic = HeuristicBot()
+    checked = 0
+    for seed in range(40):
+        rnd = play_position(seed, plays=(seed * 7) % 44)
+        me = rnd.current_player
+        assert me is not None
+        obs = rnd.observation(me)
+        truth = [rnd.observation(seat).hand for seat in range(4)]
+        for action in rnd.legal_actions():
+            card = action - 68
+            value = bot.evaluate(obs, [card], [truth])[0]
+            after = rnd.clone()
+            after.step(action)
+            while after.phase is not Phase.DONE:
+                seat = after.current_player
+                assert seat is not None
+                after.step(heuristic.act(after.observation(seat), after.legal_actions()))
+            scores = after.result().scores
+            assert value == pytest.approx(scores[me] - (sum(scores) - scores[me]) / 3)
+            checked += 1
+    assert checked > 100
+
+
+def test_sampled_deals_fit_hand_sizes_voids_and_played_cards():
+    bot = PIMCBot(1, PIMCConfig(samples=10, oversample=3))
+    voids_seen = 0
+    for seed in range(40):
+        rnd = play_position(seed, plays=(seed * 11) % 48)
+        me = rnd.current_player
+        assert me is not None
+        obs = rnd.observation(me)
+        know = read_knowledge(obs)
+        deals = bot.sample_deals(obs)
+        assert len(deals) == 10
+        for hands in deals:
+            assert hands[me] == obs.hand
+            others = [seat for seat in range(4) if seat != me]
+            assert hands[others[0]] | hands[others[1]] | hands[others[2]] == know.unseen
+            for seat in others:
+                assert hands[seat].bit_count() == know.sizes[seat]
+                assert not hands[seat] & know.played
+                for suit in range(4):
+                    if know.voids[seat] >> suit & 1:
+                        voids_seen += 1
+                        assert not hands[seat] & SUIT_MASKS[suit]
+    assert voids_seen > 100
+
+
+def misfit(hands: list[int], obs: Observation) -> float:
+    """How far the sampled hands of the other seats are from their estimates, in tricks²."""
+    know = read_knowledge(obs)
+    assert obs.trump is not None
+    total = 0.0
+    for seat in range(4):
+        if seat == obs.seat:
+            continue
+        estimate = obs.estimates[seat]
+        assert estimate is not None
+        whole = hands[seat] | know.played_by[seat]
+        total += (expected_tricks(whole, obs.trump) - estimate) ** 2
+    return total
+
+
+def test_kept_deals_fit_the_estimates_better_than_plain_deals():
+    better = 0
+    positions = 30
+    for seed in range(positions):
+        rnd = play_position(seed, plays=seed % 4)  # early in play, where estimates say most
+        me = rnd.current_player
+        assert me is not None
+        obs = rnd.observation(me)
+        if obs.dash_callers:
+            continue
+        kept = PIMCBot(seed, PIMCConfig(samples=30, oversample=3)).sample_deals(obs)
+        plain = PIMCBot(seed, PIMCConfig(samples=30, oversample=1)).sample_deals(obs)
+        if sum(misfit(h, obs) for h in kept) < sum(misfit(h, obs) for h in plain):
+            better += 1
+    assert better >= 0.8 * positions - 3
+
+
+def test_card_decisions_stay_within_the_250_ms_budget():
+    bot = PIMCBot(2)
+    heuristic = HeuristicBot()
+    slowest = 0.0
+    for seed in range(4):
+        rnd = play_position(seed, plays=0)
+        me = rnd.current_player
+        while rnd.phase is not Phase.DONE:
+            seat = rnd.current_player
+            assert seat is not None
+            obs, legal = rnd.observation(seat), rnd.legal_actions()
+            if seat == me:
+                start = time.perf_counter()
+                action = bot.act(obs, legal)
+                slowest = max(slowest, time.perf_counter() - start)
+            else:
+                action = heuristic.act(obs, legal)
+            rnd.step(action)
+    assert slowest < 0.25

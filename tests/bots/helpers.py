@@ -1,6 +1,16 @@
-"""Shared helpers for bot tests: deals with a chosen hand, and scripted rounds."""
+"""Shared helpers for bot tests: deals with a chosen hand, scripted rounds, and hand-built
+card-play observations."""
 
-from estimation.engine import Round, mask_of, parse_hand
+from estimation.engine import (
+    FIXED_ORDER,
+    Observation,
+    Phase,
+    Round,
+    TrickRecord,
+    bid_action,
+    mask_of,
+    parse_hand,
+)
 
 
 def deal_with(seat: int, text: str) -> tuple[int, int, int, int]:
@@ -22,3 +32,50 @@ def round_with(
     for action in actions:
         rnd.step(action)
     return rnd
+
+
+def play_observation(
+    *,
+    hand: int,
+    estimates: tuple[int, int, int, int],
+    tricks_won: tuple[int, int, int, int],
+    caller: int,
+    trump: int,
+    tricks: tuple[TrickRecord, ...] = (),
+    seat: int = 0,
+    leader: int = 0,
+    last_estimator: int = 3,
+) -> Observation:
+    """A card-play Observation of an open round built by hand, for positions too fiddly to
+    script through the engine. Only the fields bots read during card play matter."""
+    total = sum(estimates)
+    return Observation(
+        seat=seat,
+        round_no=1,
+        phase=Phase.PLAY,
+        current_player=seat,
+        carry=1,
+        scores=(0, 0, 0, 0),
+        fixed_trump=None,
+        fixed_left=FIXED_ORDER,
+        replays=0,
+        super_call=False,
+        trump=trump,
+        hand=hand,
+        log=(),
+        dash_callers=(),
+        top_bid=bid_action(estimates[caller], trump),
+        top_bidder=caller,
+        passed=tuple(s for s in range(4) if s != caller),
+        caller=caller,
+        with_players=(),
+        estimates=estimates,
+        last_estimator=last_estimator,
+        total=total,
+        over=total > 13,
+        risks=abs(total - 13) // 2,
+        leader=leader,
+        trick=(),
+        tricks=tricks,
+        tricks_won=tricks_won,
+    )
