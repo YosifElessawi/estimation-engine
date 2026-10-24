@@ -1,7 +1,9 @@
 """Bots by name, for the arena CLI: ``name`` or ``name:key=value:key=value``.
 
 Options set fields of the bot's config dataclass, so ``heuristic:risk_aversion=0.5`` is a
-HeuristicBot with ``HeuristicConfig(risk_aversion=0.5)``.
+HeuristicBot with ``HeuristicConfig(risk_aversion=0.5)``. Any bot also takes ``noise`` and
+``play_noise`` (0 to 1), which wrap it in a NoisyBot that plays that share of its decisions (or
+of its card plays) at random.
 """
 
 import dataclasses
@@ -12,6 +14,7 @@ from estimation.engine.config import DEFAULT_CONFIG
 
 from .base import Bot, BotFactory
 from .heuristic import HeuristicBot, HeuristicConfig
+from .noisy import NoisyBot
 from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
 
@@ -37,6 +40,7 @@ def _pimc(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
 
 _FACTORIES: dict[str, BotFactory] = {"random": _random, "heuristic": _heuristic, "pimc": _pimc}
 BOT_NAMES = tuple(_FACTORIES)
+NOISE_OPTIONS = ("noise", "play_noise")
 
 
 def make_bot(spec: str, seed: int, rules: RulesConfig = DEFAULT_CONFIG) -> Bot:
@@ -52,7 +56,23 @@ def make_bot(spec: str, seed: int, rules: RulesConfig = DEFAULT_CONFIG) -> Bot:
         if not sep or not key:
             raise ValueError(f"bot option {pair!r} must look like key=value")
         options[key] = value
-    return factory(seed, options, rules)
+    noise = {key: _rate(options.pop(key), key) for key in NOISE_OPTIONS if key in options}
+    bot = factory(seed, options, rules)
+    if not noise:
+        return bot
+    return NoisyBot(
+        bot, noise=noise.get("noise", 0.0), play_noise=noise.get("play_noise"), seed=seed
+    )
+
+
+def _rate(text: str, key: str) -> float:
+    try:
+        rate = float(text)
+    except ValueError:
+        raise ValueError(f"bot option {key}={text} is not a number") from None
+    if not 0.0 <= rate <= 1.0:
+        raise ValueError(f"bot option {key}={text} must be between 0 and 1")
+    return rate
 
 
 def configure[T: DataclassInstance](config: T, options: dict[str, str], name: str) -> T:
