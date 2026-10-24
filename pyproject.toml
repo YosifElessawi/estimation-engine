@@ -1,0 +1,45 @@
+[project]
+name = "estimation-engine"
+version = "0.1.0"
+description = "A bot for Estimation, the 4-player trick-taking card game, played by the rules of the Pocket Estimation app."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "estimation"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# SPEC.md is Yosif's; ruff must not reformat the code blocks in any Markdown file.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PIE", "PT"]
+
+[tool.pyright]
+include = ["src", "tests"]
+strict = ["src/estimation/engine"]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.9",
+    "pre-commit>=4.7.0",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.17.2",
+]
