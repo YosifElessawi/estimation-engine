@@ -125,6 +125,7 @@ class Round:
         "_pos",
         "_result",
         "_super",
+        "_super_seat",
         "_supers",
         "_top",
         "_top_seat",
@@ -169,6 +170,7 @@ class Round:
     _final: bool  # the top bidder's final turn (AUC-3)
     _max_bid: int
     _super: bool  # a super call was made (FIX-4)
+    _super_seat: int  # the super caller, kept out of the fixed trump when the switch is off
     _supers: tuple[int, ...]  # super-call bid ids open to fixed-trump estimators
     _est: list[int]
     _total: int  # sum of the estimates made so far
@@ -255,6 +257,7 @@ class Round:
         rnd._final = False
         rnd._max_bid = LAST_BID
         rnd._super = False
+        rnd._super_seat = -1
         rnd._est = [-1, -1, -1, -1]
         rnd._total = 0
         rnd._pos = 0
@@ -336,6 +339,9 @@ class Round:
             seat = self._cur
             top = self._top
             actions = list(range(top + 1, self._max_bid + 1))
+            if seat == self._super_seat and not self.config.super_caller_may_bid_fixed:
+                fixed = self.fixed_trump  # FIX-4: the super caller stays out of the fixed trump
+                actions = [a for a in actions if (a - FIRST_BID) % 5 != fixed]
             top_seat = self._top_seat
             if (
                 not self._final
@@ -457,6 +463,12 @@ class Round:
         if FIRST_BID <= action <= self._max_bid:
             if action <= top:
                 raise IllegalActionError(f"{_describe(action)} does not beat the top bid")
+            if (
+                seat == self._super_seat
+                and not self.config.super_caller_may_bid_fixed
+                and (action - FIRST_BID) % 5 == self.fixed_trump
+            ):
+                raise IllegalActionError("the super caller may not bid the fixed trump (FIX-4)")
             self._top = action
             self._top_seat = seat
             self._with_bid[seat] = -1  # AUC-2: bidding drops your With
@@ -584,6 +596,7 @@ class Round:
         """FIX-4: clear every estimate and open an auction with the super call as top bid."""
         self._log.append((seat, action))
         self._super = True
+        self._super_seat = seat
         self._est = [-1, -1, -1, -1]
         self._total = 0
         self._pos = 0
@@ -760,6 +773,7 @@ class Round:
         rnd._final = self._final
         rnd._max_bid = self._max_bid
         rnd._super = self._super
+        rnd._super_seat = self._super_seat
         rnd._supers = self._supers
         rnd._est = self._est.copy()
         rnd._total = self._total

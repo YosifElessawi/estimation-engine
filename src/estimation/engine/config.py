@@ -16,6 +16,7 @@ class RulesConfig:
     dash_replaces_base: bool = True  # SCR-2
     super_call_scoring: bool = True  # SCR-6
     super_call_min: int = 8  # SCR-6 and FIX-4
+    super_caller_may_bid_fixed: bool = True  # FIX-4, open question (SPEC §4)
     calls_to_double: int = 3  # SCR-8
     calls_count_risk_and_dash: bool = False  # SCR-8
     all_lose_doubles_next: bool = True  # SCR-9

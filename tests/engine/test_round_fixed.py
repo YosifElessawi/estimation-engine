@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from estimation.engine.actions import PASS, WITH, bid_action, is_bid
+from estimation.engine.actions import PASS, WITH, bid_action, bid_of, is_bid
 from estimation.engine.cards import CLUBS, DIAMONDS, HEARTS, SANS, SPADES, deal
 from estimation.engine.config import RulesConfig
 from estimation.engine.observation import WithInfo
@@ -117,6 +117,31 @@ def test_FIX_4_super_caller_may_raise_into_the_fixed_trump_on_its_final_turn():
     while rnd.phase is Phase.PLAY:
         rnd.step(rnd.legal_actions()[0])
     assert not rnd.result().trump_changed
+
+
+def test_FIX_4_super_caller_may_bid_fixed_off_keeps_its_final_raise_out_of_the_fixed_trump():
+    config = RulesConfig(super_caller_may_bid_fixed=False)
+    rnd = Round.new(16, deal(0, 16), HEARTS, config=config)
+    run(rnd, est(2), bid(8, SPADES), PASS, PASS, PASS)
+    assert rnd.current_player == 0  # the super caller's final turn
+    assert all(bid_of(a)[1] != HEARTS for a in legal_bids(rnd))
+    assert bid(8, SANS) in rnd.legal_actions()
+    with pytest.raises(IllegalActionError):
+        rnd.step(bid(9, HEARTS))
+    rnd.step(bid(9, SPADES))
+    assert rnd.observation(0).trump == SPADES
+
+
+def test_FIX_4_super_caller_may_bid_fixed_off_still_lets_others_answer_in_the_fixed_trump():
+    config = RulesConfig(super_caller_may_bid_fixed=False)
+    rnd = Round.new(16, deal(0, 16), HEARTS, config=config)
+    run(rnd, est(2), bid(8, SPADES))
+    assert bid(9, HEARTS) in rnd.legal_actions()  # seat 1 may answer in the fixed trump
+    run(rnd, bid(9, HEARTS), PASS, PASS)
+    assert rnd.current_player == 0  # the super caller, outbid, on a normal turn
+    assert all(bid_of(a)[1] != HEARTS for a in legal_bids(rnd))
+    with pytest.raises(IllegalActionError):
+        rnd.step(bid(10, HEARTS))
 
 
 def test_FIX_4_estimation_after_the_auction_allows_no_new_super_call():
