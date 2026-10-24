@@ -28,11 +28,17 @@ from .report import build_report, write_json
 
 DEFAULT_LADDER = (
     "random",
+    "heuristic:noise=0.75",
     "heuristic:noise=0.5",
+    "heuristic:noise=0.35",
+    "heuristic:noise=0.27",
     "heuristic:noise=0.2",
     "heuristic:noise=0.1",
     "heuristic:noise=0.05",
+    "heuristic:noise=0.02",
+    "heuristic:noise=0.01",
     "heuristic",
+    "pimc:samples=1:play_noise=0.3",
     "pimc:samples=1",
     "pimc:samples=2",
     "pimc:samples=4",
@@ -40,6 +46,8 @@ DEFAULT_LADDER = (
     "pimc:samples=16",
     "pimc",
 )
+"""Calibrated by 20- and 50-set pilots so that each bot wins roughly 65-95% of its sets against
+the one below it."""
 
 
 @dataclass(frozen=True, slots=True)
