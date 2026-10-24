@@ -3,9 +3,10 @@ hand sizes and voids.
 
 Cards of suits no hand is void in are shuffled and cut to the hand sizes, which is exactly uniform.
 Cards of suits some hand is void in go first, one at a time, to an allowed hand chosen in
-proportion to its free places. That is exact for one constrained suit and close to uniform for
-several. A Hall-condition check before each placement keeps every partial deal completable, so
-sampling never dead-ends.
+proportion to its free places. That keeps every fitting deal possible and is exactly uniform when
+at most one suit is limited by voids. With two or more it leans away from uniform: late in a
+round, by 0.1 to 0.3 in total variation. A Hall-condition check before each placement keeps every
+partial deal completable, so sampling never dead-ends.
 """
 
 import random
