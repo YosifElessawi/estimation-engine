@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from estimation.arena.duplicate import (
     ROTATIONS,
+    ArenaRun,
     SetResult,
     bot_seed,
     deal_seed,
@@ -13,6 +14,7 @@ from estimation.arena.duplicate import (
     slot_at,
 )
 from estimation.arena.match import play_bola
+from estimation.arena.ratings import Interval, mean_ci, set_rsa
 from estimation.bots import Bot, make_bot
 from estimation.engine import Bola, Observation, RulesConfig
 
@@ -103,3 +105,14 @@ def skipped_rounds(result: SetResult) -> int:
             bola.step(bots[seat].act(bola.observation(seat), bola.legal_actions()))
         skipped += sum(1 for r in bola.history if r.skipped)
     return skipped
+
+
+def test_heuristic_beats_random_in_a_short_duplicate_run():
+    """M2 Done when, in miniature: HeuristicBot's RSA interval against RandomBot is above 0."""
+    run = run_arena(LINEUP, sets=10, seed=11)
+    heuristic = set_rsa_interval(run, "heuristic")
+    assert heuristic.low > 0
+
+
+def set_rsa_interval(run: ArenaRun, bot: str) -> Interval:
+    return mean_ci([set_rsa(result, run.lineup)[bot] for result in run.results])
