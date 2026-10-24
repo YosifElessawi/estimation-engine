@@ -151,7 +151,7 @@ Examples:
 - **FIX-1** After round 13, each round plays the next fixed trump still to be played, in this order: Sans, Spades, Hearts, Diamonds, Clubs. Without super calls these are rounds 14-18. `[Page]` order, `[Play]` replays (FIX-5)
 - **FIX-2** There is no Dash Call and no auction. Starting with F and going counterclockwise, each player estimates 0-13 under the fixed trump; nobody has to reach 4. The sum rule (EST-5) and Risk (EST-7) apply to the last estimator. `[Play]` no Dash Call and no minimum, `[Default]` order
 - **FIX-3** After all four estimates, the player with the highest estimate is Caller; on a tie, whoever said it first. Every other player with the same estimate is With. `[Page]` highest estimate is Caller, `[Play]` first one wins ties
-- **FIX-4** **Super call:** on their turn, instead of estimating, a player may bid 8 or more tricks in a trump other than the fixed one. All estimates are cleared and the bid opens an auction, which runs like AUC-1 to AUC-4 (With and the final turn included), starting with the player after the super caller. Answers may be in any trump, the fixed one included. The winner is Caller, their bid's trump is the round's trump, and estimation restarts as in 2.7. `[Play]` reset and answering, `[Default]` details
+- **FIX-4** **Super call:** on their turn, instead of estimating, a player may bid 8 or more tricks in a trump other than the fixed one. All estimates are cleared and the bid opens an auction, which runs like AUC-1 to AUC-4 (With and the final turn included), starting with the player after the super caller. Answers may be in any trump, the fixed one included. So may the super caller's own later bids, its final turn included; with `super_caller_may_bid_fixed=False` they must stay out of the fixed trump (§4). The winner is Caller, their bid's trump is the round's trump, and estimation restarts as in 2.7. `[Play]` reset and answering, `[Default]` details and the super caller's later bids
 - **FIX-5** **Replay:** if a super call leaves the round with a trump other than the fixed one, the round is scored as usual and the next round plays the same fixed trump again. So the game ends only once all five fixed trumps have been played. Safety cap: after `max_fixed_replays` replays in one game (default 20), a changed round is no longer replayed. `[Play]` replay, `[Default]` cap
 
 Examples:
@@ -300,7 +300,9 @@ Round 17 replays Hearts, then round 18 plays Diamonds and round 19 Clubs. The ga
 
 ## 4. Open Questions
 
-None right now: every question so far is answered and folded into §2 and §3. When a new one comes up, add it here as a checkbox with its working default, tag the affected rule `[Default]`, and update §5.3 and the examples once it is answered.
+- [ ] **Super caller and the fixed trump (FIX-4).** After a super call, may the super caller itself bid the fixed trump later in that auction, for example by raising into it on its final turn? That keeps the fixed trump, so the round is not replayed. Not yet checked in the app. Working default: yes (`super_caller_may_bid_fixed=True`); the switch turns it off.
+
+When a new question comes up, add it here as a checkbox with its working default, tag the affected rule `[Default]`, and update §5.3 and the examples once it is answered.
 
 ---
 
@@ -349,6 +351,7 @@ class RulesConfig:
     dash_replaces_base: bool = True          # SCR-2
     super_call_scoring: bool = True          # SCR-6
     super_call_min: int = 8                  # SCR-6 and FIX-4
+    super_caller_may_bid_fixed: bool = True  # FIX-4, open question (§4)
     calls_to_double: int = 3                 # SCR-8
     calls_count_risk_and_dash: bool = False  # SCR-8
     all_lose_doubles_next: bool = True       # SCR-9
