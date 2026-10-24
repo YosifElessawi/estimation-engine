@@ -16,6 +16,7 @@ from estimation.engine import (
     Observation,
     Phase,
     Round,
+    RulesConfig,
     TrickRecord,
     deal,
     parse_card,
@@ -154,16 +155,22 @@ def test_a_one_sample_search_still_plays_legally():
         assert decide(bot, rnd) in rnd.legal_actions()
 
 
-def test_an_enforced_budget_cuts_the_search_short():
-    bot = PIMCBot(6, PIMCConfig(samples=2000, oversample=1, budget_ms=1, enforce_budget=True))
-    rnd = play_position(2, plays=0)
-    seat = rnd.current_player
-    assert seat is not None
-    obs: Observation = rnd.observation(seat)
-    start = time.perf_counter()
-    action = bot.act(obs, rnd.legal_actions())
-    assert time.perf_counter() - start < 2.0  # 2,000 full samples would take far longer
-    assert action in rnd.legal_actions()
+def test_an_enforced_budget_stops_the_search_after_the_deal_in_progress():
+    # A zero budget is spent before the first deal is rolled out, so only that deal counts:
+    # the choice equals a one-deal search's. Without the cap, 12 deals change some choices.
+    capped = PIMCConfig(samples=12, oversample=1, budget_ms=0, enforce_budget=True)
+    one = PIMCConfig(samples=1, oversample=1)
+    full = PIMCConfig(samples=12, oversample=1)
+    differ = 0
+    for seed in range(30):
+        rnd = play_position(seed, plays=seed % 40)
+        seat = rnd.current_player
+        assert seat is not None
+        obs, legal = rnd.observation(seat), rnd.legal_actions()
+        action = PIMCBot(seed, capped).act(obs, legal)
+        assert action == PIMCBot(seed, one).act(obs, legal)
+        differ += PIMCBot(seed, full).act(obs, legal) != action
+    assert differ > 0
 
 
 # What PIMC decides
@@ -185,6 +192,14 @@ def test_a_card_is_worth_own_score_minus_the_mean_of_the_other_three():
             hand=0, estimates=estimates, tricks_won=(0, 0, 0, 0), caller=0, trump=SPADES, seat=seat
         )
         assert RoundScorer(obs).value(tricks) == pytest.approx(expected)
+
+
+def test_the_scorer_scores_by_the_rules_it_is_given():
+    obs = play_observation(
+        hand=0, estimates=(5, 3, 4, 2), tricks_won=(0, 0, 0, 0), caller=0, trump=SPADES
+    )
+    richer = RulesConfig(caller_with_bonus=20)  # G1's Caller then scores 35, not 25
+    assert RoundScorer(obs, richer).value((5, 3, 3, 2)) == pytest.approx(35 - (13 - 11 + 12) / 3)
 
 
 def endgame(estimates: tuple[int, int, int, int], won: tuple[int, int, int, int]) -> Observation:
@@ -216,6 +231,16 @@ def test_plays_the_card_that_makes_its_contract():
     legal = [play_action(parse_card("2H")), play_action(parse_card("AS"))]
     for seed in range(5):
         assert PIMCBot(seed).act(obs, legal) == play_action(parse_card("AS"))
+
+
+def test_search_scores_by_the_configured_rules():
+    obs = endgame(estimates=(4, 2, 1, 0), won=(3, 4, 3, 1))
+    deal = [parse_hand("AS 2H"), parse_hand("3H 4H"), parse_hand("5H 6H"), parse_hand("7H 8H")]
+    ace = [parse_card("AS")]
+    plain = PIMCBot(0).evaluate(obs, ace, [deal])[0]
+    richer = PIMCConfig(rules=RulesConfig(caller_with_bonus=20))
+    # Seat 0 makes its contract as Caller, so a 10-point larger Caller bonus is 10 more for it.
+    assert PIMCBot(0, richer).evaluate(obs, ace, [deal])[0] == pytest.approx(plain + 10)
 
 
 def test_scores_a_card_on_a_deal_exactly_as_the_engine_plays_it_out():
