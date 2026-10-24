@@ -2,6 +2,7 @@
 own Observation."""
 
 from .base import Bot, BotFactory
+from .heuristic import HeuristicBot, HeuristicConfig
 from .random_bot import RandomBot
 
-__all__ = ["Bot", "BotFactory", "RandomBot"]
+__all__ = ["Bot", "BotFactory", "HeuristicBot", "HeuristicConfig", "RandomBot"]
