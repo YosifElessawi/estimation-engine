@@ -28,13 +28,13 @@ pimc = 0.15         # PIMC with 4-8 deals
 pimc_samples = [4, 5, 6, 7, 8]
 
 [selfplay]
-iterations = 200
+iterations = 150
 games = 240
 eval_games = 32
 card_frozen_iterations = 10
-bid_lr = 3e-4
+bid_lr = 1e-4
 card_lr = 1e-4
-checkpoint_every = 25
+checkpoint_every = 10
 
 [nets]
 hidden = 384

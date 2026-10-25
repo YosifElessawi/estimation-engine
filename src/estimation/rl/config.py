@@ -68,8 +68,10 @@ class SelfPlayConfig:
     huber: float = 1.0  # Huber loss threshold, in units of 50 points
     grad_clip: float = 5.0
     card_frozen_iterations: int = 4  # BiddingNet learns alone first, with the warm-start play
-    epsilon_bid_start: float = 0.1  # random non-card actions, decaying linearly...
-    epsilon_bid_end: float = 0.02  # ...to this by the last iteration
+    epsilon_bid_start: float = 0.05  # random non-card actions, decaying linearly...
+    epsilon_bid_end: float = 0.01  # ...to this by the last iteration
+    bid_temperature_start: float = 0.2  # softmax temperature of bidding, in units of 50 points,
+    bid_temperature_end: float = 0.05  # ...decaying linearly over the run
     epsilon_card: float = 0.02  # random card plays
     augment_cards: bool = True  # relabel suits at random in card-play batches
     card_anchor_weight: float = 1.0  # keep the PIMC imitation loss in card-play updates

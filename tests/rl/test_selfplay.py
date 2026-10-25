@@ -3,6 +3,7 @@
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -21,6 +22,7 @@ from estimation.rl.selfplay import (
     NetWeights,
     SeatPlan,
     SeedFn,
+    _softmax_choice,  # pyright: ignore[reportPrivateUsage]  # tested directly: the sampling rule
     plan_games,
     play_chunk,
 )
@@ -70,13 +72,16 @@ def test_planning_is_seeded():
     assert one != other
 
 
-def task(plans: list[GamePlan], weights: NetWeights, epsilon: float = 0.0) -> ChunkTask:
+def task(
+    plans: list[GamePlan], weights: NetWeights, epsilon: float = 0.0, temperature: float = 0.0
+) -> ChunkTask:
     return ChunkTask(
         plans=tuple(plans),
         learner=weights,
         snapshots={7: tiny_weights(99)},
         epsilon_bid=epsilon,
         epsilon_card=epsilon,
+        bid_temperature=temperature,
         record_bid=True,
         record_card=True,
         rules=RulesConfig(),
@@ -149,3 +154,14 @@ def test_snapshot_seats_play_but_are_not_recorded():
     rows = {row.tobytes() for row in every.card.features}
     assert all(row.tobytes() in rows for row in half.card.features)
     assert half.games[0].learner_seats == 2
+
+
+def test_softmax_bidding_follows_the_values():
+    legal = [0, 1]
+    values = np.zeros(68, np.float32)
+    values[1] = 0.1  # five points better
+    draws = [_softmax_choice(legal, values, 0.1, u) for u in (np.arange(1000) + 0.5) / 1000]
+    share = draws.count(1) / len(draws)
+    assert share == pytest.approx(np.e / (1 + np.e), abs=0.01)
+    cold = [_softmax_choice(legal, values, 0.001, u) for u in (np.arange(100) + 0.5) / 100]
+    assert set(cold) == {1}

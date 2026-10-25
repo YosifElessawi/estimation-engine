@@ -3,9 +3,14 @@ HeuristicBot and a lighter PIMC, played in lockstep for batched inference.
 
 A chunk of games advances together: each game runs its scripted players until a net has to
 decide, then every pending net decision of the chunk goes through one forward pass per net. The
-current nets ("the learner") explore with epsilon-greedy and record ``(features, action)`` for
-each decision with a choice; when the round ends every recorded decision gets that round's
-reward. Results depend only on the chunk, never on how chunks are spread over workers.
+current nets ("the learner") explore and record ``(features, action)`` for each decision with a
+choice; when the round ends every recorded decision gets that round's reward. Results depend
+only on the chunk, never on how chunks are spread over workers.
+
+Learner bidding samples a softmax of its values (``bid_temperature``): with greedy bidding a
+pilot's policy flipped between never opening the auction and opening almost every round,
+because whichever choice it was avoiding got too few samples to be valued well. Card play is
+greedy. Both also take a uniformly random legal action with a small probability (epsilon).
 
 Trainer code: it holds real Bolas, but every player and net sees only the acting seat's own
 Observation (through the state encoder), exactly as in the arena.
@@ -74,6 +79,7 @@ class ChunkTask:
     snapshots: dict[int, NetWeights]
     epsilon_bid: float
     epsilon_card: float
+    bid_temperature: float  # learner bidding samples a softmax of its values; 0 is greedy
     record_bid: bool
     record_card: bool
     rules: RulesConfig
@@ -287,12 +293,31 @@ def _apply(
     if is_learner:
         epsilon = task.epsilon_card if is_card else task.epsilon_bid
         explore = game.rng.random() < epsilon
-        action = game.rng.choice(legal) if explore else max(legal, key=lambda a: values[a - offset])
+        if explore:
+            action = game.rng.choice(legal)
+        elif not is_card and task.bid_temperature > 0:
+            action = _softmax_choice(legal, values, task.bid_temperature, game.rng.random())
+        else:
+            action = max(legal, key=lambda a: values[a - offset])
         if task.record_card if is_card else task.record_bid:
             game.open[request.seat].append((is_card, request.features, action - offset))
     else:
         action = max(legal, key=lambda a: values[a - offset])
     game.step(action)
+
+
+def _softmax_choice(
+    legal: list[int], values: npt.NDArray[np.float32], temperature: float, u: float
+) -> int:
+    """The legal action drawn with probability proportional to ``exp(value / temperature)``,
+    by inverting the cumulative distribution at ``u`` (uniform in [0, 1))."""
+    q = np.array([float(values[a]) for a in legal], np.float64) / temperature
+    cumulative = np.cumsum(np.exp(q - q.max()))
+    target = u * float(cumulative[-1])
+    index = next(
+        (k for k, total in enumerate(cumulative.tolist()) if total > target), len(legal) - 1
+    )
+    return legal[index]
 
 
 def _samples(per_game: list[list[tuple[npt.NDArray[np.float32], int, float]]]) -> Samples:

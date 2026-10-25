@@ -191,12 +191,12 @@ def imitation_stage(run: Run, records: CardRecords, device: torch.device) -> Pat
     return run.save(WARM_START, net, None, meta)
 
 
-def _epsilon(config: TrainConfig, iteration: int) -> float:
-    cfg = config.selfplay
-    if cfg.iterations <= 1:
-        return cfg.epsilon_bid_end
-    t = iteration / (cfg.iterations - 1)
-    return cfg.epsilon_bid_start + t * (cfg.epsilon_bid_end - cfg.epsilon_bid_start)
+def _schedule(config: TrainConfig, iteration: int, start: float, end: float) -> float:
+    """A linear schedule from ``start`` at the first iteration to ``end`` at the last."""
+    iterations = config.selfplay.iterations
+    if iterations <= 1:
+        return end
+    return start + iteration / (iterations - 1) * (end - start)
 
 
 def _summary(stats: Iterable[GameStats]) -> dict[str, dict[str, float]]:
@@ -261,7 +261,10 @@ def selfplay_stage(
     path = final
     for iteration in range(start_iteration, cfg.iterations):
         tick = time.perf_counter()
-        epsilon = _epsilon(config, iteration)
+        epsilon = _schedule(config, iteration, cfg.epsilon_bid_start, cfg.epsilon_bid_end)
+        temperature = _schedule(
+            config, iteration, cfg.bid_temperature_start, cfg.bid_temperature_end
+        )
         train_card = iteration >= cfg.card_frozen_iterations
         seed_of = SeedFn(config.seed, SELFPLAY_STAGE, iteration + 1)
         plans = plan_games(config, iteration, sorted(snapshots), seed_of)
@@ -277,6 +280,7 @@ def selfplay_stage(
                     snapshots={key: snapshots[key] for key in sorted(used)},
                     epsilon_bid=epsilon,
                     epsilon_card=cfg.epsilon_card,
+                    bid_temperature=temperature,
                     record_bid=True,
                     record_card=train_card,
                     rules=config.rules,
@@ -292,6 +296,7 @@ def selfplay_stage(
                     snapshots={},
                     epsilon_bid=0.0,
                     epsilon_card=0.0,
+                    bid_temperature=0.0,
                     record_bid=False,
                     record_card=False,
                     rules=config.rules,
@@ -319,6 +324,7 @@ def selfplay_stage(
             "bid_samples": len(bid),
             "card_samples": len(card_samples),
             "epsilon_bid": epsilon,
+            "bid_temperature": temperature,
             "train_card": train_card,
             "bid_loss": update.bid_loss,
             "card_value_loss": update.card_value_loss,
