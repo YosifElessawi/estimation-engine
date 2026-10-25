@@ -10,7 +10,9 @@ Three stages, each skipped when its output already exists, so an interrupted run
    played with ``heuristic_bidding=true``).
 3. **selfplay:** Deep Monte Carlo self-play from the warm start, BiddingNet from scratch, with a
    checkpoint every ``checkpoint_every`` iterations and ``final.pt`` at the end.
-   ``<out>/selfplay/state.pt`` resumes it exactly.
+   ``<out>/selfplay/state.pt`` resumes it exactly. With ``overlap``, each iteration's games are
+   played while the learner trains on the previous ones; with ``balance``, the slowest games
+   start first.
 
 The same config, seed and code give the same checkpoints, on any number of workers.
 ``<out>/checkpoints/index.json`` lists the checkpoints; ``record-elo`` adds each one's Elo from a
@@ -24,8 +26,9 @@ import shutil
 import sys
 import time
 from collections.abc import Callable, Generator, Iterable, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -50,10 +53,13 @@ from .selfplay import (
     SNAPSHOT,
     ChunkResult,
     ChunkTask,
+    GamePlan,
     GameStats,
     NetWeights,
     SeedFn,
+    chunk_plans,
     concat_samples,
+    estimated_seconds,
     plan_eval_games,
     plan_games,
     play_chunk,
@@ -223,6 +229,101 @@ def _weights_from_payload(data: dict[str, Any]) -> NetWeights:
     return NetWeights(hidden=int(data["hidden"]), card=data["card"], bidding=data["bidding"])
 
 
+@dataclass(frozen=True, slots=True)
+class ActorView:
+    """What the actors play one iteration with: the learner's nets and the snapshot pool."""
+
+    learner: NetWeights
+    snapshots: dict[int, NetWeights]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "learner": _weights_to_payload(self.learner),
+            "snapshots": {str(k): _weights_to_payload(v) for k, v in self.snapshots.items()},
+        }
+
+    @staticmethod
+    def from_payload(data: dict[str, Any]) -> "ActorView":
+        return ActorView(
+            learner=_weights_from_payload(data["learner"]),
+            snapshots={int(k): _weights_from_payload(v) for k, v in data["snapshots"].items()},
+        )
+
+
+@dataclass(slots=True)
+class Pending:
+    """One iteration's games, submitted to the workers."""
+
+    iteration: int
+    plans: list[GamePlan]
+    evals: list[GamePlan]
+    futures: list[Future[ChunkResult]]
+    epsilon: float
+    temperature: float
+    train_card: bool
+
+
+def submit_iteration(
+    config: TrainConfig, iteration: int, view: ActorView, pool: ProcessPoolExecutor
+) -> Pending:
+    """Plan iteration ``iteration``'s games and hand them to ``pool``. With ``balance``, the
+    slowest chunks go first; results come back in chunk order either way."""
+    cfg = config.selfplay
+    epsilon = linear_schedule(cfg.iterations, iteration, cfg.epsilon_bid_start, cfg.epsilon_bid_end)
+    temperature = linear_schedule(
+        cfg.iterations, iteration, cfg.bid_temperature_start, cfg.bid_temperature_end
+    )
+    train_card = iteration >= cfg.card_frozen_iterations
+    seed_of = SeedFn(config.seed, SELFPLAY_STAGE, iteration + 1)
+    plans = plan_games(config, iteration, sorted(view.snapshots), seed_of)
+    evals = plan_eval_games(config, seed_of)
+    tasks: list[ChunkTask] = []
+    for chunk in chunk_plans(plans, cfg.chunk, cfg.balance):
+        used = {s.snapshot for p in chunk for s in p.seats if s.kind == SNAPSHOT}
+        tasks.append(
+            ChunkTask(
+                plans=chunk,
+                learner=view.learner,
+                snapshots={key: view.snapshots[key] for key in sorted(used)},
+                epsilon_bid=epsilon,
+                epsilon_card=cfg.epsilon_card,
+                bid_temperature=temperature,
+                record_bid=True,
+                record_card=train_card,
+                rules=config.rules,
+                reward=config.reward,
+            )
+        )
+    for chunk in chunk_plans(evals, cfg.chunk):
+        tasks.append(
+            ChunkTask(
+                plans=chunk,
+                learner=view.learner,
+                snapshots={},
+                epsilon_bid=0.0,
+                epsilon_card=0.0,
+                bid_temperature=0.0,
+                record_bid=False,
+                record_card=False,
+                rules=config.rules,
+                reward=config.reward,
+            )
+        )
+    order = list(range(len(tasks)))
+    if cfg.balance:
+        order.sort(key=lambda i: -estimated_seconds(tasks[i].plans))
+    futures = {i: pool.submit(play_chunk, tasks[i]) for i in order}
+    return Pending(
+        iteration=iteration,
+        plans=plans,
+        evals=evals,
+        futures=[futures[i] for i in range(len(tasks))],
+        epsilon=epsilon,
+        temperature=temperature,
+        train_card=train_card,
+    )
+
+
 def selfplay_stage(
     run: Run,
     warm_start: Path,
@@ -231,6 +332,9 @@ def selfplay_stage(
     device: torch.device,
     on_iteration: Callable[[int, dict[str, Any]], None] | None = None,
 ) -> Path:
+    """Deep Monte Carlo self-play. With ``overlap``, iteration k+1's games are played while the
+    learner trains on iteration k's, with the nets from before that update: a fixed one-iteration
+    delay, so the run is still the same on any number of workers."""
     config = run.config
     cfg = config.selfplay
     final = run.checkpoints / f"{FINAL}.pt"
@@ -250,85 +354,78 @@ def selfplay_stage(
     totals = {"games": 0, "seconds": 0.0, "bid_samples": 0, "card_samples": 0}
     warm_meta = load_policy(warm_start).meta
     base_seconds = float(warm_meta.get("seconds", 0.0))
+    view: ActorView | None = None
     if state_path.exists():
         state = cast(dict[str, Any], torch.load(state_path, weights_only=True))
         learner.load_state(state["learner"])
         snapshots = {int(k): _weights_from_payload(v) for k, v in state["snapshots"].items()}
         start_iteration = int(state["iteration"])
         totals = state["totals"]
+        if "next_view" in state:
+            view = ActorView.from_payload(state["next_view"])
         _say("selfplay", f"resuming after iteration {start_iteration}")
+    if view is None:
+        view = ActorView(learner.weights(), dict(snapshots))
     log_path = run.out / "selfplay" / "log.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    path = final
+    path = run.checkpoints / f"iter-{cfg.iterations:04d}.pt"
+    pending = None
+    if start_iteration < cfg.iterations:
+        pending = submit_iteration(config, start_iteration, view, pool)
+    tick = time.perf_counter()
     for iteration in range(start_iteration, cfg.iterations):
-        tick = time.perf_counter()
-        epsilon = linear_schedule(
-            cfg.iterations, iteration, cfg.epsilon_bid_start, cfg.epsilon_bid_end
-        )
-        temperature = linear_schedule(
-            cfg.iterations, iteration, cfg.bid_temperature_start, cfg.bid_temperature_end
-        )
-        train_card = iteration >= cfg.card_frozen_iterations
-        seed_of = SeedFn(config.seed, SELFPLAY_STAGE, iteration + 1)
-        plans = plan_games(config, iteration, sorted(snapshots), seed_of)
-        weights = learner.weights()
-        tasks: list[ChunkTask] = []
-        for begin in range(0, len(plans), cfg.chunk):
-            chunk = tuple(plans[begin : begin + cfg.chunk])
-            used = {s.snapshot for p in chunk for s in p.seats if s.kind == SNAPSHOT}
-            tasks.append(
-                ChunkTask(
-                    plans=chunk,
-                    learner=weights,
-                    snapshots={key: snapshots[key] for key in sorted(used)},
-                    epsilon_bid=epsilon,
-                    epsilon_card=cfg.epsilon_card,
-                    bid_temperature=temperature,
-                    record_bid=True,
-                    record_card=train_card,
-                    rules=config.rules,
-                    reward=config.reward,
-                )
-            )
-        evals = plan_eval_games(config, seed_of)
-        for begin in range(0, len(evals), cfg.chunk):
-            tasks.append(
-                ChunkTask(
-                    plans=tuple(evals[begin : begin + cfg.chunk]),
-                    learner=weights,
-                    snapshots={},
-                    epsilon_bid=0.0,
-                    epsilon_card=0.0,
-                    bid_temperature=0.0,
-                    record_bid=False,
-                    record_card=False,
-                    rules=config.rules,
-                    reward=config.reward,
-                )
-            )
-        results: list[ChunkResult] = list(pool.map(play_chunk, tasks))
+        if pending is None or pending.iteration != iteration:
+            raise RuntimeError(f"iteration {iteration}'s games were never submitted")
+        current = pending
+        results: list[ChunkResult] = [future.result() for future in current.futures]
         play_seconds = time.perf_counter() - tick
+        done = iteration + 1
+        if cfg.overlap and done < cfg.iterations:
+            view = ActorView(learner.weights(), dict(snapshots))
+            pending = submit_iteration(config, done, view, pool)
         bid = concat_samples([r.bid for r in results])
         card_samples = concat_samples([r.card for r in results])
-        update: UpdateReport = learner.update(bid, card_samples, iteration, train_card)
-        stats = [game for r in results for game in r.games]
+        learn_tick = time.perf_counter()
+        update: UpdateReport = learner.update(bid, card_samples, iteration, current.train_card)
+        learn_seconds = time.perf_counter() - learn_tick
+        if done % cfg.snapshot_every == 0:
+            snapshots[done] = learner.weights()
+            for key in sorted(snapshots)[: -cfg.snapshots_kept]:
+                del snapshots[key]
+        checkpoint_due = done % cfg.checkpoint_every == 0 or done == cfg.iterations
+        if checkpoint_due:
+            meta = {
+                "stage": "selfplay",
+                "iteration": done,
+                "games": totals["games"] + len(current.plans) + len(current.evals),
+                "seconds": base_seconds + totals["seconds"] + time.perf_counter() - tick,
+                "bid_samples": totals["bid_samples"] + len(bid),
+                "card_samples": totals["card_samples"] + len(card_samples),
+            }
+            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta)
+        if not cfg.overlap and done < cfg.iterations:
+            view = ActorView(learner.weights(), dict(snapshots))
+            pending = submit_iteration(config, done, view, pool)
         seconds = time.perf_counter() - tick
-        totals["games"] += len(plans) + len(evals)
+        tick = time.perf_counter()
+        totals["games"] += len(current.plans) + len(current.evals)
         totals["seconds"] += seconds
         totals["bid_samples"] += len(bid)
         totals["card_samples"] += len(card_samples)
+        stats = [game for r in results for game in r.games]
         summary = _summary(stats)
-        entry = {
-            "iteration": iteration + 1,
+        entry: dict[str, Any] = {
+            "iteration": done,
             "seconds": seconds,
             "play_seconds": play_seconds,
-            "games": len(plans),
-            "learner_seats": sum(1 for p in plans for s in p.seats if s.kind == LEARNER),
+            "learn_seconds": learn_seconds,
+            "games": len(current.plans),
+            "learner_seats": sum(1 for p in current.plans for s in p.seats if s.kind == LEARNER),
             "bid_samples": len(bid),
             "card_samples": len(card_samples),
-            "epsilon_bid": epsilon,
-            "bid_temperature": temperature,
-            "train_card": train_card,
+            "epsilon_bid": current.epsilon,
+            "bid_temperature": current.temperature,
+            "train_card": current.train_card,
             "lr_factor": update.lr_factor,
             "anchor_weight": update.anchor_weight,
             "bid_loss": update.bid_loss,
@@ -351,28 +448,14 @@ def selfplay_stage(
         ]
         _say(
             "selfplay",
-            f"iteration {iteration + 1}/{cfg.iterations}: {len(plans)} games in "
+            f"iteration {done}/{cfg.iterations}: {len(current.plans)} games in "
             f"{seconds:.1f} s, {len(card_samples):,} card + {len(bid):,} bid samples, "
             f"bid loss {update.bid_loss:.3f}, card V {update.card_value_loss:.3f} "
             f"Q {update.card_q_loss:.3f} anchor {update.anchor_loss:.3f}; " + "; ".join(parts),
         )
         if on_iteration is not None:
-            on_iteration(iteration + 1, entry)
-        done = iteration + 1
-        if done % cfg.snapshot_every == 0:
-            snapshots[done] = learner.weights()
-            for key in sorted(snapshots)[: -cfg.snapshots_kept]:
-                del snapshots[key]
-        if done % cfg.checkpoint_every == 0 or done == cfg.iterations:
-            meta = {
-                "stage": "selfplay",
-                "iteration": done,
-                "games": totals["games"],
-                "seconds": base_seconds + totals["seconds"],
-                "bid_samples": totals["bid_samples"],
-                "card_samples": totals["card_samples"],
-            }
-            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta)
+            on_iteration(done, entry)
+        if checkpoint_due:
             state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = state_path.with_suffix(".tmp")
             torch.save(
@@ -380,6 +463,7 @@ def selfplay_stage(
                     "iteration": done,
                     "learner": learner.state(),
                     "snapshots": {str(k): _weights_to_payload(v) for k, v in snapshots.items()},
+                    "next_view": view.to_payload(),
                     "totals": totals,
                 },
                 tmp,

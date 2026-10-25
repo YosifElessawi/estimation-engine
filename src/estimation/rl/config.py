@@ -83,6 +83,9 @@ class SelfPlayConfig:
     # Schedules over the run, as shares of the starting value at the last iteration (1: none).
     lr_end_factor: float = 1.0  # both learning rates decay linearly to this share
     card_anchor_end_factor: float = 1.0  # card_anchor_weight decays linearly to this share
+    # Speed. Neither changes what is learned from a given set of games.
+    overlap: bool = False  # play iteration k+1 with the nets from before k's update, during it
+    balance: bool = False  # chunks hold one opponent kind each, the slowest submitted first
 
 
 @dataclass(frozen=True, slots=True)

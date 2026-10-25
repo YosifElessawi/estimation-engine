@@ -54,6 +54,7 @@ def test_a_file_sets_values_in_any_section_and_the_seed_can_be_overridden(tmp_pa
         ({"selfplay": {"iterations": 0}}, "at least 1"),
         ({"rules": {"super_call_min": 3}}, "super_call_min"),
         ({"selfplay": {"lr_end_factor": -0.1}}, "lr_end_factor"),
+        ({"selfplay": {"overlap": 1}}, "must be true or false"),
     ],
 )
 def test_bad_configs_are_refused(data: dict[str, object], message: str):

@@ -420,6 +420,39 @@ def plan_eval_games(config: TrainConfig, seed_of: "SeedFn") -> list[GamePlan]:
     return plans
 
 
+def chunk_plans(
+    plans: Sequence[GamePlan], size: int, by_kind: bool = False
+) -> list[tuple[GamePlan, ...]]:
+    """``plans`` cut into chunks of ``size`` games in plan order. With ``by_kind``, each chunk
+    holds games of one kind only, so the slow games against PIMC can be started first."""
+    groups = [list(plans)]
+    if by_kind:
+        kinds = sorted({plan.kind for plan in plans})
+        groups = [[plan for plan in plans if plan.kind == kind] for kind in kinds]
+    return [tuple(group[i : i + size]) for group in groups for i in range(0, len(group), size)]
+
+
+# Rough seconds per game on one dev-Mac core, to start the slowest chunks first: about 0.04 s of
+# rules and scripted play, 0.03 s per net seat, and 0.04 s per deal of each PIMC seat. A game of
+# four nets takes about 0.15 s and a game against three PIMC bots of 4-8 deals about 0.75 s.
+_GAME_SECONDS = 0.04
+_NET_SEAT_SECONDS = 0.03
+_PIMC_DEAL_SECONDS = 0.04
+
+
+def estimated_seconds(plans: Sequence[GamePlan]) -> float:
+    """A rough cost of playing ``plans``. It orders work only: no result depends on it."""
+    total = 0.0
+    for plan in plans:
+        total += _GAME_SECONDS
+        for seat in plan.seats:
+            if seat.kind in (LEARNER, SNAPSHOT):
+                total += _NET_SEAT_SECONDS
+            elif seat.kind == PIMC:
+                total += _PIMC_DEAL_SECONDS * seat.samples
+    return total
+
+
 class SeedFn:
     """Seeds for one iteration: ``SeedFn(run_seed, stage, iteration)(*keys)``."""
 

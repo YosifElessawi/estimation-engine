@@ -33,6 +33,18 @@ def tiny(**changes: Any) -> TrainConfig:
     return config_from_dict({**TINY, **changes})
 
 
+def tiny_play(workers: int = 2, **selfplay: Any) -> TrainConfig:
+    """TINY with changes to its [selfplay] section."""
+    return tiny(workers=workers, selfplay={**TINY["selfplay"], **selfplay})
+
+
+def reuse_records(first_run: Path, out: Path) -> None:
+    """Start ``out`` from ``first_run``'s recorded PIMC games, as a staged run reuses M4's."""
+    (out / "warmstart").mkdir(parents=True)
+    for name in ("pimc.npz", "record.json"):
+        shutil.copy(first_run / "warmstart" / name, out / "warmstart" / name)
+
+
 def same_weights(a: Path, b: Path) -> bool:
     one = torch.load(a, weights_only=True)
     two = torch.load(b, weights_only=True)
@@ -95,22 +107,63 @@ class Crash(RuntimeError):
     pass
 
 
+def crash_after_two(iteration: int, entry: dict[str, Any]) -> None:
+    if iteration == 2:
+        raise Crash
+
+
 def test_an_interrupted_run_resumes_exactly(first_run: Path, tmp_path: Path):
     out = tmp_path / "resumed"
-    (out / "warmstart").mkdir(parents=True)
-    for name in ("pimc.npz", "record.json"):
-        shutil.copy(first_run / "warmstart" / name, out / "warmstart" / name)
-
-    def crash_after_two(iteration: int, entry: dict[str, Any]) -> None:
-        if iteration == 2:
-            raise Crash
-
+    reuse_records(first_run, out)
     with pytest.raises(Crash):
         train(tiny(), out, on_iteration=crash_after_two)
     assert (out / "selfplay/state.pt").exists()
     assert not (out / "checkpoints/final.pt").exists()
     train(tiny(), out)
     assert same_weights(first_run / "checkpoints/final.pt", out / "checkpoints/final.pt")
+
+
+@pytest.fixture(scope="module")
+def overlap_run(first_run: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    out = tmp_path_factory.mktemp("overlap")
+    reuse_records(first_run, out)
+    train(tiny_play(overlap=True), out)
+    return out
+
+
+def test_overlap_plays_each_iteration_with_the_nets_from_before_the_last_update(
+    first_run: Path, overlap_run: Path
+):
+    # Iteration 1 plays the starting nets either way; iteration 2 plays them again with overlap
+    # (while the learner takes its first update), so the two runs part from there.
+    assert same_weights(
+        first_run / "checkpoints/iter-0001.pt", overlap_run / "checkpoints/iter-0001.pt"
+    )
+    assert not same_weights(
+        first_run / "checkpoints/iter-0002.pt", overlap_run / "checkpoints/iter-0002.pt"
+    )
+
+
+def test_an_interrupted_overlap_run_resumes_exactly(
+    overlap_run: Path, first_run: Path, tmp_path: Path
+):
+    out = tmp_path / "resumed"
+    reuse_records(first_run, out)
+    with pytest.raises(Crash):
+        train(tiny_play(overlap=True), out, on_iteration=crash_after_two)
+    train(tiny_play(overlap=True), out)
+    assert same_weights(overlap_run / "checkpoints/final.pt", out / "checkpoints/final.pt")
+
+
+def test_balanced_overlapping_runs_are_the_same_on_any_worker_count(
+    first_run: Path, tmp_path: Path
+):
+    finals = []
+    for workers in (1, 3):
+        out = tmp_path / f"workers-{workers}"
+        reuse_records(first_run, out)
+        finals.append(train(tiny_play(workers, overlap=True, balance=True, chunk=2), out))
+    assert same_weights(*finals)
 
 
 def test_a_folder_refuses_a_different_config(first_run: Path):

@@ -23,6 +23,8 @@ from estimation.rl.selfplay import (
     SeatPlan,
     SeedFn,
     _softmax_choice,  # pyright: ignore[reportPrivateUsage]  # tested directly: the sampling rule
+    chunk_plans,
+    estimated_seconds,
     plan_games,
     play_chunk,
 )
@@ -165,3 +167,19 @@ def test_softmax_bidding_follows_the_values():
     assert share == pytest.approx(np.e / (1 + np.e), abs=0.01)
     cold = [_softmax_choice(legal, values, 0.001, u) for u in (np.arange(100) + 0.5) / 100]
     assert set(cold) == {1}
+
+
+def test_chunks_follow_the_plan_order_unless_grouped_by_kind():
+    plans = plan_games(CONFIG, 3, [5], SeedFn(2, SELFPLAY_STAGE, 4))
+    plain = chunk_plans(plans, 16)
+    assert [len(chunk) for chunk in plain] == [16, 16, 8]
+    assert [plan for chunk in plain for plan in chunk] == plans
+    grouped = chunk_plans(plans, 4, by_kind=True)
+    assert all(len({plan.kind for plan in chunk}) == 1 for chunk in grouped)
+    assert sorted(plan.index for chunk in grouped for plan in chunk) == list(range(len(plans)))
+
+
+def test_games_against_pimc_are_estimated_slowest():
+    plans = plan_games(CONFIG, 3, [5], SeedFn(2, SELFPLAY_STAGE, 4))
+    cost = {plan.kind: estimated_seconds([plan]) for plan in plans}
+    assert cost["pimc"] > cost["self"] > cost["heuristic"] > 0
