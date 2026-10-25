@@ -1,10 +1,19 @@
-"""BiddingNet and CardPlayNet (SPEC §6 M4): 4-layer MLPs of about 490K parameters each.
+"""BiddingNet and CardPlayNet (SPEC §6 M4): MLPs of about 540K parameters each.
 
 - **BiddingNet** predicts the expected round reward of each of the 68 non-card actions (No Dash
   Call, Dash Call, the 50 bids, With, Pass and the 14 estimates; super calls use the bid ids).
 - **CardPlayNet** has a critic, the expected reward of the position (deal luck), and an
   advantage head, how much better or worse each of the 52 cards is than that (skill). It plays
   the legal card with the highest advantage.
+
+Each net is a 3-layer trunk over the encoded state and an output layer with one value per
+action, plus a small action head shared by all actions. The action head sees a few facts about
+each action, derived inside the net from the state features: for a card, its suit and rank,
+whether it is trump or of the led suit, whether it would win the trick now, whether it is the top
+card left in its suit, and suit lengths and voids; for a bid or estimate, its trick count and
+trump and the hand's expected tricks in that trump. Sharing that head lets what one card or bid
+teaches carry over to the others (with one independent output per card, imitating PIMC
+generalised badly to new games).
 
 Rewards are predicted in units of ``REWARD_SCALE`` points.
 """
@@ -19,18 +28,41 @@ import numpy.typing as npt
 import torch
 from torch import nn
 
-from estimation.engine.actions import PLAY_BASE
+from estimation.engine.actions import (
+    DASH_CALL,
+    ESTIMATE_BASE,
+    FIRST_BID,
+    LAST_BID,
+    NO_DASH_CALL,
+    PASS,
+    PLAY_BASE,
+    WITH,
+)
 
-from .encoder import ENCODER_VERSION, NUM_FEATURES
+from .encoder import (
+    AUCTION,
+    CONTEXT,
+    ENCODER_VERSION,
+    HAND,
+    NUM_FEATURES,
+    OFFSETS,
+    SHAPE,
+    TRICK,
+    VOIDS,
+)
 
 BID_ACTIONS = PLAY_BASE  # action ids 0-67: everything but card play
 CARDS = 52
 HIDDEN = 384
+HEAD_HIDDEN = 128
 REWARD_SCALE = 50.0
-CHECKPOINT_FORMAT = 1
+CHECKPOINT_FORMAT = 2
+UNSEEN = OFFSETS["unseen"]
+CARD_FEATURES = 15
+BID_FEATURES = 17
 
 
-def _mlp(outputs: int, hidden: int) -> nn.Sequential:
+def _trunk(hidden: int) -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(NUM_FEATURES, hidden),
         nn.ReLU(),
@@ -38,7 +70,135 @@ def _mlp(outputs: int, hidden: int) -> nn.Sequential:
         nn.ReLU(),
         nn.Linear(hidden, hidden),
         nn.ReLU(),
-        nn.Linear(hidden, outputs),
+    )
+
+
+class ActionHead(nn.Module):
+    """One value per action: ``w_a . h + b_a + v . relu(P h + Q phi(a) + c)``, where ``h`` is the
+    trunk's output and ``phi(a)`` the action's features."""
+
+    def __init__(self, hidden: int, actions: int, features: int) -> None:
+        super().__init__()
+        self.per_action = nn.Linear(hidden, actions)
+        self.state = nn.Linear(hidden, HEAD_HIDDEN)
+        self.action = nn.Linear(features, HEAD_HIDDEN, bias=False)
+        self.out = nn.Linear(HEAD_HIDDEN, 1)
+
+    def forward(self, h: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
+        joint = torch.relu(self.state(h)[:, None, :] + self.action(phi))
+        return self.per_action(h) + self.out(joint)[:, :, 0]
+
+
+def _card_tables() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per card id: rank, suit one-hot (52 x 4), and the same-suit higher and lower matrices
+    (``higher[c2, c] = 1`` when ``c2`` is a higher card of ``c``'s suit)."""
+    cards = torch.arange(CARDS)
+    rank = (cards % 13).float()
+    suit = nn.functional.one_hot(cards // 13, 4).float()
+    same = suit @ suit.T
+    higher = same * (rank[:, None] > rank[None, :]).float()
+    return rank, suit, higher, higher.T.contiguous()
+
+
+def card_features(
+    x: torch.Tensor,
+    rank: torch.Tensor,
+    suit: torch.Tensor,
+    higher: torch.Tensor,
+    lower: torch.Tensor,
+) -> torch.Tensor:
+    """``(batch, 52, CARD_FEATURES)`` facts about each card in each encoded position."""
+    batch = x.shape[0]
+    hand = x[:, HAND : HAND + CARDS]
+    unseen = x[:, UNSEEN : UNSEEN + CARDS]
+    is_trump = x[:, CONTEXT + 12 : CONTEXT + 16] @ suit.T  # Sans makes no suit trump
+    is_led = x[:, TRICK : TRICK + 4] @ suit.T
+    leading = x[:, TRICK + 4 : TRICK + 5]
+    winner_trump = x[:, TRICK + 12 : TRICK + 13]
+    winner_rank = x[:, TRICK + 13 : TRICK + 14] * 12
+    above = (rank[None, :] > winner_rank + 0.5).float()
+    beats = is_trump * (1 - winner_trump + winner_trump * above)
+    beats = beats + is_led * (1 - winner_trump) * above
+    wins_now = (1 - leading) * beats.clamp(max=1.0)
+    higher_unseen = unseen @ higher
+    voids = x[:, VOIDS : VOIDS + 12].reshape(batch, 3, 4).sum(1) / 3
+    columns = [
+        is_trump,
+        is_led,
+        (rank / 12).expand(batch, CARDS),
+        wins_now,
+        (higher_unseen < 0.5).float(),  # the top card left in its suit
+        higher_unseen / 13,
+        (unseen @ suit) @ suit.T / 13,  # cards of its suit in other hands
+        (hand @ suit) @ suit.T / 13,  # own length in its suit
+        hand @ higher / 13,
+        hand @ lower / 13,
+        voids @ suit.T,
+    ]
+    return torch.cat([torch.stack(columns, dim=2), suit[None].expand(batch, CARDS, 4)], dim=2)
+
+
+def _bid_tables() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per non-card action: type one-hot (6), trick count / 13, trump one-hot (5, bids only),
+    and a mask of the estimate actions."""
+    kind = torch.zeros(BID_ACTIONS, 6)
+    tricks = torch.zeros(BID_ACTIONS)
+    trump = torch.zeros(BID_ACTIONS, 5)
+    kind[NO_DASH_CALL, 0] = 1
+    kind[DASH_CALL, 1] = 1
+    for action in range(FIRST_BID, LAST_BID + 1):
+        n, t = divmod(action - FIRST_BID, 5)
+        kind[action, 2] = 1
+        tricks[action] = (n + 4) / 13
+        trump[action, t] = 1
+    kind[WITH, 3] = 1
+    kind[PASS, 4] = 1
+    estimate = torch.zeros(BID_ACTIONS)
+    for k in range(14):
+        kind[ESTIMATE_BASE + k, 5] = 1
+        tricks[ESTIMATE_BASE + k] = k / 13
+        estimate[ESTIMATE_BASE + k] = 1
+    return kind, tricks, trump, estimate
+
+
+def bid_features(
+    x: torch.Tensor,
+    kind: torch.Tensor,
+    tricks: torch.Tensor,
+    trump: torch.Tensor,
+    estimate: torch.Tensor,
+) -> torch.Tensor:
+    """``(batch, 68, BID_FEATURES)`` facts about each non-card action in each position: its
+    type, trick count and trump (With joins the top bid; an estimate is in the round's trump),
+    the hand's expected tricks in that trump and the gap to the trick count, whether it is 8 or
+    more, and for an estimate the Over/Under delta it leaves and whether it equals the
+    contract."""
+    batch = x.shape[0]
+    top_exists = x[:, AUCTION : AUCTION + 1]
+    top_tricks = (x[:, AUCTION + 1 : AUCTION + 2] * 9 + 4) / 13 * top_exists
+    with_mask = torch.zeros(BID_ACTIONS, device=x.device)
+    with_mask[WITH] = 1
+    n = tricks[None, :] + with_mask[None, :] * top_tricks
+    round_trump = x[:, CONTEXT + 12 : CONTEXT + 17]
+    top_trump = x[:, AUCTION + 2 : AUCTION + 7]
+    action_trump = (
+        trump[None]
+        + with_mask[None, :, None] * top_trump[:, None, :]
+        + estimate[None, :, None] * round_trump[:, None, :]
+    )
+    expected = (action_trump * x[:, None, SHAPE + 4 : SHAPE + 9]).sum(2)
+    delta = estimate[None, :] * (x[:, CONTEXT + 17 : CONTEXT + 18] + tricks[None, :])
+    equals = estimate[None, :] * top_exists * ((tricks[None, :] - top_tricks).abs() < 0.01)
+    columns = [
+        n,
+        expected,
+        expected - n,
+        (n * 13 > 7.5).float(),
+        delta,
+        equals.float(),
+    ]
+    return torch.cat(
+        [kind[None].expand(batch, -1, -1), action_trump, torch.stack(columns, dim=2)], dim=2
     )
 
 
@@ -48,10 +208,24 @@ class BiddingNet(nn.Module):
     def __init__(self, hidden: int = HIDDEN) -> None:
         super().__init__()
         self.hidden = hidden
-        self.body = _mlp(BID_ACTIONS, hidden)
+        self.trunk = _trunk(hidden)
+        self.head = ActionHead(hidden, BID_ACTIONS, BID_FEATURES)
+        kind, tricks, trump, estimate = _bid_tables()
+        self.register_buffer("kind", kind, persistent=False)
+        self.register_buffer("tricks", tricks, persistent=False)
+        self.register_buffer("trump", trump, persistent=False)
+        self.register_buffer("estimate", estimate, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return cast(torch.Tensor, self.body(x))
+        h = cast(torch.Tensor, self.trunk(x))
+        phi = bid_features(
+            x,
+            cast(torch.Tensor, self.kind),
+            cast(torch.Tensor, self.tricks),
+            cast(torch.Tensor, self.trump),
+            cast(torch.Tensor, self.estimate),
+        )
+        return cast(torch.Tensor, self.head(h, phi))
 
 
 class CardPlayNet(nn.Module):
@@ -61,11 +235,26 @@ class CardPlayNet(nn.Module):
     def __init__(self, hidden: int = HIDDEN) -> None:
         super().__init__()
         self.hidden = hidden
-        self.body = _mlp(1 + CARDS, hidden)
+        self.trunk = _trunk(hidden)
+        self.critic = nn.Linear(hidden, 1)
+        self.head = ActionHead(hidden, CARDS, CARD_FEATURES)
+        rank, suit, higher, lower = _card_tables()
+        self.register_buffer("rank", rank, persistent=False)
+        self.register_buffer("suit", suit, persistent=False)
+        self.register_buffer("higher", higher, persistent=False)
+        self.register_buffer("lower", lower, persistent=False)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        out = cast(torch.Tensor, self.body(x))
-        return out[:, 0], out[:, 1:]
+        h = cast(torch.Tensor, self.trunk(x))
+        phi = card_features(
+            x,
+            cast(torch.Tensor, self.rank),
+            cast(torch.Tensor, self.suit),
+            cast(torch.Tensor, self.higher),
+            cast(torch.Tensor, self.lower),
+        )
+        value = cast(torch.Tensor, self.critic(h))[:, 0]
+        return value, cast(torch.Tensor, self.head(h, phi))
 
 
 def parameter_count(net: nn.Module) -> int:

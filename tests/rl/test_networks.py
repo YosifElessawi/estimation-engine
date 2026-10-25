@@ -19,11 +19,11 @@ from estimation.rl.networks import (
 from tests.rl.helpers import make_checkpoint
 
 
-def test_both_nets_are_4_layer_mlps_of_about_500k_parameters():
+def test_both_nets_are_mlps_of_about_500k_parameters():
     for net in (BiddingNet(), CardPlayNet()):
-        layers = [m for m in net.modules() if isinstance(m, torch.nn.Linear)]
-        assert len(layers) == 4
-        assert layers[0].in_features == NUM_FEATURES
+        trunk = [m for m in net.trunk.modules() if isinstance(m, torch.nn.Linear)]
+        assert len(trunk) == 3  # three hidden layers, then the action outputs
+        assert trunk[0].in_features == NUM_FEATURES
         assert 400_000 <= parameter_count(net) <= 600_000
 
 
