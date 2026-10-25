@@ -71,8 +71,9 @@ class TrickView(TypedDict):
 class TableView(TypedDict):
     """The table as one viewer sees it. ``hands`` holds a seat's remaining cards only where the
     viewer may see them, ``None`` elsewhere; ``hand_sizes`` is public. ``events`` are the
-    round's Dash Calls, auction calls and estimates so far, and ``calls`` each seat's latest of
-    them. ``scores`` are the game scores before this round."""
+    round's Dash Calls, auction calls and estimates so far, and ``calls`` each seat's latest
+    call in the current stretch of the phase being played (a super call starts a new auction,
+    and estimates after it start again). ``scores`` are the game scores before this round."""
 
     round_no: int
     phase: str
@@ -141,6 +142,7 @@ class RoundResultView(TypedDict):
     carry: int
     multiplier: int
     next_carry: int
+    replayed: bool
     scores: list[int]
     seats: list[SeatResultView]
 
@@ -231,9 +233,7 @@ def table_view(
         ]
     else:
         shown = [cards_of(hand) for hand in hands]
-    calls: list[ActionView | None] = [None, None, None, None]
-    for event in events:
-        calls[event["seat"]] = event["action"]
+    calls = current_calls(events, obs.phase)
     last = obs.tricks[-1] if obs.tricks else None
     return TableView(
         round_no=obs.round_no,
@@ -273,13 +273,42 @@ def table_view(
     )
 
 
+CALL_STAGES = {
+    "no_dash": Phase.DASH,
+    "dash": Phase.DASH,
+    "bid": Phase.AUCTION,
+    "super_call": Phase.AUCTION,
+    "with": Phase.AUCTION,
+    "pass": Phase.AUCTION,
+    "keep": Phase.AUCTION,
+    "estimate": Phase.ESTIMATION,
+}
+
+
+def current_calls(events: Sequence[EventView], phase: Phase) -> list[ActionView | None]:
+    """Each seat's latest call in the last unbroken run of calls, if that run belongs to
+    ``phase``. A super call (FIX-4) opens an auction, so the estimates before it no longer
+    count, and the auction's calls give way to the estimates after it."""
+    calls: list[ActionView | None] = [None, None, None, None]
+    stage = None
+    for event in events:
+        kind_stage = CALL_STAGES[event["action"]["kind"]]
+        if kind_stage != stage:
+            calls = [None, None, None, None]
+            stage = kind_stage
+        calls[event["seat"]] = event["action"]
+    return calls if stage == phase else [None, None, None, None]
+
+
 def _bid(action: int) -> BidView:
     tricks, trump = bid_of(action)
     return BidView(tricks=tricks, trump=trump)
 
 
-def result_view(result: RoundResult) -> RoundResultView:
-    """A scored round: per seat its estimate, tricks, roles and points from SCR-1 to SCR-6."""
+def result_view(result: RoundResult, replayed: bool) -> RoundResultView:
+    """A scored round: per seat its estimate, tricks, roles and points from SCR-1 to SCR-6.
+    ``replayed`` says whether its fixed trump is played again next (FIX-5): a changed trump is
+    not replayed once the game reaches ``max_fixed_replays``."""
     return RoundResultView(
         round_no=result.round_no,
         skipped=result.skipped,
@@ -294,6 +323,7 @@ def result_view(result: RoundResult) -> RoundResultView:
         carry=result.carry,
         multiplier=result.multiplier,
         next_carry=result.next_carry,
+        replayed=replayed,
         scores=list(result.scores),
         seats=[
             SeatResultView(

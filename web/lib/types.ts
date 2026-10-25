@@ -101,6 +101,7 @@ export interface RoundResultView {
   carry: number;
   multiplier: number;
   next_carry: number;
+  replayed: boolean;
   scores: number[];
   seats: SeatResultView[];
 }

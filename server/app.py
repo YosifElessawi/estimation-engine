@@ -32,7 +32,7 @@ from .session import HUMAN, Frame, GameError, GameSession, Mode, SeekTarget, Wai
 
 MAX_GAMES = 32
 MAX_FRAMES = 500
-MAX_SEED = 2**32 - 1
+MAX_SEED = 2**53 - 1  # the largest integer a browser's JSON numbers hold exactly
 
 
 class NewGame(BaseModel):
@@ -154,7 +154,9 @@ class GameStore:
         self, seats: list[str], seed: int | None, mode: Mode, script: list[int] | None = None
     ) -> GameView:
         chosen = seed is not None
-        game_seed = seed if seed is not None else secrets.randbelow(1_000_000)
+        # A hidden seed must not be guessable from the player's own first hand: the deal is a
+        # pure function of the seed (SPEC §5.1), so draw it from the whole range.
+        game_seed = seed if seed is not None else secrets.randbelow(MAX_SEED + 1)
         try:
             session = GameSession(
                 uuid.uuid4().hex[:12],

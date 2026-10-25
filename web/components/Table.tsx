@@ -354,9 +354,10 @@ export function RoundResult({
           {result.skipped
             ? "Skipped: no Caller, everyone scores 0"
             : `${result.total} estimated · ${result.over ? `Over by ${(result.total ?? 13) - 13}` : `Under by ${13 - (result.total ?? 13)}`}`}
-          {result.multiplier !== 1 && ` · scored x${result.multiplier}`}
+          {!result.skipped && result.multiplier !== 1 && ` · scored x${result.multiplier}`}
           {result.all_lose && " · everyone lost"}
-          {result.trump_changed && " · trump changed, replayed next"}
+          {result.trump_changed &&
+            (result.replayed ? " · trump changed, replayed next" : " · trump changed (replay limit reached)")}
         </span>
       </header>
       {!result.skipped && (

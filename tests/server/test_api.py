@@ -360,3 +360,89 @@ def test_a_finished_game_can_be_reviewed_with_every_hand(client: TestClient):
     assert [f["event"] for f in replay] == [f["event"] for f in every]
     assert replay[-1]["scores"] == every[-1]["scores"]
     assert all(None not in frame["table"]["hands"] for frame in replay)
+
+
+def test_a_chosen_seed_is_shown_and_a_random_one_stays_hidden_mid_game(client: TestClient):
+    chosen = new_game(client, ["random", "human", "random", "random"], seed=21)
+    assert chosen["seed"] == 21
+    hidden = new_game(client, ["random", "human", "random", "random"])
+    assert hidden["seed"] is None
+    latest = frames(client, hidden["id"], 0, 500)[-1]
+    url = f"/api/games/{hidden['id']}/moves"
+    client.post(url, json={"action": latest["legal"][0]["id"], "frame": latest["index"]})
+    assert client.get(f"/api/games/{hidden['id']}").json()["seed"] is None
+
+
+def test_a_hidden_seed_is_drawn_from_the_whole_range(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """The deal is a pure function of the seed (SPEC §5.1), so a small range would let a player
+    find the seed, and every hand, from their own first hand."""
+    import server.app as app_module
+
+    asked: list[int] = []
+
+    def draw(below: int) -> int:
+        asked.append(below)
+        return below - 1
+
+    monkeypatch.setattr(app_module.secrets, "randbelow", draw)
+    new_game(client, ["random", "human", "random", "random"])
+    assert asked == [2**53]
+
+
+def test_bots_in_a_played_game_get_only_their_own_observation(catalog: Catalog):
+    seats_seen: dict[int, set[int]] = {}
+
+    class Recorder:
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+            self.key = len(seats_seen)
+            seats_seen[self.key] = set()
+
+        def act(self, obs: Any, legal: list[int]) -> int:
+            assert obs.seat == obs.current_player
+            seats_seen[self.key].add(obs.seat)
+            return self.inner.act(obs, legal)
+
+    class Wrapping:
+        def make(self, spec: str, seed: int, rules: Any) -> Any:
+            return Recorder(catalog.make(spec, seed, rules))
+
+    rng = random.Random(2)
+    game = GameSession("p", ["heuristic", "human", "random", FINAL], 22, Wrapping(), mode="play")  # type: ignore[arg-type]  # a stand-in catalog that only makes bots
+    while not game.finished:
+        legal = game.frames[-1]["legal"]
+        assert legal
+        game.play(rng.choice(legal)["id"])
+    assert sorted(seats_seen.values(), key=sorted) == [{0}, {2}, {3}]
+
+
+def test_games_with_search_rl_and_noisy_bots_replay_the_same(client: TestClient):
+    seats = [FINAL, "pimc:samples=2", "heuristic:noise=0.3", WARM]
+    first = frames(client, new_game(client, seats, seed=23)["id"], 0, 300)
+    again = frames(client, new_game(client, seats, seed=23)["id"], 0, 300)
+    assert len(first) == 300
+    assert first == again
+
+
+def test_a_changed_fixed_trump_says_whether_it_is_replayed(client: TestClient):
+    """FIX-5: random play super-calls often, so this game reaches the replay cap; after it, a
+    changed trump is no longer replayed."""
+    every = whole_game(client, new_game(client, ["random"] * 4, seed=24)["id"])
+    ends = [i for i, frame in enumerate(every) if frame["kind"] == "round_end"]
+    replayed = capped = 0
+    for i in ends:
+        result = every[i]["result"]
+        if result["fixed_trump"] is None:
+            assert not result["replayed"]
+            continue
+        following = every[i + 1]  # the next deal, or the game's end
+        again = following["kind"] == "deal"
+        again = again and following["table"]["fixed_trump"] == result["fixed_trump"]
+        assert result["replayed"] == again
+        assert result["replayed"] <= result["trump_changed"]
+        replayed += result["replayed"]
+        capped += result["trump_changed"] and not result["replayed"]
+    assert replayed == 20  # max_fixed_replays
+    assert capped > 0

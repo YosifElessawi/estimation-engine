@@ -148,6 +148,7 @@ class GameSession:
         event: EventView | None = None,
         why: WhyView | None = None,
         scores: tuple[int, int, int, int] | None = None,
+        replayed: bool = False,
     ) -> None:
         table = self._table(source)
         result = None
@@ -155,7 +156,7 @@ class GameSession:
         if kind == "round_end":
             self._history.append(summary_view(self.bola.history[-1]))
         if kind in ("round_end", "game_end"):
-            result = result_view(self.bola.history[-1])
+            result = result_view(self.bola.history[-1], replayed)
         if kind == "game_end":
             winners = list(self.bola.winners())
         self.frames.append(
@@ -201,6 +202,7 @@ class GameSession:
         """Apply ``seat``'s action (``obs`` is its view just before) and add its frames."""
         bola = self.bola
         rnd = bola.round
+        replays = bola.replays
         done_tricks = len(obs.tricks)
         view = describe_action(obs, action)
         bola.step(action)
@@ -215,7 +217,7 @@ class GameSession:
         event = EventView(seat=seat, action=view, trick_winner=winner)
         self._add(rnd, "action", event=event, why=why)
         if bola.is_over or bola.round is not rnd:
-            self._add(rnd, "round_end", scores=bola.scores)
+            self._add(rnd, "round_end", scores=bola.scores, replayed=bola.replays > replays)
             if bola.is_over:
                 self._add(rnd, "game_end", scores=bola.scores)
             self._events = []
