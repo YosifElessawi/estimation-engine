@@ -166,6 +166,44 @@ def test_balanced_overlapping_runs_are_the_same_on_any_worker_count(
     assert same_weights(*finals)
 
 
+def test_the_yardstick_rates_checkpoints_without_changing_training(first_run: Path, tmp_path: Path):
+    out = tmp_path / "yardstick"
+    reuse_records(first_run, out)
+    reference = tmp_path / "reference.pt"
+    shutil.copy(first_run / "checkpoints/final.pt", reference)
+    config = tiny_play(
+        checkpoint_every=3,
+        yardstick_every=2,
+        yardstick_sets=2,
+        yardstick_pimc_samples=2,
+        yardstick_reference=str(reference),
+    )
+    train(config, out)
+    assert same_weights(first_run / "checkpoints/final.pt", out / "checkpoints/final.pt")
+    log = [json.loads(line) for line in (out / "selfplay/log.jsonl").read_text().splitlines()]
+    assert ["yardstick" in entry for entry in log] == [False, True, False]
+    measured = log[1]["yardstick"]
+    assert measured["checkpoint"] == "iter-0002.pt"  # saved for the yardstick
+    assert (out / "checkpoints/iter-0002.pt").exists()
+    assert set(measured["matches"]) == {"pimc", "reference"}
+    for match in measured["matches"].values():
+        assert match["sets"] == 2
+        assert 0.0 <= match["won"]["mean"] <= 1.0
+    assert measured["matches"]["reference"]["opponent"] == f"rl:checkpoint={reference}"
+    line = json.loads((out / "selfplay/yardstick-reference.json").read_text())
+    assert set(line["matches"]) == {"pimc"}
+
+
+def test_a_missing_yardstick_reference_stops_the_run_before_training(
+    first_run: Path, tmp_path: Path
+):
+    out = tmp_path / "missing"
+    reuse_records(first_run, out)
+    with pytest.raises(SystemExit, match="is not a file"):
+        train(tiny_play(yardstick_reference=str(tmp_path / "nope.pt")), out)
+    assert not (out / "selfplay/log.jsonl").exists()
+
+
 def test_a_folder_refuses_a_different_config(first_run: Path):
     with pytest.raises(SystemExit, match="different config"):
         train(tiny(seed=11), first_run)

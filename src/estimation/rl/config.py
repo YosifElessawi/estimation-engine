@@ -86,6 +86,13 @@ class SelfPlayConfig:
     # Speed. Neither changes what is learned from a given set of games.
     overlap: bool = False  # play iteration k+1 with the nets from before k's update, during it
     balance: bool = False  # chunks hold one opponent kind each, the slowest submitted first
+    # The yardstick: a fixed duplicate match with the nets every few iterations, the same deals
+    # every time, against PIMC and (optionally) a reference checkpoint. It never trains.
+    yardstick_every: int = 25  # 0 turns it off
+    yardstick_sets: int = 40
+    yardstick_seed: int = 0
+    yardstick_pimc_samples: int = 8
+    yardstick_reference: str = ""  # path to a checkpoint to play head-to-head ("" skips it)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +126,8 @@ class TrainConfig:
         play = self.selfplay
         if play.lr_end_factor < 0 or play.card_anchor_end_factor < 0:
             raise ValueError("lr_end_factor and card_anchor_end_factor must be 0 or more")
+        if play.yardstick_every < 0 or play.yardstick_sets < 1:
+            raise ValueError("yardstick_every must be 0 or more and yardstick_sets at least 1")
 
 
 _SECTIONS = ("rules", "reward", "record", "imitation", "opponents", "selfplay", "nets")

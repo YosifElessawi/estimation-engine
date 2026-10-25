@@ -12,7 +12,9 @@ Three stages, each skipped when its output already exists, so an interrupted run
    checkpoint every ``checkpoint_every`` iterations and ``final.pt`` at the end.
    ``<out>/selfplay/state.pt`` resumes it exactly. With ``overlap``, each iteration's games are
    played while the learner trains on the previous ones; with ``balance``, the slowest games
-   start first.
+   start first. Every ``yardstick_every`` iterations a fixed duplicate match rates the latest
+   checkpoint (estimation.rl.yardstick), and ``python -m estimation.rl.watch <out>`` shows the
+   run live.
 
 The same config, seed and code give the same checkpoints, on any number of workers.
 ``<out>/checkpoints/index.json`` lists the checkpoints; ``record-elo`` adds each one's Elo from a
@@ -35,6 +37,9 @@ from typing import Any, cast
 
 import torch
 
+from estimation.bots import make_bot
+
+from . import yardstick
 from .config import (
     SELFPLAY_STAGE,
     TrainConfig,
@@ -324,6 +329,35 @@ def submit_iteration(
     )
 
 
+def _yardstick_reference(run: Run, pool: ProcessPoolExecutor) -> None:
+    """Rate the reference checkpoint on the yardstick's PIMC match once, as the line to beat."""
+    cfg = run.config.selfplay
+    path = run.out / "selfplay" / "yardstick-reference.json"
+    if not cfg.yardstick_every or not cfg.yardstick_reference or path.exists():
+        return
+    _say("selfplay", f"rating the reference {cfg.yardstick_reference} on the yardstick")
+    tick = time.perf_counter()
+    found = yardstick.matches(cfg, Path(cfg.yardstick_reference))[:1]
+    result = yardstick.play(pool, found, cfg, run.config.rules)
+    entry = {
+        "checkpoint": cfg.yardstick_reference,
+        "seconds": time.perf_counter() - tick,
+        "matches": result,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entry, indent=1) + "\n")
+
+
+def _check_yardstick(config: TrainConfig) -> None:
+    """Fail before training, not hours in, on a yardstick bot that cannot be made."""
+    cfg = config.selfplay
+    if not cfg.yardstick_every:
+        return
+    if cfg.yardstick_reference and not Path(cfg.yardstick_reference).is_file():
+        raise SystemExit(f"yardstick_reference {cfg.yardstick_reference} is not a file")
+    make_bot(f"pimc:samples={cfg.yardstick_pimc_samples}", 0, config.rules)
+
+
 def selfplay_stage(
     run: Run,
     warm_start: Path,
@@ -341,6 +375,7 @@ def selfplay_stage(
     if final.exists():
         _say("selfplay", f"reusing {final}")
         return final
+    _check_yardstick(config)
     card = load_policy(warm_start).card
     seed_torch(derive_seed(config.seed, SELFPLAY_STAGE, 0, 0))
     bidding = BiddingNet(config.nets.hidden)
@@ -368,6 +403,7 @@ def selfplay_stage(
         view = ActorView(learner.weights(), dict(snapshots))
     log_path = run.out / "selfplay" / "log.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _yardstick_reference(run, pool)
     path = run.checkpoints / f"iter-{cfg.iterations:04d}.pt"
     pending = None
     if start_iteration < cfg.iterations:
@@ -393,7 +429,8 @@ def selfplay_stage(
             for key in sorted(snapshots)[: -cfg.snapshots_kept]:
                 del snapshots[key]
         checkpoint_due = done % cfg.checkpoint_every == 0 or done == cfg.iterations
-        if checkpoint_due:
+        yardstick_due = bool(cfg.yardstick_every) and done % cfg.yardstick_every == 0
+        if checkpoint_due or yardstick_due:
             meta = {
                 "stage": "selfplay",
                 "iteration": done,
@@ -406,6 +443,12 @@ def selfplay_stage(
         if not cfg.overlap and done < cfg.iterations:
             view = ActorView(learner.weights(), dict(snapshots))
             pending = submit_iteration(config, done, view, pool)
+        measured: dict[str, dict[str, Any]] | None = None
+        yardstick_seconds = 0.0
+        if yardstick_due:
+            yard_tick = time.perf_counter()
+            measured = yardstick.play(pool, yardstick.matches(cfg, path), cfg, config.rules)
+            yardstick_seconds = time.perf_counter() - yard_tick
         seconds = time.perf_counter() - tick
         tick = time.perf_counter()
         totals["games"] += len(current.plans) + len(current.evals)
@@ -439,6 +482,12 @@ def selfplay_stage(
             },
             "results": summary,
         }
+        if measured is not None:
+            entry["yardstick"] = {
+                "checkpoint": path.name,
+                "seconds": yardstick_seconds,
+                "matches": measured,
+            }
         with log_path.open("a") as log:
             log.write(json.dumps(entry) + "\n")
         parts = [
@@ -446,6 +495,12 @@ def selfplay_stage(
             f"skipped {100 * s['skipped']:.0f}%"
             for kind, s in summary.items()
         ]
+        if measured is not None:
+            parts += [
+                f"yardstick vs {name}: won {100 * m['won']['mean']:.0f}% "
+                f"RSA {m['rsa']['mean']:+.1f}"
+                for name, m in measured.items()
+            ]
         _say(
             "selfplay",
             f"iteration {done}/{cfg.iterations}: {len(current.plans)} games in "
