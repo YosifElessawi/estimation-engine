@@ -117,6 +117,13 @@ class Run:
     def add_to_index(self, entry: dict[str, Any]) -> None:
         entries = [e for e in self.index() if e["name"] != entry["name"]]
         entries.append(entry)
+        self.write_index(entries)
+
+    def write_index(self, entries: list[dict[str, Any]]) -> None:
+        """Save the index in training order: the warm start, each iteration, then final."""
+        entries = sorted(
+            entries, key=lambda e: (e["name"] == FINAL, int(e.get("iteration", 0)), e["name"])
+        )
         self.checkpoints.mkdir(parents=True, exist_ok=True)
         self.index_path.write_text(json.dumps({"checkpoints": entries}, indent=1) + "\n")
 
@@ -403,21 +410,28 @@ def train(
 
 
 def record_elo(out: Path, ladder: Path) -> list[tuple[str, dict[str, float]]]:
-    """Write each checkpoint's ladder Elo (by bot spec) into ``<out>/checkpoints/index.json``."""
+    """Write each checkpoint's ladder Elo (by bot spec) into ``<out>/checkpoints/index.json``.
+    A copy (``final.pt``) and the checkpoint it copies share their ratings."""
     data = json.loads(ladder.read_text())
     ratings: dict[str, float] = data["ratings"]
     run = Run(out, TrainConfig())
-    updated: list[tuple[str, dict[str, float]]] = []
-    for entry in run.index():
+    entries = run.index()
+    by_file: dict[str, dict[str, float]] = {}
+    for entry in entries:
         target = (run.checkpoints / entry["file"]).resolve()
         found = dict(entry.get("elo", {}))
         for spec, rating in ratings.items():
             if _checkpoint_of(spec) == target:
                 found[spec] = rating
-        if found != entry.get("elo", {}):
-            run.add_to_index({**entry, "elo": found})
-        updated.append((entry["name"], found))
-    return updated
+        by_file[entry["file"]] = found
+    for entry in entries:
+        original = entry.get("copy_of")
+        if original in by_file:
+            merged = {**by_file[original], **by_file[entry["file"]]}
+            by_file[original] = by_file[entry["file"]] = merged
+    updated = [{**entry, "elo": by_file[entry["file"]]} for entry in entries]
+    run.write_index(updated)
+    return [(str(entry["name"]), by_file[entry["file"]]) for entry in entries]
 
 
 def _checkpoint_of(spec: str) -> Path | None:

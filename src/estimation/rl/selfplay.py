@@ -57,7 +57,7 @@ class SeatPlan:
 @dataclass(frozen=True, slots=True)
 class GamePlan:
     index: int
-    kind: str  # "self", "heuristic" or "pimc": the opponents it was drawn for
+    kind: str  # "self", "heuristic", "pimc", or "eval" (greedy, never trained on)
     deal_seed: int
     seed: int  # seeds the scripted bots and the learner's exploration
     seats: tuple[SeatPlan, SeatPlan, SeatPlan, SeatPlan]

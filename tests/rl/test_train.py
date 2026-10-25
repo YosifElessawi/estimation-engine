@@ -119,6 +119,7 @@ def test_ladder_elo_is_saved_with_each_checkpoint(first_run: Path, tmp_path: Pat
     ladder.write_text(json.dumps({"ratings": {"random": 400.0, f"rl:checkpoint={final}": 1234.5}}))
     rated = dict(record_elo(first_run, ladder))
     assert rated["final"] == {f"rl:checkpoint={final}": 1234.5}
+    assert rated["iter-0003"] == rated["final"]  # final.pt is a copy of it
     assert rated["warm-start"] == {}
     index = json.loads((first_run / "checkpoints/index.json").read_text())["checkpoints"]
     assert next(e for e in index if e["name"] == "final")["elo"] == {
