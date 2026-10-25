@@ -172,7 +172,11 @@ def bid_features(
     type, trick count and trump (With joins the top bid; an estimate is in the round's trump),
     the hand's expected tricks in that trump and the gap to the trick count, whether it is 8 or
     more, and for an estimate the Over/Under delta it leaves and whether it equals the
-    contract."""
+    contract.
+
+    "8 or more" is a fixed property of the action, the default super call size: the net has no
+    RulesConfig. Under other rules the state's contract-of-8+ flag and every seat's stakes
+    still follow ``super_call_min``, but the nets would need retraining to value such bids."""
     batch = x.shape[0]
     top_exists = x[:, AUCTION : AUCTION + 1]
     top_tricks = (x[:, AUCTION + 1 : AUCTION + 2] * 9 + 4) / 13 * top_exists

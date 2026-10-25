@@ -24,7 +24,9 @@ shape          9  suit lengths and HeuristicBot's expected tricks under each tru
 ==========  ====  ===========================================================================
 
 ``points_if_win`` and ``points_if_lose`` come from the RulesConfig, so a rule change shows up in
-the inputs instead of needing a retrain from scratch.
+the inputs instead of needing a retrain from scratch. The standings weights and the match-win
+probability are part of the encoding itself: they always use the default weights (1.0 ahead or
+level, 0.5 behind) and ``ROUND_SD``, whatever reward a training run is configured with.
 """
 
 import math
