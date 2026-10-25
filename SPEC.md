@@ -2,7 +2,7 @@
 
 A bot that plays **Estimation**, the 4-player trick-taking card game, by the rules of the Pocket Estimation app. It is built in six milestones: an exact rules engine, baseline bots with a fair rating arena, a search bot, a self-play RL bot, a hybrid of the two, and a web table with game review.
 
-**Status (2026-10-24):** spec only, no code yet. Next: Milestone 1.
+**Status (2026-10-25):** Milestones 1-3 are done and merged, with an Elo ladder (M2) and an opt-in search bidder (experimental, M3). Measured Elo, RandomBot fixed at 400: HeuristicBot about 3,840, PIMC about 4,830. Next: Milestone 4.
 
 ## How to Use This Spec
 
@@ -436,14 +436,18 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 - **Duplicate runner:** a lineup is 4 bots, one per seat, repeats allowed. A duplicate set plays one seed's deals 4 times, rotating the lineup so that in rotation `k` seat `i` gets bot `(i + k) % 4`. Every bot plays every hand.
 - **Metrics:**
   - Relative Score Advantage (RSA): a bot's Bola score minus the mean of the other three seats, averaged over all its Bolas, with a 95% confidence interval over duplicate sets.
-  - Elo: a Bradley-Terry fit over pairwise results, with RandomBot fixed at 400. Within each duplicate set, every pair of different bots is compared by total score across the set.
+  - First place: the share of its Bolas each seat of a bot finishes first, ties shared (a fair share is 25%), with a 95% confidence interval over duplicate sets. The headline result from M4 on, since finishing first is what wins a game; RSA stays as the more sensitive backup.
+  - Elo: a Bradley-Terry fit over pairwise results, with RandomBot fixed at 400 (moved from 800 on 2026-10-25, Yosif). Within each duplicate set, every pair of different bots is compared by score across the set: total score when both fill the same number of slots, mean Bola score per seat otherwise. One virtual draw per pair keeps a clean sweep finite, and the report states the lower bound a sweep supports.
+  - Elo ladder: bots too far apart to compare directly (one wins every set) are rated through bots of in-between strength. Each neighbouring pair plays its own duplicate run and one Bradley-Terry fit rates them all: `uv run python -m estimation.arena.ladder --sets 200 --workers 5`. The default ladder runs RandomBot, HeuristicBot with 75% down to 1% random moves (`heuristic:noise=p`), HeuristicBot, PIMC with 1 to 30 deals, and is calibrated so each bot wins about 60-95% of its sets against the one below.
 - **CLI:** `uv run python -m estimation.arena --lineup heuristic,random,heuristic,random --sets 1000 --seed 0`.
 
 **Done when:** HeuristicBot vs RandomBot over 1,000 sets has an RSA confidence interval above 0. The same seed gives the same report. Elo is reported (expect about 1200).
 
+**Result (done 2026-10-24):** HeuristicBot's RSA is +1,670 per Bola (95% CI +1,639 to +1,702) and it won all 1,000 sets; the same seed gives the same report on 1 or 2 workers. The ladder (200 sets per pair) rates HeuristicBot at about 3,840. The 1,200 guess assumed a much smaller spread: RandomBot is extraordinarily weak at this game, and comparing whole duplicate sets stretches Elo gaps.
+
 ### M3. Search Bot (PIMC)
 
-**Goal:** strong card play from search, with no training. Target about 1500 Elo.
+**Goal:** strong card play from search, with no training. Target: clearly above HeuristicBot on the Elo ladder.
 
 **Build:**
 - Track voids (a player who did not follow suit has none of that suit) and played cards.
@@ -454,6 +458,10 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Done when:** it beats HeuristicBot in the arena (RSA confidence interval above 0, at least 200 sets), decisions stay within budget, and Elo is reported.
 
+**Result (done 2026-10-24):** with three HeuristicBots over 200 sets, PIMC's RSA is +172 per Bola (95% CI +167 to +177) and it won all 200 sets. Card decisions: mean 4.5 ms, slowest 83 ms, none over 250 ms. The ladder rates PIMC at about 4,830, about 990 above HeuristicBot; even PIMC with a single deal is about 430 above it, and each doubling of deals adds less.
+
+**Experiment: search bidding (opt-in, `pimc:bid_search=true`).** Dash Calls, bids and estimates chosen the same way as cards, by simulating each candidate's round on sampled deals. Its simulated opponents play HeuristicBot's naive card play and never sabotage a Dash caller, so it Dash Calls in about 40% of rounds; against PIMC players those calls fail 72% of the time and it loses every set to plain PIMC. With Dash Calls left to HeuristicBot it only draws level. It stays off by default: search is only as good as its model of the other players, and M4's learned bidding trains on real outcomes instead.
+
 ### M4. Self-Play RL
 
 **Goal:** learned bidding and card play that beats the search bot.
@@ -463,7 +471,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
   - own hand (52)
   - played cards and trick history (52+)
   - opponent voids (12)
-  - round context: fixed-trump round, super call made, trump one-hot (5), Over/Under delta, carry and round multiplier
+  - round context: fixed-trump round, super call made (a FIX-4 super call reopened bidding, as `Observation.super_call` means), contract of 8 or more (scored as a super call by SCR-6), trump one-hot (5), Over/Under delta, carry and round multiplier
   - per player: estimate, tricks so far, `points_if_win`, `points_if_lose`, still alive or already broken
   - scoreboard: scores, gap to 1st place, open rounds and fixed trumps left
 - **BiddingNet:** predicts the expected round score of each legal Dash Call, bid, With, Pass, estimate and super call action.
@@ -471,14 +479,16 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
   - Critic: predicts the expected score from the current state, separating deal luck from skill.
   - Actor / Q-head: predicts the advantage of each legal card.
 - **Networks:** 4-layer MLPs, about 500K parameters each, in PyTorch (MPS on the dev Mac).
-- **Reward:** own score change minus a leader-weighted change in opponents' scores, blended with match-win probability in the fixed-trump rounds.
+- **Reward:** own score change minus a standings-weighted change in opponents' scores: each opponent ahead of you in the game counts 1.0 and each opponent behind you 0.5. The weights are config values, to be tuned later with arena evidence. Blended with match-win probability in the fixed-trump rounds. (Changed 2026-10-25, Yosif: every opponent above you counts, not only the leader.)
+- **Training opponents** (added 2026-10-25): about 70% of games against itself and recent checkpoints, 15% against HeuristicBot and its noisy versions, 15% against a lighter PIMC (4-8 deals), so it does not only learn to beat its own habits.
+- **Warm start** (added 2026-10-25): CardPlayNet first imitates PIMC's card choices from recorded PIMC games, then improves by self-play. BiddingNet learns from scratch by self-play, since HeuristicBot's bidding is weak and bidding is where new strategy is most wanted.
 - **Stakes as input:** `points_if_win` and `points_if_lose` are computed from `RulesConfig`, so a rule change does not need a retrain from scratch.
 
-**Done when:** it beats HeuristicBot (RSA confidence interval above 0, at least 200 sets) and its result against the M3 bot is reported. Training is reproducible from a config file and seed, checkpoints are saved with their arena Elo, and training fits in 18 GB of RAM.
+**Done when:** it beats HeuristicBot: in a lineup with three HeuristicBots over at least 200 sets, its first-place share's 95% confidence interval is above the fair 25% and its RSA confidence interval is above 0. Its result against PIMC is reported the same way, and it is rated on the Elo ladder. Training is reproducible from a config file and seed, checkpoints are saved with their ladder Elo, and training fits in 18 GB of RAM.
 
 ### M5. Hybrid: RL + Search
 
-**Goal:** superhuman play (2000+ Elo), inspired by AlphaZero and NooK (bridge AI).
+**Goal:** superhuman play, clearly above the M3 and M4 bots on the Elo ladder, inspired by AlphaZero and NooK (bridge AI).
 
 **Build:** the M3 search, with BiddingNet weighting the sampled deals and CardPlayNet evaluating positions in place of HeuristicBot rollouts.
 
@@ -490,7 +500,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Build:**
 - A FastAPI backend wrapping `Bola` and the bots, and a Next.js frontend. Local only, served through portless.
-- Play a full Bola against any saved checkpoint (for example 1000, 1500 or 2000+ Elo).
+- Play a full Bola against any saved checkpoint or ladder bot, chosen by its Elo (RandomBot at 400 up to the strongest bot).
 - **Coach mode** (toggle): the expected score of your hand after the deal, and the change in win probability after every trick.
 - **Post-round review:** step through each trick and label each of your card plays by expected points lost against the best move:
   - **Best:** the best move.
@@ -535,8 +545,8 @@ Why the milestones are shaped the way they are.
   tests/                   mirrors src/estimation/
   ```
 - **Quality gates:** `ruff` (lint and format), `pyright` (strict for `src/estimation/engine`), and `pytest` with `hypothesis`. All run in pre-commit, and all must pass before a milestone is done.
-- **Commands:** `uv run pytest`, `uv run ruff check .`, `uv run ruff format .`, `uv run pyright`, `uv run python -m estimation.engine.bench`.
+- **Commands:** `uv run pytest`, `uv run ruff check .`, `uv run ruff format .`, `uv run pyright`, `uv run python -m estimation.engine.bench`, `uv run python -m estimation.arena --lineup ... --sets ... --seed ...`, `uv run python -m estimation.arena.ladder --sets 200 --workers 5`.
 - **Git:** the repo starts on `main` with this spec and the agent setup. Each milestone gets its own branch from `main` (for example `m1-rules-engine`) and conventional commits (for example `feat(engine): add auction`). Never commit directly to `main`; Yosif merges.
 - **Agent setup:** `CLAUDE.md` tells every agent session how to work with this spec, and `.claude/agents/spec-checker.md` audits the code against it before a milestone is done. Keep both in step with this spec.
 - **Reproducibility:** every random choice takes an explicit seed, so the same seed and actions always give the same game.
-- **Machine:** the dev Mac has 18 GB of RAM. Run tests with at most 2 workers, and only one heavy job (training, a large arena run) at a time.
+- **Machine:** the dev Mac (M3 Pro: 5 performance and 6 efficiency cores) has 18 GB of RAM. Run tests with at most 2 workers, and only one heavy job (training, a large arena run) at a time. Arena and ladder runs use 5 workers (about 4x faster, about 50 MB each); 10 workers is about 7x for batch runs, but decision timings then run on slower cores.

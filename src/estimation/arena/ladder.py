@@ -54,7 +54,7 @@ DEFAULT_LADDER = (
     "pimc:samples=16",
     "pimc",
 )
-"""Calibrated by 20- and 50-set pilots so that each bot wins roughly 65-95% of its sets against
+"""Calibrated by 20- and 50-set pilots so that each bot wins roughly 60-95% of its sets against
 the one below it."""
 
 
