@@ -1,0 +1,41 @@
+# M4 self-play training run (SPEC §6 M4). Reproduce it from scratch with:
+#   uv run python -m estimation.rl.train run --config configs/m4.toml --out runs/m4
+# The same config, seed and code give the same checkpoints on any number of workers.
+seed = 0
+workers = 5
+
+[reward]
+# An opponent ahead of you counts 1.0 and one behind you 0.5, as a weighted mean of the
+# opponents' score changes (normalize_weights): see estimation.rl.standings for why.
+ahead_weight = 1.0
+behind_weight = 0.5
+tie_weight = 1.0
+normalize_weights = true
+win_blend = 0.5     # fixed-trump rounds: half points, half change in match-win probability
+win_points = 100.0  # one whole match win is worth 100 points in that blend
+
+[record]
+games = 1000        # whole Bolas of four PIMC bots, every card decision recorded
+pimc_samples = 30   # the M3 bot
+
+[imitation]
+epochs = 24
+
+[opponents]
+self_play = 0.70    # itself and recent snapshots
+heuristic = 0.15    # HeuristicBot and noisy versions
+pimc = 0.15         # PIMC with 4-8 deals
+pimc_samples = [4, 5, 6, 7, 8]
+
+[selfplay]
+iterations = 200
+games = 240
+eval_games = 32
+card_frozen_iterations = 10
+bid_lr = 3e-4
+card_lr = 1e-4
+checkpoint_every = 25
+
+[nets]
+hidden = 384
+device = "auto"     # MPS on the dev Mac
