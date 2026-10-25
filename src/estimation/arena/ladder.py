@@ -84,7 +84,8 @@ def ladder_pairs(
 
 
 def _slug(bot: str) -> str:
-    return bot.replace(":", "_").replace("=", "-")
+    """A file name for ``bot``: options and checkpoint paths flattened into one name."""
+    return bot.replace(":", "_").replace("=", "-").replace("/", "_").replace("\\", "_")
 
 
 def _pair_file(folder: Path, lower: str, upper: str) -> Path:

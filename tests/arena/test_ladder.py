@@ -24,6 +24,16 @@ def test_the_default_ladder_climbs_from_random_to_full_pimc():
     assert len(set(DEFAULT_LADDER)) == len(DEFAULT_LADDER)
 
 
+def test_a_checkpoint_path_makes_a_flat_pair_file_name():
+    pair_file = ladder._pair_file
+    path = pair_file(Path("out"), "heuristic", "rl:checkpoint=runs/m4/final.pt")
+    assert path == Path("out/pairs/heuristic--rl_checkpoint-runs_m4_final.pt.json")
+    # Names without paths are unchanged, so saved pair reports are still found.
+    assert pair_file(Path("out"), "pimc:samples=2", "pimc") == Path(
+        "out/pairs/pimc_samples-2--pimc.json"
+    )
+
+
 def test_pairs_are_the_neighbours_then_any_extras():
     pairs = ladder_pairs(["a", "b", "c"], [("a", "c")])
     assert pairs == [("a", "b"), ("b", "c"), ("a", "c")]
