@@ -41,6 +41,7 @@ from .config import (
 )
 from .imitation import ImitationData, train_imitation, training_rows
 from .learner import Learner, UpdateReport
+from .memory import gpu_mb, peak_rss_mb
 from .networks import BiddingNet, CardPlayNet, load_policy, save_checkpoint
 from .record import CardRecords, concat_records, load_records, record_game, save_records
 from .selfplay import (
@@ -337,6 +338,11 @@ def selfplay_stage(
             "card_value_loss": update.card_value_loss,
             "card_q_loss": update.card_q_loss,
             "anchor_loss": update.anchor_loss,
+            "memory_mb": {
+                "trainer_peak": peak_rss_mb(),
+                "trainer_gpu": gpu_mb(device),
+                "worker_peak": max(r.peak_rss_mb for r in results),
+            },
             "results": summary,
         }
         with log_path.open("a") as log:

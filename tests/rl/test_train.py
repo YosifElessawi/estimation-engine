@@ -60,6 +60,11 @@ def test_a_run_saves_the_warm_start_every_checkpoint_and_the_final_one(first_run
     log = [json.loads(line) for line in (first_run / "selfplay/log.jsonl").read_text().splitlines()]
     assert [entry["iteration"] for entry in log] == [1, 2, 3]
     assert [entry["train_card"] for entry in log] == [False, True, True]
+    for entry in log:
+        memory = entry["memory_mb"]
+        assert 50 < memory["trainer_peak"] < 18_000
+        assert 50 < memory["worker_peak"] < 18_000
+        assert memory["trainer_gpu"] == 0.0  # this test trains on the CPU
     assert same_weights(first_run / "checkpoints/final.pt", first_run / "checkpoints/iter-0003.pt")
     bot = make_bot(f"rl:checkpoint={first_run / 'checkpoints/final.pt'}", 0)
     assert bot.act is not None

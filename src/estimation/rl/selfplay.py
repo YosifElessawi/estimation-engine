@@ -32,6 +32,7 @@ from estimation.engine.actions import PLAY_BASE
 from .config import TrainConfig
 from .encoder import NUM_FEATURES, encode
 from .games import RewardedBola
+from .memory import peak_rss_mb
 from .networks import BiddingNet, CardPlayNet
 from .standings import RewardConfig, first_place_shares
 
@@ -135,6 +136,7 @@ class ChunkResult:
     bid: Samples
     card: Samples
     games: list[GameStats] = field(default_factory=lambda: list[GameStats]())
+    peak_rss_mb: float = 0.0  # the worker process's peak memory so far
 
 
 @dataclass(slots=True)
@@ -244,6 +246,7 @@ def play_chunk(task: ChunkTask) -> ChunkResult:
         bid=_samples([game.out_bid for game in games]),
         card=_samples([game.out_card for game in games]),
         games=[_stats(game) for game in games],
+        peak_rss_mb=peak_rss_mb(),
     )
 
 
