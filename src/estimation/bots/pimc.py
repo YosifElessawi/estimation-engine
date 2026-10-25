@@ -35,7 +35,7 @@ from .heuristic import DEFAULT_HEURISTIC, HeuristicBot, HeuristicConfig
 from .knowledge import Knowledge, read_knowledge
 from .rollout import finish_round
 from .sampling import deal_unseen
-from .scoring import RoundScorer, estimates_of
+from .scoring import RoundScorer, estimates_of, standings_weights
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +50,7 @@ class PIMCConfig:
     rules: RulesConfig = DEFAULT_CONFIG  # the rules rollouts are scored by
     bid_search: bool = False  # choose Dash Calls, bids and estimates by search too
     bid_samples: int = 30  # deals simulated per bidding decision when bid_search is on
+    leader_weight: bool = False  # count players ahead in the game double (standings_weights)
 
 
 DEFAULT_PIMC = PIMCConfig()
@@ -192,7 +193,8 @@ class PIMCBot:
         me = obs.seat
         trick = [card for _, card in obs.trick]
         won = list(obs.tricks_won)
-        scorer = RoundScorer(obs, self.config.rules)
+        weights = standings_weights(obs.scores, me) if self.config.leader_weight else None
+        scorer = RoundScorer(obs, self.config.rules, weights)
         totals = [0.0] * len(cards)
         for sample in deals:
             for k, card in enumerate(cards):

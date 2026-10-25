@@ -1,10 +1,12 @@
 """PIMCBot (SPEC §6 M3): sampled deals, HeuristicBot rollouts, best mean score advantage."""
 
+import dataclasses
 import random
 import time
 
 import pytest
 
+from estimation.bots import make_bot
 from estimation.bots.hand_eval import expected_tricks
 from estimation.bots.heuristic import HeuristicBot
 from estimation.bots.knowledge import read_knowledge
@@ -346,3 +348,27 @@ def test_card_decisions_stay_within_the_250_ms_budget():
                 action = heuristic.act(obs, legal)
             rnd.step(action)
     assert slowest < 0.25
+
+
+def test_leader_weight_is_off_by_default():
+    assert not PIMCConfig().leader_weight
+
+
+def test_leader_weight_counts_the_player_ahead_more():
+    obs = endgame(estimates=(4, 2, 1, 0), won=(3, 4, 3, 1))
+    deal = [parse_hand("AS 2H"), parse_hand("3H 4H"), parse_hand("5H 6H"), parse_hand("7H 8H")]
+    cards = [parse_card("AS"), parse_card("2H")]
+    weighted = PIMCConfig(leader_weight=True)
+    # Level scores weight everyone equally, so the search is unchanged.
+    assert PIMCBot(0, weighted).evaluate(obs, cards, [deal]) == pytest.approx(
+        PIMCBot(0).evaluate(obs, cards, [deal])
+    )
+    behind = dataclasses.replace(obs, scores=(0, 100, 0, 0))
+    expected = PIMCBot(0).evaluate(behind, cards, [deal])
+    assert PIMCBot(0, weighted).evaluate(behind, cards, [deal]) != pytest.approx(expected)
+
+
+def test_pimc_leader_weight_can_be_set_by_name():
+    bot = make_bot("pimc:leader_weight=true", 0)
+    assert isinstance(bot, PIMCBot)
+    assert bot.config.leader_weight

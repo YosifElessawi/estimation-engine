@@ -14,15 +14,37 @@ def estimates_of(obs: Observation) -> tuple[int, int, int, int]:
     return e[0], e[1], e[2], e[3]
 
 
+AHEAD = 1.0  # weight of a player ahead of me in the game [Claude], design 5.9
+BEHIND = 0.5  # weight of a player level with or behind me
+
+
+def standings_weights(
+    scores: tuple[int, int, int, int], me: int
+) -> tuple[float, float, float, float]:
+    """How much each other player's round score counts against mine: players ahead of me in the
+    game count double, normalised so the three weights sum to 1. My own weight is 0. Level
+    scores give the plain mean."""
+    raw = [0.0 if s == me else AHEAD if scores[s] > scores[me] else BEHIND for s in range(4)]
+    total = sum(raw)
+    return (raw[0] / total, raw[1] / total, raw[2] / total, raw[3] / total)
+
+
 class RoundScorer:
     """Scores final trick counts of the round in ``obs`` by SPEC §3, from ``obs.seat``'s side:
-    its own round score minus the mean round score of the other three."""
+    its own round score minus the mean round score of the other three, or with ``weights``
+    (see ``standings_weights``) minus their weighted sum."""
 
-    __slots__ = ("_cache", "_me", "_outcome", "_rules")
+    __slots__ = ("_cache", "_me", "_outcome", "_rules", "_weights")
 
-    def __init__(self, obs: Observation, rules: RulesConfig = DEFAULT_CONFIG) -> None:
+    def __init__(
+        self,
+        obs: Observation,
+        rules: RulesConfig = DEFAULT_CONFIG,
+        weights: tuple[float, float, float, float] | None = None,
+    ) -> None:
         self._me = obs.seat
         self._rules = rules
+        self._weights = weights
         self._cache: dict[tuple[int, ...], float] = {}
         self._outcome = RoundOutcome(
             estimates=estimates_of(obs),
@@ -46,6 +68,10 @@ class RoundScorer:
         outcome = dataclasses.replace(self._outcome, tricks=(key[0], key[1], key[2], key[3]))
         scores = score_round(outcome, self._rules).scores
         mine = scores[self._me]
-        value = mine - (scores[0] + scores[1] + scores[2] + scores[3] - mine) / 3
+        weights = self._weights
+        if weights is None:
+            value = mine - (scores[0] + scores[1] + scores[2] + scores[3] - mine) / 3
+        else:
+            value = mine - sum(w * s for w, s in zip(weights, scores, strict=True))
         self._cache[key] = value
         return value
