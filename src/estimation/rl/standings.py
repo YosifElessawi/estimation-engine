@@ -6,6 +6,13 @@ opponents' scores: an opponent ahead of the seat in the game before the round co
 blended with the change in the seat's match-win probability, so near the end the bot also plays
 to finish first, not only for points.
 
+With ``normalize_weights`` (the default) the weights are divided by their sum, so the opponents'
+term is a weighted mean of their changes: an opponent ahead still counts twice as much as one
+behind. Without it the weights add up to 1.5-3.0, so a round where every seat scores the same
++15 is worth -7.5 to -30 to each of them, and a skipped round (everyone 0) beats an average
+played round. In a pilot the self-play bidder learned exactly that: by iteration 8 it passed so
+often that 56% of self-play rounds were skipped.
+
 The match-win probability is a simple model: every seat's score over the rounds left moves by an
 independent normal step with spread ``round_sd`` per round, and a seat's chance of finishing first
 is the chance its final score is the highest. Once the game is over it is the seat's actual share
@@ -36,6 +43,7 @@ class RewardConfig:
     ahead_weight: float = 1.0  # an opponent ahead of you in the game
     behind_weight: float = 0.5  # an opponent behind you
     tie_weight: float = 1.0  # an opponent level with you still blocks first place
+    normalize_weights: bool = True  # divide the weights by their sum: a weighted mean
     win_blend: float = 0.5  # share of the fixed-trump round reward from match-win probability
     win_points: float = 100.0  # points one whole match win is worth in that blend
     round_sd: float = ROUND_SD  # the match-win model's spread per round
@@ -45,6 +53,13 @@ class RewardConfig:
             raise ValueError("win_blend must be between 0 and 1")
         if self.round_sd <= 0:
             raise ValueError("round_sd must be positive")
+        if min(self.ahead_weight, self.behind_weight, self.tie_weight) < 0:
+            raise ValueError("standings weights must not be negative")
+        if (
+            self.normalize_weights
+            and min(self.ahead_weight, self.behind_weight, self.tie_weight) == 0
+        ):
+            raise ValueError("normalized standings weights must be positive")
 
 
 DEFAULT_REWARD = RewardConfig()
@@ -69,12 +84,23 @@ def standings_weights(
     return weights[0], weights[1], weights[2], weights[3]
 
 
+def opponent_weights(
+    scores: Scores, seat: int, config: RewardConfig = DEFAULT_REWARD
+) -> tuple[float, float, float, float]:
+    """The standings weights, divided by their sum when ``normalize_weights`` is on."""
+    weights = standings_weights(scores, seat, config)
+    if not config.normalize_weights:
+        return weights
+    total = sum(weights)
+    return weights[0] / total, weights[1] / total, weights[2] / total, weights[3] / total
+
+
 def points_reward(
     before: Scores, change: Scores, seat: int, config: RewardConfig = DEFAULT_REWARD
 ) -> float:
     """``seat``'s score change minus the standings-weighted change of the other three, with the
     standings taken from the game scores ``before`` the round."""
-    weights = standings_weights(before, seat, config)
+    weights = opponent_weights(before, seat, config)
     return change[seat] - sum(weights[other] * change[other] for other in range(4))
 
 

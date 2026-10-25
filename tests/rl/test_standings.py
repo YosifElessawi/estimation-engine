@@ -1,10 +1,13 @@
 """The standings-weighted reward and the match-win model (SPEC §6 M4)."""
 
+from typing import Any
+
 import pytest
 
 from estimation.rl.standings import (
     RewardConfig,
     first_place_shares,
+    opponent_weights,
     points_reward,
     round_reward,
     rounds_remaining,
@@ -22,14 +25,36 @@ def test_opponents_ahead_count_fully_and_those_behind_count_half():
 def test_the_weights_are_config_values():
     config = RewardConfig(ahead_weight=0.8, behind_weight=0.2, tie_weight=0.6)
     assert standings_weights((10, 20, 5, 10), 0, config) == (0.0, 0.8, 0.2, 0.6)
+    assert opponent_weights((10, 20, 5, 10), 0, config) == pytest.approx((0.0, 0.5, 0.125, 0.375))
 
 
 def test_points_reward_is_own_change_minus_weighted_opponent_changes():
+    literal = RewardConfig(normalize_weights=False)
     # Seat 0 trails seat 1, leads seat 2 and is level with seat 3 before the round.
-    reward = points_reward((10, 20, 5, 10), (15, -11, 13, 12), 0)
+    reward = points_reward((10, 20, 5, 10), (15, -11, 13, 12), 0, literal)
     assert reward == 15 - (1.0 * -11 + 0.5 * 13 + 1.0 * 12)
     # In round 1 everyone is level, so every opponent counts fully.
-    assert points_reward((0, 0, 0, 0), (25, 13, -11, 12), 2) == -11 - (25 + 13 + 12)
+    assert points_reward((0, 0, 0, 0), (25, 13, -11, 12), 2, literal) == -11 - (25 + 13 + 12)
+
+
+def test_by_default_the_opponents_term_is_a_weighted_mean():
+    reward = points_reward((10, 20, 5, 10), (15, -11, 13, 12), 0)
+    assert reward == pytest.approx(15 - (1.0 * -11 + 0.5 * 13 + 1.0 * 12) / 2.5)
+    assert opponent_weights((10, 20, 5, 10), 0) == pytest.approx((0.0, 0.4, 0.2, 0.4))
+    # An opponent ahead still counts twice as much as one behind.
+    assert points_reward((0, 0, 0, 0), (25, 13, -11, 12), 2) == pytest.approx(-11 - 50 / 3)
+
+
+def test_a_round_where_everyone_scores_the_same_is_worth_as_much_as_a_skipped_one():
+    for before in [(0, 0, 0, 0), (50, 20, 5, -10), (5, 90, 90, 0)]:
+        for seat in range(4):
+            assert points_reward(before, (15, 15, 15, 15), seat) == pytest.approx(0.0)
+            assert points_reward(before, (0, 0, 0, 0), seat) == 0.0
+    # Without normalizing, the same round costs every seat: passing beats playing.
+    assert (
+        points_reward((0, 0, 0, 0), (15, 15, 15, 15), 0, RewardConfig(normalize_weights=False))
+        == -30
+    )
 
 
 def test_first_place_is_shared_on_a_tie():
@@ -103,6 +128,6 @@ def test_without_the_blend_fixed_trump_rounds_score_like_open_ones():
         ({"round_sd": 0.0}, "round_sd"),
     ],
 )
-def test_bad_reward_configs_are_rejected(bad: dict[str, float], message: str):
+def test_bad_reward_configs_are_rejected(bad: dict[str, Any], message: str):
     with pytest.raises(ValueError, match=message):
         RewardConfig(**bad)
