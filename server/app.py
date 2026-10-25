@@ -9,16 +9,21 @@
   result, deal or game end.
 - ``POST /api/games/{id}/moves``: the human's move in a played game.
 - ``POST /api/games/{id}/review``: watch a finished played game again with every hand shown.
+- ``GET /api/history``: finished games saved on disk, newest first (seats, seed, scores).
+- ``POST /api/history/{id}/review``: review a saved game with every hand shown.
 
 In a played game nothing the browser receives holds another seat's cards: tables come from the
 human seat's Observation, the Why panel is left out, and the seed (which fixes the deal) is
-withheld until the game ends unless the player chose it.
+withheld until the game ends unless the player chose it. A game is saved only once it is over.
 """
 
+import logging
 import secrets
 import threading
 import uuid
 from collections import OrderedDict
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
 from fastapi import FastAPI, HTTPException, Query
@@ -28,9 +33,13 @@ from estimation.engine import IllegalActionError, RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
 
 from .catalog import BotEntry, Catalog
+from .history import HISTORY_FILE, GameHistory, SavedGame, SavedGameView, SavedSeat, list_view, now
 from .session import HUMAN, Frame, GameError, GameSession, Mode, SeekTarget, WaitingForHuman
 
 MAX_GAMES = 32
+MAX_HISTORY = 500
+
+logger = logging.getLogger(__name__)
 MAX_FRAMES = 500
 MAX_SEED = 2**53 - 1  # the largest integer a browser's JSON numbers hold exactly
 
@@ -101,23 +110,41 @@ def _bot_view(entry: BotEntry) -> BotView:
     )
 
 
-class GameStore:
-    """The games in memory, oldest dropped first beyond ``limit``."""
+@dataclass(slots=True)
+class Entry:
+    """A game in memory: whether its seed is shown before the end, whether the player chose
+    it, and whether the finished game is saved yet."""
 
-    def __init__(self, catalog: Catalog, rules: RulesConfig, limit: int = MAX_GAMES) -> None:
+    session: GameSession
+    seed_shown: bool
+    seed_chosen: bool
+    saved: bool = False
+
+
+class GameStore:
+    """The games in memory, oldest dropped first beyond ``limit``, and the saved history."""
+
+    def __init__(
+        self,
+        catalog: Catalog,
+        rules: RulesConfig,
+        history: GameHistory,
+        limit: int = MAX_GAMES,
+    ) -> None:
         self.catalog = catalog
         self.rules = rules
+        self.history = history
         self.limit = limit
-        self._games: OrderedDict[str, tuple[GameSession, bool]] = OrderedDict()
+        self._games: OrderedDict[str, Entry] = OrderedDict()
         self._lock = threading.Lock()
 
-    def add(self, session: GameSession, seed_shown: bool) -> None:
+    def add(self, entry: Entry) -> None:
         with self._lock:
-            self._games[session.id] = (session, seed_shown)
+            self._games[entry.session.id] = entry
             while len(self._games) > self.limit:
                 self._games.popitem(last=False)
 
-    def get(self, game_id: str) -> tuple[GameSession, bool]:
+    def get(self, game_id: str) -> Entry:
         with self._lock:
             found = self._games.get(game_id)
             if found is None:
@@ -125,13 +152,20 @@ class GameStore:
             self._games.move_to_end(game_id)
             return found
 
-    def view(self, session: GameSession, seed_shown: bool) -> GameView:
+    def _seat_label(self, spec: str) -> str:
+        return "You" if spec == HUMAN else self.catalog.entry(spec).label
+
+    def _seat_elo(self, spec: str) -> float | None:
+        return None if spec == HUMAN else _bot_view(self.catalog.entry(spec))["elo"]
+
+    def view(self, entry: Entry) -> GameView:
+        session = entry.session
         seats = [
             SeatView(
                 seat=seat,
                 spec=spec,
-                label="You" if spec == HUMAN else self.catalog.entry(spec).label,
-                elo=None if spec == HUMAN else _bot_view(self.catalog.entry(spec))["elo"],
+                label=self._seat_label(spec),
+                elo=self._seat_elo(spec),
                 human=spec == HUMAN,
                 explains=session.spectator and seat in session.explained,
             )
@@ -140,7 +174,7 @@ class GameStore:
         return GameView(
             id=session.id,
             mode=session.mode,
-            seed=session.seed if seed_shown or session.finished else None,
+            seed=session.seed if entry.seed_shown or session.finished else None,
             human_seat=session.human,
             seats=seats,
             known=len(session.frames),
@@ -149,6 +183,36 @@ class GameStore:
             and not session.finished
             and session.bola.current_player == session.human,
         )
+
+    def record(self, entry: Entry) -> None:
+        """Save a played or watched game once it is over (reviews are not saved again). A
+        failed write is logged and tried again on the next request; the game goes on."""
+        session = entry.session
+        if entry.saved or not session.finished or session.mode == "review":
+            return
+        bola = session.bola
+        game = SavedGame(
+            id=session.id,
+            finished_at=now(),
+            mode=session.mode,
+            seed=session.seed,
+            seed_chosen=entry.seed_chosen,
+            human_seat=session.human,
+            seats=[
+                SavedSeat(spec=spec, label=self._seat_label(spec), elo=self._seat_elo(spec))
+                for spec in session.seats
+            ],
+            scores=list(bola.scores),
+            winners=list(bola.winners()),
+            rounds=len(bola.history),
+            actions=list(session.actions),
+        )
+        try:
+            self.history.save(game)
+        except OSError:
+            logger.exception("could not save game %s to %s", session.id, self.history.path)
+            return
+        entry.saved = True
 
     def create(
         self, seats: list[str], seed: int | None, mode: Mode, script: list[int] | None = None
@@ -169,14 +233,22 @@ class GameStore:
             )
         except (ValueError, OSError, RuntimeError) as error:
             raise HTTPException(422, str(error)) from error
-        self.add(session, chosen or mode != "play")
+        entry = Entry(session, seed_shown=chosen or mode != "play", seed_chosen=chosen)
+        self.add(entry)
         with session.lock:
-            return self.view(session, chosen or mode != "play")
+            return self.view(entry)
 
 
-def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONFIG) -> FastAPI:
-    """The API, serving ``catalog`` (by default the one under ``$ESTIMATION_ROOT``)."""
-    store = GameStore(catalog if catalog is not None else Catalog.from_env(), rules)
+def create_app(
+    catalog: Catalog | None = None,
+    rules: RulesConfig = DEFAULT_CONFIG,
+    history_file: Path | None = None,
+) -> FastAPI:
+    """The API, serving ``catalog`` (by default the one under ``$ESTIMATION_ROOT``) and saving
+    finished games to ``history_file`` (by default ``runs/web/games.jsonl`` under its root)."""
+    catalog = catalog if catalog is not None else Catalog.from_env()
+    history = GameHistory(history_file if history_file is not None else catalog.root / HISTORY_FILE)
+    store = GameStore(catalog, rules, history)
     app = FastAPI(title="Estimation web table")
 
     @app.get("/api/bots")
@@ -192,9 +264,9 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
 
     @app.get("/api/games/{game_id}")
     def get_game(game_id: str) -> GameView:
-        session, seed_shown = store.get(game_id)
-        with session.lock:
-            return store.view(session, seed_shown)
+        entry = store.get(game_id)
+        with entry.session.lock:
+            return store.view(entry)
 
     @app.get("/api/games/{game_id}/frames")
     def get_frames(
@@ -202,12 +274,14 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
         start: Annotated[int, Query(ge=0)] = 0,
         count: Annotated[int, Query(ge=1, le=MAX_FRAMES)] = 1,
     ) -> FramesView:
-        session, _ = store.get(game_id)
+        entry = store.get(game_id)
+        session = entry.session
         with session.lock:
             try:
                 session.ensure(start + count - 1)
             except (GameError, WaitingForHuman) as error:
                 raise HTTPException(409, str(error) or "waiting for a move") from error
+            store.record(entry)
             return FramesView(
                 frames=session.frames[start : start + count],
                 known=len(session.frames),
@@ -221,16 +295,20 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
         direction: Literal["next", "prev"],
         target: SeekTarget,
     ) -> SeekView:
-        session, _ = store.get(game_id)
+        entry = store.get(game_id)
+        session = entry.session
         with session.lock:
             try:
-                return SeekView(index=session.seek(start, direction, target))
+                index = session.seek(start, direction, target)
             except (GameError, WaitingForHuman) as error:
                 raise HTTPException(409, str(error) or "waiting for a move") from error
+            store.record(entry)
+            return SeekView(index=index)
 
     @app.post("/api/games/{game_id}/moves")
     def move(game_id: str, body: Move) -> FramesView:
-        session, _ = store.get(game_id)
+        entry = store.get(game_id)
+        session = entry.session
         with session.lock:
             first_new = len(session.frames)
             try:
@@ -239,6 +317,7 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
                 raise HTTPException(422, str(error)) from error
             except GameError as error:
                 raise HTTPException(409, str(error)) from error
+            store.record(entry)
             return FramesView(
                 frames=session.frames[first_new:],
                 known=len(session.frames),
@@ -247,7 +326,7 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
 
     @app.post("/api/games/{game_id}/review")
     def review(game_id: str) -> GameView:
-        session, _ = store.get(game_id)
+        session = store.get(game_id).session
         with session.lock:
             if not session.finished:
                 raise HTTPException(409, "a game can be reviewed once it is over")
@@ -255,5 +334,19 @@ def create_app(catalog: Catalog | None = None, rules: RulesConfig = DEFAULT_CONF
             actions = list(session.actions)
             seed = session.seed
         return store.create(seats, seed, "review", actions)
+
+    @app.get("/api/history")
+    def list_history(
+        limit: Annotated[int, Query(ge=1, le=MAX_HISTORY)] = 100,
+    ) -> list[SavedGameView]:
+        return [list_view(game) for game in store.history.games()[:limit]]
+
+    @app.post("/api/history/{game_id}/review")
+    def review_saved(game_id: str) -> GameView:
+        game = store.history.get(game_id)
+        if game is None:
+            raise HTTPException(404, f"no saved game {game_id!r}")
+        seats = [seat["spec"] for seat in game["seats"]]
+        return store.create(seats, game["seed"], "review", game["actions"])
 
     return app

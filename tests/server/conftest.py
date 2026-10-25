@@ -45,5 +45,10 @@ def catalog(root: Path) -> Catalog:
 
 
 @pytest.fixture
-def client(catalog: Catalog) -> TestClient:
-    return TestClient(create_app(catalog))
+def history_file(tmp_path: Path) -> Path:
+    return tmp_path / "web" / "games.jsonl"
+
+
+@pytest.fixture
+def client(catalog: Catalog, history_file: Path) -> TestClient:
+    return TestClient(create_app(catalog, history_file=history_file))
