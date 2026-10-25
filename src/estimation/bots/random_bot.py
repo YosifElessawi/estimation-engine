@@ -1,4 +1,4 @@
-"""RandomBot (SPEC §6 M2): picks uniformly from the legal actions. It anchors Elo at 800."""
+"""RandomBot (SPEC §6 M2): picks uniformly from the legal actions. It anchors Elo at 400."""
 
 import random
 

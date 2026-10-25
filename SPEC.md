@@ -431,12 +431,12 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Build:**
 - **Bot interface:** `act(obs: Observation, legal: list[int]) -> int`. A bot sees only its own `Observation`.
-- **RandomBot:** picks uniformly from the legal actions. It anchors the Elo scale at 800.
+- **RandomBot:** picks uniformly from the legal actions. It anchors the Elo scale at 400.
 - **HeuristicBot:** Dash Calls with a hopeless hand. Bids and estimates from high cards (A, K, Q) and trump length, and super-calls only with a very strong hand. In play, tries to win tricks until it reaches its estimate, then ducks.
 - **Duplicate runner:** a lineup is 4 bots, one per seat, repeats allowed. A duplicate set plays one seed's deals 4 times, rotating the lineup so that in rotation `k` seat `i` gets bot `(i + k) % 4`. Every bot plays every hand.
 - **Metrics:**
   - Relative Score Advantage (RSA): a bot's Bola score minus the mean of the other three seats, averaged over all its Bolas, with a 95% confidence interval over duplicate sets.
-  - Elo: a Bradley-Terry fit over pairwise results, with RandomBot fixed at 800. Within each duplicate set, every pair of different bots is compared by total score across the set.
+  - Elo: a Bradley-Terry fit over pairwise results, with RandomBot fixed at 400. Within each duplicate set, every pair of different bots is compared by total score across the set.
 - **CLI:** `uv run python -m estimation.arena --lineup heuristic,random,heuristic,random --sets 1000 --seed 0`.
 
 **Done when:** HeuristicBot vs RandomBot over 1,000 sets has an RSA confidence interval above 0. The same seed gives the same report. Elo is reported (expect about 1200).

@@ -22,7 +22,7 @@ def test_prints_rsa_with_a_confidence_interval_and_elo(capsys: pytest.CaptureFix
     assert "95% CI" in out
     assert "Elo" in out
     assert "heuristic" in out
-    assert "800" in out
+    assert "400 (anchor)" in out
 
 
 def test_the_same_seed_gives_the_same_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
@@ -68,7 +68,7 @@ def test_elo_can_include_earlier_runs(tmp_path: Path, capsys: pytest.CaptureFixt
         str(later),
     )
     elo = json.loads(later.read_text())["report"]["elo"]
-    assert elo["ratings"]["random"] == 800
+    assert elo["ratings"]["random"] == 400
     assert set(elo["ratings"]) == {"random", "heuristic", "heuristic:risk_aversion=0"}
     assert elo["sources"] == [str(earlier)]
 
@@ -89,7 +89,7 @@ def test_the_elo_prior_is_configurable(tmp_path: Path, capsys: pytest.CaptureFix
     run_cli(capsys, "--lineup", LINEUP, "--sets", "2", "--elo-prior", "3", "--out", str(out))
     elo = json.loads(out.read_text())["report"]["elo"]
     assert elo["prior_draws"] == 3
-    assert elo["ratings"]["heuristic"] == pytest.approx(800 + 400 * math.log10(3.5 / 1.5))
+    assert elo["ratings"]["heuristic"] == pytest.approx(400 + 400 * math.log10(3.5 / 1.5))
 
 
 def test_a_sweep_without_a_prior_reports_elo_as_not_fitted(capsys: pytest.CaptureFixture[str]):

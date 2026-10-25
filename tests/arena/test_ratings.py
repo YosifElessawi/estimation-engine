@@ -1,5 +1,5 @@
 """Arena metrics (SPEC §6 M2): Relative Score Advantage with a 95% confidence interval over
-duplicate sets, and Bradley-Terry Elo with RandomBot fixed at 800."""
+duplicate sets, and Bradley-Terry Elo with RandomBot fixed at 400."""
 
 import math
 
@@ -105,18 +105,18 @@ def test_bots_in_more_slots_are_compared_by_their_mean_seat_score():
 
 def test_bradley_terry_two_bots_matches_the_closed_form():
     ratings = bradley_terry([PairRecord("a", "random", a_wins=75, draws=0, b_wins=25)], prior=0.0)
-    assert ratings["random"] == pytest.approx(800.0)
-    assert ratings["a"] == pytest.approx(800 + 400 * math.log10(3), abs=1e-6)
+    assert ratings["random"] == pytest.approx(400.0)
+    assert ratings["a"] == pytest.approx(400 + 400 * math.log10(3), abs=1e-6)
 
 
 def test_bradley_terry_counts_draws_as_half_wins():
     ratings = bradley_terry([PairRecord("random", "a", a_wins=10, draws=20, b_wins=10)], prior=0.0)
-    assert ratings["a"] == pytest.approx(800.0, abs=1e-6)
+    assert ratings["a"] == pytest.approx(400.0, abs=1e-6)
 
 
 def test_bradley_terry_stays_finite_when_a_bot_wins_every_set():
     ratings = bradley_terry([PairRecord("a", "random", a_wins=100, draws=0, b_wins=0)], prior=1.0)
-    assert ratings["a"] == pytest.approx(800 + 400 * math.log10(100.5 / 0.5), abs=1e-6)
+    assert ratings["a"] == pytest.approx(400 + 400 * math.log10(100.5 / 0.5), abs=1e-6)
 
 
 def test_bradley_terry_chains_through_shared_opponents():
@@ -126,8 +126,8 @@ def test_bradley_terry_chains_through_shared_opponents():
     ]
     ratings = bradley_terry(pairs, prior=0.0)
     step = 400 * math.log10(3)
-    assert ratings["b"] == pytest.approx(800 + step, abs=1e-6)
-    assert ratings["a"] == pytest.approx(800 + 2 * step, abs=1e-6)
+    assert ratings["b"] == pytest.approx(400 + step, abs=1e-6)
+    assert ratings["a"] == pytest.approx(400 + 2 * step, abs=1e-6)
 
 
 def test_bradley_terry_merges_records_of_the_same_pair_either_way_round():

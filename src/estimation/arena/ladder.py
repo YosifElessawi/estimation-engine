@@ -2,7 +2,7 @@
 
 Bots are listed weakest first. Each neighbouring pair plays its own duplicate run (lineup A, B, A,
 B), and one Bradley-Terry fit over every pair's set results rates them all, with RandomBot fixed
-at 800 (SPEC §6 M2). Neighbours close enough that the weaker one wins some sets give each step a
+at 400 (SPEC §6 M2). Neighbours close enough that the weaker one wins some sets give each step a
 finite, measured size, so ratings far from the anchor are measured too.
 
 Each pair's report is saved under ``<dir>/pairs/``, and a pair already played with the same sets

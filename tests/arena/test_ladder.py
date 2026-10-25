@@ -1,5 +1,5 @@
 """The Elo ladder: bots ordered by strength, each neighbouring pair rated in its own duplicate run,
-and one Bradley-Terry fit over all of them with RandomBot fixed at 800."""
+and one Bradley-Terry fit over all of them with RandomBot fixed at 400."""
 
 import json
 from pathlib import Path
@@ -38,10 +38,10 @@ def test_rates_every_bot_from_one_run_per_pair(tmp_path: Path, capsys: pytest.Ca
     assert ("random", "heuristic:noise=0.5", "random", "heuristic:noise=0.5") in lineups
     for bot in TINY.split(","):
         assert bot in out
-    assert "800" in out
+    assert "400 (anchor)" in out
     summary = json.loads((tmp_path / "ladder.json").read_text())
     assert set(summary["ratings"]) == set(TINY.split(","))
-    assert summary["ratings"]["random"] == 800
+    assert summary["ratings"]["random"] == 400
 
 
 def test_finished_pairs_are_reused(

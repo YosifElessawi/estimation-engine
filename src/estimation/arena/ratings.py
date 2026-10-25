@@ -2,7 +2,7 @@
 
 - **Relative Score Advantage (RSA):** a bot's Bola score minus the mean of the other three seats,
   averaged over all its Bolas, with a 95% Student-t confidence interval over duplicate sets.
-- **Elo:** a Bradley-Terry fit over pairwise results with RandomBot fixed at 800. Within each set,
+- **Elo:** a Bradley-Terry fit over pairwise results with RandomBot fixed at 400. Within each set,
   every pair of different bots is compared by score across the set: a win, a draw or a loss.
 """
 
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from .duplicate import ROTATIONS, SetResult
 
 ANCHOR = "random"
-ANCHOR_RATING = 800.0
+ANCHOR_RATING = 400.0  # RandomBot, which knows only the rules
 ELO_SCALE = 400.0
 DEFAULT_PRIOR = 1.0  # virtual draws per compared pair, so a clean sweep still gets a finite rating
 
