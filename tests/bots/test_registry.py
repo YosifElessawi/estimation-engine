@@ -65,3 +65,12 @@ def test_every_bot_satisfies_the_bot_interface(tmp_path: Path):
 def test_unknown_names_and_bad_options_are_rejected(spec: str):
     with pytest.raises(ValueError, match="bot"):
         make_bot(spec, 0)
+
+
+def test_yosif_is_registered_with_its_options():
+    from estimation.bots.yosif import YosifBot
+
+    bot = make_bot("yosif:dash_break=0.5", 1)
+    assert isinstance(bot, YosifBot)
+    assert bot.config.dash_break == 0.5
+    assert bot.config.pimc.leader_weight

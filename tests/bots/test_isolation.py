@@ -21,7 +21,16 @@ import numpy as np
 import pytest
 import torch
 
-from estimation.bots import Bot, HeuristicBot, PIMCBot, PIMCConfig, RandomBot, make_bot
+from estimation.bots import (
+    Bot,
+    HeuristicBot,
+    PIMCBot,
+    PIMCConfig,
+    RandomBot,
+    YosifBot,
+    YosifConfig,
+    make_bot,
+)
 from estimation.engine import Bola, Observation, Phase, Round, RulesConfig
 from estimation.engine.cards import SUIT_MASKS
 from estimation.rl.config import config_from_dict
@@ -204,6 +213,12 @@ def swapped_positions(seed: int) -> list[tuple[Round, Round, int]]:
         ("random", lambda: RandomBot(5)),
         ("pimc", lambda: PIMCBot(5, PIMCConfig(samples=4, oversample=2))),
         ("bid search", lambda: PIMCBot(5, PIMCConfig(samples=2, bid_search=True, bid_samples=3))),
+        (
+            "yosif",
+            lambda: YosifBot(
+                5, YosifConfig(pimc=PIMCConfig(samples=4, oversample=2, leader_weight=True))
+            ),
+        ),
     ],
 )
 def test_a_bots_choice_ignores_other_seats_hidden_cards(name: str, make: Callable[[], Bot]):

@@ -18,6 +18,7 @@ from .heuristic import HeuristicBot, HeuristicConfig
 from .noisy import NoisyBot
 from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
+from .yosif import YosifBot, YosifConfig
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -46,11 +47,18 @@ def _rl(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     return RLBot(seed, configure(RLConfig(heuristic=heuristic, rules=rules), options, "rl"))
 
 
+def _yosif(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
+    pimc = PIMCConfig(heuristic=heuristic, rules=rules, leader_weight=True)
+    return YosifBot(seed, configure(YosifConfig(rules=rules, pimc=pimc), options, "yosif"))
+
+
 _FACTORIES: dict[str, BotFactory] = {
     "random": _random,
     "heuristic": _heuristic,
     "pimc": _pimc,
     "rl": _rl,
+    "yosif": _yosif,
 }
 BOT_NAMES = tuple(_FACTORIES)
 NOISE_OPTIONS = ("noise", "play_noise")
