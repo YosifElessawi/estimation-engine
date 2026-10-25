@@ -1,0 +1,404 @@
+"""Training games (SPEC §6 M4): the current nets against themselves, recent snapshots,
+HeuristicBot and a lighter PIMC, played in lockstep for batched inference.
+
+A chunk of games advances together: each game runs its scripted players until a net has to
+decide, then every pending net decision of the chunk goes through one forward pass per net. The
+current nets ("the learner") explore with epsilon-greedy and record ``(features, action)`` for
+each decision with a choice; when the round ends every recorded decision gets that round's
+reward. Results depend only on the chunk, never on how chunks are spread over workers.
+
+Trainer code: it holds real Bolas, but every player and net sees only the acting seat's own
+Observation (through the state encoder), exactly as in the arena.
+"""
+
+import random
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+import numpy as np
+import numpy.typing as npt
+import torch
+
+from estimation.bots import Bot, HeuristicBot, NoisyBot, PIMCBot, PIMCConfig
+from estimation.bots.heuristic import HeuristicConfig
+from estimation.engine import Phase, RulesConfig
+from estimation.engine.actions import PLAY_BASE
+
+from .config import TrainConfig
+from .encoder import NUM_FEATURES, encode
+from .games import RewardedBola
+from .networks import BiddingNet, CardPlayNet
+from .standings import RewardConfig, first_place_shares
+
+LEARNER = "learner"
+SNAPSHOT = "snapshot"
+HEURISTIC = "heuristic"
+PIMC = "pimc"
+
+StateDict = dict[str, torch.Tensor]
+
+
+@dataclass(frozen=True, slots=True)
+class SeatPlan:
+    """Who plays one seat: the learner, snapshot ``snapshot``, HeuristicBot with ``noise`` or
+    PIMC with ``samples`` deals."""
+
+    kind: str
+    snapshot: int = -1
+    noise: float = 0.0
+    samples: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class GamePlan:
+    index: int
+    kind: str  # "self", "heuristic" or "pimc": the opponents it was drawn for
+    deal_seed: int
+    seed: int  # seeds the scripted bots and the learner's exploration
+    seats: tuple[SeatPlan, SeatPlan, SeatPlan, SeatPlan]
+
+
+@dataclass(frozen=True, slots=True)
+class NetWeights:
+    """A pair of nets as CPU state dicts; ``bidding`` is None before it is trained."""
+
+    hidden: int
+    card: StateDict
+    bidding: StateDict | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkTask:
+    plans: tuple[GamePlan, ...]
+    learner: NetWeights
+    snapshots: dict[int, NetWeights]
+    epsilon_bid: float
+    epsilon_card: float
+    record_bid: bool
+    record_card: bool
+    rules: RulesConfig
+    reward: RewardConfig
+
+
+@dataclass(slots=True)
+class Samples:
+    """Recorded decisions: encoded Observation, action id (card id for card play) and the
+    reward of the round it was made in."""
+
+    features: npt.NDArray[np.float16]
+    actions: npt.NDArray[np.int16]
+    rewards: npt.NDArray[np.float32]
+
+    def __len__(self) -> int:
+        return len(self.actions)
+
+
+def empty_samples() -> Samples:
+    return Samples(
+        np.zeros((0, NUM_FEATURES), np.float16), np.zeros(0, np.int16), np.zeros(0, np.float32)
+    )
+
+
+def concat_samples(parts: Sequence[Samples]) -> Samples:
+    parts = [p for p in parts if len(p)]
+    if not parts:
+        return empty_samples()
+    return Samples(
+        np.concatenate([p.features for p in parts]),
+        np.concatenate([p.actions for p in parts]),
+        np.concatenate([p.rewards for p in parts]),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GameStats:
+    """How the learner did in one game: its seats' mean final score minus the mean of the other
+    seats, and its seats' share of first place."""
+
+    index: int
+    kind: str
+    learner_seats: int
+    rsa: float
+    first: float
+    rounds: int
+    skipped: int  # rounds nobody bid in
+
+
+@dataclass(slots=True)
+class ChunkResult:
+    bid: Samples
+    card: Samples
+    games: list[GameStats] = field(default_factory=lambda: list[GameStats]())
+
+
+@dataclass(slots=True)
+class _Nets:
+    card: CardPlayNet
+    bidding: BiddingNet | None
+
+
+def build_nets(weights: NetWeights) -> _Nets:
+    card = CardPlayNet(weights.hidden)
+    card.load_state_dict(weights.card)
+    card.eval()
+    bidding = None
+    if weights.bidding is not None:
+        bidding = BiddingNet(weights.hidden)
+        bidding.load_state_dict(weights.bidding)
+        bidding.eval()
+    return _Nets(card, bidding)
+
+
+def _scripted(plan: SeatPlan, seed: int, rules: RulesConfig) -> Bot:
+    heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
+    if plan.kind == HEURISTIC:
+        bot: Bot = HeuristicBot(heuristic)
+        return NoisyBot(bot, noise=plan.noise, seed=seed) if plan.noise else bot
+    if plan.kind == PIMC:
+        return PIMCBot(seed, PIMCConfig(samples=plan.samples, heuristic=heuristic, rules=rules))
+    raise ValueError(f"seat kind {plan.kind!r} is not a scripted bot")
+
+
+class _Game:
+    """One game of a chunk and the learner decisions waiting for their round's reward."""
+
+    __slots__ = ("bots", "game", "net_of", "open", "out_bid", "out_card", "plan", "rng")
+
+    def __init__(self, plan: GamePlan, task: ChunkTask) -> None:
+        self.plan = plan
+        self.game = RewardedBola(plan.deal_seed, task.rules, task.reward)
+        self.rng = random.Random(plan.seed)
+        self.bots: list[Bot | None] = []
+        self.net_of: list[int | None] = []  # -1 for the learner, else the snapshot id
+        for seat, seat_plan in enumerate(plan.seats):
+            if seat_plan.kind == LEARNER:
+                self.bots.append(None)
+                self.net_of.append(-1)
+            elif seat_plan.kind == SNAPSHOT:
+                self.bots.append(None)
+                self.net_of.append(seat_plan.snapshot)
+            else:
+                self.bots.append(_scripted(seat_plan, plan.seed * 4 + seat + 1, task.rules))
+                self.net_of.append(None)
+        # Per seat, this round's learner decisions: (is card play, features, action).
+        self.open: list[list[tuple[bool, npt.NDArray[np.float32], int]]] = [[], [], [], []]
+        self.out_bid: list[tuple[npt.NDArray[np.float32], int, float]] = []
+        self.out_card: list[tuple[npt.NDArray[np.float32], int, float]] = []
+
+    def step(self, action: int) -> None:
+        rewards = self.game.step(action)
+        if rewards is None:
+            return
+        for seat in range(4):
+            for is_card, features, act in self.open[seat]:
+                (self.out_card if is_card else self.out_bid).append((features, act, rewards[seat]))
+            self.open[seat].clear()
+
+
+@dataclass(slots=True)
+class _Request:
+    game: _Game
+    seat: int
+    features: npt.NDArray[np.float32]
+    legal: list[int]
+
+
+def play_chunk(task: ChunkTask) -> ChunkResult:
+    """Play every game of ``task`` to the end and return the learner's recorded decisions."""
+    learner = build_nets(task.learner)
+    snapshots = {key: build_nets(weights) for key, weights in task.snapshots.items()}
+    games = [_Game(plan, task) for plan in task.plans]
+    rules = task.rules
+    active = list(games)
+    with torch.inference_mode():
+        while active:
+            card_requests: dict[int, list[_Request]] = {}
+            bid_requests: dict[int, list[_Request]] = {}
+            for game in active:
+                request = _advance(game, rules)
+                if request is None:
+                    continue
+                key = game.net_of[request.seat]
+                if key is None:
+                    raise RuntimeError("only net seats make requests")
+                is_card = game.game.bola.phase is Phase.PLAY
+                (card_requests if is_card else bid_requests).setdefault(key, []).append(request)
+            for key, requests in card_requests.items():
+                nets = learner if key == -1 else snapshots[key]
+                values = _card_values(nets, requests)
+                for request, row in zip(requests, values, strict=True):
+                    _apply(request, row, True, key == -1, task)
+            for key, requests in bid_requests.items():
+                nets = learner if key == -1 else snapshots[key]
+                values = _bid_values(nets, requests)
+                for request, row in zip(requests, values, strict=True):
+                    _apply(request, row, False, key == -1, task)
+            active = [game for game in active if not game.game.bola.is_over]
+    return ChunkResult(
+        bid=_samples([game.out_bid for game in games]),
+        card=_samples([game.out_card for game in games]),
+        games=[_stats(game) for game in games],
+    )
+
+
+def _advance(game: _Game, rules: RulesConfig) -> _Request | None:
+    """Run scripted players and forced moves until a net seat has a real choice, or the game
+    ends. Returns that seat's request."""
+    bola = game.game.bola
+    while not bola.is_over:
+        seat = bola.current_player
+        if seat is None:
+            raise RuntimeError("a Bola that is not over always has a player to act")
+        legal = bola.legal_actions()
+        bot = game.bots[seat]
+        if bot is not None:
+            game.step(bot.act(bola.observation(seat), legal))
+            continue
+        if len(legal) == 1:
+            game.step(legal[0])
+            continue
+        return _Request(game, seat, encode(bola.observation(seat), rules), legal)
+    return None
+
+
+def _card_values(nets: _Nets, requests: list[_Request]) -> npt.NDArray[np.float32]:
+    x = torch.as_tensor(np.stack([r.features for r in requests]))
+    _, advantage = nets.card(x)
+    return advantage.numpy()
+
+
+def _bid_values(nets: _Nets, requests: list[_Request]) -> npt.NDArray[np.float32]:
+    if nets.bidding is None:
+        raise ValueError("a net seat needs a BiddingNet to bid")
+    x = torch.as_tensor(np.stack([r.features for r in requests]))
+    return nets.bidding(x).numpy()
+
+
+def _apply(
+    request: _Request,
+    values: npt.NDArray[np.float32],
+    is_card: bool,
+    is_learner: bool,
+    task: ChunkTask,
+) -> None:
+    legal = request.legal
+    offset = PLAY_BASE if is_card else 0
+    game = request.game
+    if is_learner:
+        epsilon = task.epsilon_card if is_card else task.epsilon_bid
+        explore = game.rng.random() < epsilon
+        action = game.rng.choice(legal) if explore else max(legal, key=lambda a: values[a - offset])
+        if task.record_card if is_card else task.record_bid:
+            game.open[request.seat].append((is_card, request.features, action - offset))
+    else:
+        action = max(legal, key=lambda a: values[a - offset])
+    game.step(action)
+
+
+def _samples(per_game: list[list[tuple[npt.NDArray[np.float32], int, float]]]) -> Samples:
+    rows = [row for game in per_game for row in game]
+    if not rows:
+        return empty_samples()
+    return Samples(
+        np.stack([features for features, _, _ in rows]).astype(np.float16),
+        np.array([action for _, action, _ in rows], np.int16),
+        np.array([reward for _, _, reward in rows], np.float32),
+    )
+
+
+def _stats(game: _Game) -> GameStats:
+    bola = game.game.bola
+    scores = bola.scores
+    seats = [s for s in range(4) if game.plan.seats[s].kind == LEARNER]
+    shares = first_place_shares(scores)
+    others = [s for s in range(4) if s not in seats]
+    mine = sum(scores[s] for s in seats) / len(seats)
+    rest = sum(scores[s] for s in others) / len(others) if others else mine
+    return GameStats(
+        index=game.plan.index,
+        kind=game.plan.kind,
+        learner_seats=len(seats),
+        rsa=mine - rest,
+        first=sum(shares[s] for s in seats) / len(seats),
+        rounds=len(bola.history),
+        skipped=sum(1 for result in bola.history if result.skipped),
+    )
+
+
+def plan_games(
+    config: TrainConfig,
+    iteration: int,
+    snapshot_ids: Sequence[int],
+    seed_of: "SeedFn",
+) -> list[GamePlan]:
+    """The games of one iteration: exact shares of each opponent kind, in a shuffled order so
+    every chunk gets a mix. ``seed_of(*keys)`` derives this iteration's seeds."""
+    mix = config.opponents
+    total = config.selfplay.games
+    n_heuristic = round(mix.heuristic * total)
+    n_pimc = round(mix.pimc * total)
+    kinds = ["heuristic"] * n_heuristic + ["pimc"] * n_pimc
+    kinds += ["self"] * (total - len(kinds))
+    rng = random.Random(seed_of(0))
+    rng.shuffle(kinds)
+    plans: list[GamePlan] = []
+    for index, kind in enumerate(kinds):
+        game_rng = random.Random(seed_of(1, index))
+        seats: list[SeatPlan] = []
+        if kind == "self":
+            anchor = game_rng.randrange(4)
+            for seat in range(4):
+                if seat == anchor or not snapshot_ids or game_rng.random() < mix.current_share:
+                    seats.append(SeatPlan(LEARNER))
+                else:
+                    seats.append(SeatPlan(SNAPSHOT, snapshot=game_rng.choice(list(snapshot_ids))))
+        else:
+            learner_seat = game_rng.randrange(4)
+            for seat in range(4):
+                if seat == learner_seat:
+                    seats.append(SeatPlan(LEARNER))
+                elif kind == "heuristic":
+                    seats.append(SeatPlan(HEURISTIC, noise=game_rng.choice(mix.heuristic_noise)))
+                else:
+                    seats.append(SeatPlan(PIMC, samples=game_rng.choice(mix.pimc_samples)))
+        plans.append(
+            GamePlan(
+                index=index,
+                kind=kind,
+                deal_seed=seed_of(2, index),
+                seed=seed_of(3, index),
+                seats=(seats[0], seats[1], seats[2], seats[3]),
+            )
+        )
+    return plans
+
+
+def plan_eval_games(config: TrainConfig, seed_of: "SeedFn") -> list[GamePlan]:
+    """Greedy games of the learner against three plain HeuristicBots, kept out of training: the
+    log's view of how the nets play the M4 headline lineup."""
+    plans: list[GamePlan] = []
+    for index in range(config.selfplay.eval_games):
+        learner_seat = index % 4
+        seats = tuple(SeatPlan(LEARNER if s == learner_seat else HEURISTIC) for s in range(4))
+        plans.append(
+            GamePlan(
+                index=index,
+                kind="eval",
+                deal_seed=seed_of(4, index),
+                seed=seed_of(5, index),
+                seats=(seats[0], seats[1], seats[2], seats[3]),
+            )
+        )
+    return plans
+
+
+class SeedFn:
+    """Seeds for one iteration: ``SeedFn(run_seed, stage, iteration)(*keys)``."""
+
+    __slots__ = ("prefix",)
+
+    def __init__(self, *prefix: int) -> None:
+        self.prefix = prefix
+
+    def __call__(self, *keys: int) -> int:
+        return int(np.random.SeedSequence([*self.prefix, *keys]).generate_state(1)[0])
