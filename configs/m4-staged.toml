@@ -1,0 +1,58 @@
+# A longer M4 self-play run, scaled up in stages: the M4 design (configs/m4.toml: same reward,
+# opponent mix, warm start and games per loop) with faster training, a card anchor and learning
+# rates that loosen over the run, and a yardstick every 25 loops. It reuses M4's recorded PIMC
+# games and warm start, so only self-play runs: copy runs/m4/warmstart/pimc.npz (or hard-link
+# it), warmstart/record.json and checkpoints/warm-start.pt into runs/m4-staged/ in the same
+# layout, and the M4 final checkpoint to runs/m4-staged/reference/m4-final.pt, then:
+#   uv run python -m estimation.rl.train run --config configs/m4-staged.toml --out runs/m4-staged
+# and watch it with:
+#   uv run python -m estimation.rl.watch runs/m4-staged
+seed = 0
+workers = 5
+
+[reward]
+ahead_weight = 1.0
+behind_weight = 0.5
+tie_weight = 1.0
+normalize_weights = true
+win_blend = 0.5
+win_points = 100.0
+
+[record]
+games = 1000
+pimc_samples = 30
+
+[imitation]
+epochs = 24
+
+[opponents]
+self_play = 0.70
+heuristic = 0.15
+pimc = 0.15
+pimc_samples = [4, 5, 6, 7, 8]
+
+[selfplay]
+iterations = 600
+games = 240
+eval_games = 32
+card_frozen_iterations = 10
+bid_lr = 1e-4
+card_lr = 1e-4
+checkpoint_every = 25
+# Looser over the run: the PIMC anchor falls from 1.0 to 0.1, both learning rates to a tenth.
+card_anchor_end_factor = 0.1
+lr_end_factor = 0.1
+# Faster: play the next loop while the GPU learns, start the slow PIMC games first.
+overlap = true
+balance = true
+chunk = 8
+# Every 25 loops: 40 sets against PIMC with 8 deals and 40 against the M4 final.
+yardstick_every = 25
+yardstick_sets = 40
+yardstick_seed = 0
+yardstick_pimc_samples = 8
+yardstick_reference = "runs/m4-staged/reference/m4-final.pt"
+
+[nets]
+hidden = 384
+device = "auto"

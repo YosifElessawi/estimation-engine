@@ -92,3 +92,27 @@ def test_the_committed_m4_config_holds_the_decided_design():
     assert config.selfplay.card_anchor_weight > 0
     assert config.selfplay.bid_temperature_start > 0
     assert config.nets.hidden == 384
+
+
+def test_the_staged_config_keeps_the_m4_design_and_changes_only_the_schedules_and_speed():
+    configs = Path(__file__).resolve().parents[2] / "configs"
+    m4 = config_to_dict(load_config(configs / "m4.toml"))
+    staged = config_to_dict(load_config(configs / "m4-staged.toml"))
+    for section in ("rules", "reward", "record", "imitation", "opponents", "nets"):
+        assert staged[section] == m4[section], section
+    allowed = {
+        "iterations",
+        "checkpoint_every",
+        "card_anchor_end_factor",
+        "lr_end_factor",
+        "overlap",
+        "balance",
+        "chunk",
+        "yardstick_every",
+        "yardstick_reference",
+    }
+    changed = {key for key, value in staged["selfplay"].items() if value != m4["selfplay"][key]}
+    assert changed <= allowed
+    assert (staged["seed"], staged["workers"]) == (m4["seed"], m4["workers"])
+    assert staged["selfplay"]["card_anchor_end_factor"] == 0.1
+    assert staged["selfplay"]["lr_end_factor"] == 0.1
