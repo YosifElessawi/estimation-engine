@@ -109,6 +109,10 @@ def test_a_watched_bola_steps_from_the_deal_to_the_winners(client: TestClient):
     assert len(results) >= 18  # 13 open rounds and 5 fixed trumps, plus replays (GAM-1)
     totals = [sum(result["scores"][seat] for result in results) for seat in range(4)]
     assert every[-1]["scores"] == totals
+    assert [summary["scores"] for summary in every[-1]["history"]] == [r["scores"] for r in results]
+    for frame in every:
+        played = frame["history"]
+        assert frame["scores"] == [sum(r["scores"][seat] for r in played) for seat in range(4)]
     assert every[-1]["winners"] == list(top_seats((totals[0], totals[1], totals[2], totals[3])))
     assert client.get(f"/api/games/{game['id']}").json()["finished"]
     kinds = {frame["event"]["action"]["kind"] for frame in every if frame["event"]}

@@ -32,9 +32,11 @@ from .views import (
     ActionView,
     EventView,
     RoundResultView,
+    RoundSummary,
     TableView,
     describe_action,
     result_view,
+    summary_view,
     table_view,
 )
 from .why import WhyView, explain, rl_bot
@@ -46,7 +48,8 @@ SeekTarget = Literal["trick", "round_end", "deal", "end"]
 
 class Frame(TypedDict):
     """One step of the game as the browser shows it. ``scores`` are the game scores at this
-    frame. ``legal`` is set only on the frame where the human must act."""
+    frame and ``history`` the rounds scored so far. ``legal`` is set only on the frame where
+    the human must act."""
 
     index: int
     kind: str
@@ -55,6 +58,7 @@ class Frame(TypedDict):
     why: WhyView | None
     table: TableView
     scores: list[int]
+    history: list[RoundSummary]
     result: RoundResultView | None
     winners: list[int] | None
     legal: list[ActionView] | None
@@ -113,6 +117,7 @@ class GameSession:
         self.frames: list[Frame] = []
         self._script = list(script or [])
         self._events: list[EventView] = []
+        self._history: list[RoundSummary] = []  # rounds shown as scored so far
         self._add(self.bola.round, "deal")
         if mode == "play":
             self._run_bots()
@@ -147,6 +152,8 @@ class GameSession:
         table = self._table(source)
         result = None
         winners = None
+        if kind == "round_end":
+            self._history.append(summary_view(self.bola.history[-1]))
         if kind in ("round_end", "game_end"):
             result = result_view(self.bola.history[-1])
         if kind == "game_end":
@@ -160,6 +167,7 @@ class GameSession:
                 why=why,
                 table=table,
                 scores=list(scores if scores is not None else table["scores"]),
+                history=list(self._history),
                 result=result,
                 winners=winners,
                 legal=None,

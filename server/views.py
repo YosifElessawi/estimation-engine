@@ -145,6 +145,19 @@ class RoundResultView(TypedDict):
     seats: list[SeatResultView]
 
 
+class RoundSummary(TypedDict):
+    """One played round for the scoreboard: its trump, multiplier and score by seat."""
+
+    round_no: int
+    skipped: bool
+    trump: int | None
+    fixed_trump: int | None
+    trump_changed: bool
+    over: bool | None
+    multiplier: int
+    scores: list[int]
+
+
 PHASES = {
     Phase.DASH: "dash",
     Phase.AUCTION: "auction",
@@ -305,4 +318,17 @@ def result_view(result: RoundResult) -> RoundResultView:
             )
             for seat in result.seats
         ],
+    )
+
+
+def summary_view(result: RoundResult) -> RoundSummary:
+    return RoundSummary(
+        round_no=result.round_no,
+        skipped=result.skipped,
+        trump=result.trump,
+        fixed_trump=result.fixed_trump,
+        trump_changed=result.trump_changed,
+        over=result.over,
+        multiplier=result.multiplier,
+        scores=list(result.scores),
     )
