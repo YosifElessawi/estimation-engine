@@ -113,7 +113,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
   return (
     <main className="setup">
       <section className="setup__intro">
-        <p className="eyebrow">Pocket Estimation rules · 4 players · 18 rounds</p>
+        <p className="eyebrow">Pocket Estimation rules · 4 players · 18 rounds plus replays</p>
         <h1 className="setup__title">
           Estimation<span className="setup__title-dot">.</span>
         </h1>

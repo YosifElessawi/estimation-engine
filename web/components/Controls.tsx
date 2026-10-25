@@ -291,7 +291,9 @@ export function DecisionPanel({ legal, busy, onAct }: { legal: ActionView[]; bus
       {supers.length > 0 && (
         <div className="supers">
           <button type="button" className="link small" onClick={() => setSuperOpen(!superOpen)}>
-            {superOpen ? "hide super calls" : "or make a super call (8+ tricks in another trump)"}
+            {superOpen
+              ? "hide super calls"
+              : `or make a super call (${Math.min(...supers.map((action) => action.tricks ?? 13))}+ tricks in another trump)`}
           </button>
           {superOpen && <BidGrid bids={supers} onAct={onAct} />}
         </div>
