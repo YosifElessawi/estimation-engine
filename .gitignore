@@ -22,6 +22,8 @@ runs/
 # Web (M6)
 node_modules/
 .next/
+web/next-env.d.ts
+*.tsbuildinfo
 
 # Local and secrets
 .env
