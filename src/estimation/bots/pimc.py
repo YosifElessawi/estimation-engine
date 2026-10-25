@@ -96,6 +96,13 @@ class PIMCBot:
     def choose(self, obs: Observation, cards: list[int]) -> int:
         """The card to play from the legal ``cards``: the best total over the sampled deals,
         HeuristicBot's own card on a tie."""
+        candidates, totals = self.search(obs, cards)
+        return candidates[best_index(totals)]
+
+    def search(self, obs: Observation, cards: list[int]) -> tuple[list[int], list[float]]:
+        """The cards searched, HeuristicBot's own card first, and each one's total over the
+        sampled deals of own round score minus the mean of the other three. When only one
+        candidate is left there is no search and its total is 0."""
         config = self.config
         start = time.perf_counter()
         know = read_knowledge(obs)
@@ -113,15 +120,10 @@ class PIMCBot:
             else sorted(cards, key=lambda card: card != hint)
         )
         if len(candidates) == 1:
-            return candidates[0]
+            return candidates, [0.0]
         deals = self.sample_deals(obs, know)
         deadline = start + config.budget_ms / 1000 if config.enforce_budget else None
-        totals = self.evaluate(obs, candidates, deals, deadline)
-        best = 0
-        for k in range(1, len(candidates)):
-            if totals[k] > totals[best]:
-                best = k
-        return candidates[best]
+        return candidates, self.evaluate(obs, candidates, deals, deadline)
 
     def sample_deals(self, obs: Observation, know: Knowledge | None = None) -> list[list[int]]:
         """``samples`` full deals (four remaining hands, own hand included) that fit the hand
@@ -201,6 +203,15 @@ class PIMCBot:
             if deadline is not None and time.perf_counter() > deadline:
                 break
         return totals
+
+
+def best_index(totals: Sequence[float]) -> int:
+    """The index of the highest total, the first one on a tie."""
+    best = 0
+    for k in range(1, len(totals)):
+        if totals[k] > totals[best]:
+            best = k
+    return best
 
 
 def representatives(cards: list[int], out: int, hint: int) -> list[int]:
