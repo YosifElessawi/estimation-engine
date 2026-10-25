@@ -80,6 +80,9 @@ class SelfPlayConfig:
     snapshot_every: int = 5  # iterations between snapshots joining the opponent pool
     snapshots_kept: int = 5
     checkpoint_every: int = 10
+    # Schedules over the run, as shares of the starting value at the last iteration (1: none).
+    lr_end_factor: float = 1.0  # both learning rates decay linearly to this share
+    card_anchor_end_factor: float = 1.0  # card_anchor_weight decays linearly to this share
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +113,9 @@ class TrainConfig:
             raise ValueError("workers, chunk and games must be at least 1")
         if self.selfplay.iterations < 1 or self.record.games < 1 or self.imitation.epochs < 1:
             raise ValueError("iterations, recorded games and imitation epochs must be at least 1")
+        play = self.selfplay
+        if play.lr_end_factor < 0 or play.card_anchor_end_factor < 0:
+            raise ValueError("lr_end_factor and card_anchor_end_factor must be 0 or more")
 
 
 _SECTIONS = ("rules", "reward", "record", "imitation", "opponents", "selfplay", "nets")
@@ -118,6 +124,13 @@ _SECTIONS = ("rules", "reward", "record", "imitation", "opponents", "selfplay", 
 RECORD_STAGE = 1
 IMITATION_STAGE = 2
 SELFPLAY_STAGE = 3
+
+
+def linear_schedule(iterations: int, iteration: int, start: float, end: float) -> float:
+    """A value going linearly from ``start`` at the first iteration to ``end`` at the last."""
+    if iterations <= 1:
+        return end
+    return start + iteration / (iterations - 1) * (end - start)
 
 
 def derive_seed(seed: int, *keys: int) -> int:

@@ -1,6 +1,7 @@
 """The Deep Monte Carlo update (SPEC §6 M4)."""
 
 import numpy as np
+import pytest
 import torch
 
 from estimation.rl.config import config_from_dict
@@ -106,3 +107,47 @@ def test_card_updates_can_skip_the_suit_relabelling():
     report = plain.update(samples(128, 4, 0), samples(128, 3, 1), 0, train_card=True)
     assert report.card_steps == 2
     assert learner().augmenter is not None  # on by default
+
+
+def _step_size(config_changes: dict[str, object], iteration: int) -> float:
+    """How far one update at ``iteration`` moves BiddingNet's weights."""
+    config = config_from_dict(
+        {"seed": 1, "selfplay": {"batch": 512, "epochs": 1, **config_changes}}
+    )
+    torch.manual_seed(0)
+    model = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    before = [p.detach().clone() for p in model.bidding.parameters()]
+    model.update(samples(512, 4, 0), samples(512, 3, 1), iteration, train_card=False)
+    moved = [
+        (p.detach() - b).norm() ** 2
+        for p, b in zip(model.bidding.parameters(), before, strict=True)
+    ]
+    return float(sum(moved) ** 0.5)
+
+
+def test_learning_rates_and_the_anchor_stay_fixed_by_default():
+    model = learner()
+    cfg = CONFIG.selfplay
+    for iteration in (0, cfg.iterations - 1):
+        report = model.update(samples(64, 4, 0), samples(64, 3, 1), iteration, train_card=True)
+        assert report.lr_factor == 1.0
+        assert report.anchor_weight == cfg.card_anchor_weight
+        assert model.bid_optimizer.param_groups[0]["lr"] == cfg.bid_lr
+        assert model.card_optimizer.param_groups[0]["lr"] == cfg.card_lr
+
+
+def test_learning_rates_and_the_anchor_decay_linearly_over_the_run():
+    changes = {"iterations": 11, "lr_end_factor": 0.1, "card_anchor_end_factor": 0.25}
+    config = config_from_dict({"seed": 1, "selfplay": {"batch": 64, "epochs": 1, **changes}})
+    torch.manual_seed(0)
+    model = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    cfg = config.selfplay
+    for iteration, lr_factor, anchor in ((0, 1.0, 1.0), (5, 0.55, 0.625), (10, 0.1, 0.25)):
+        report = model.update(samples(64, 4, 0), samples(64, 3, 1), iteration, train_card=True)
+        assert report.lr_factor == pytest.approx(lr_factor)
+        assert report.anchor_weight == pytest.approx(anchor * cfg.card_anchor_weight)
+        assert model.card_optimizer.param_groups[0]["lr"] == pytest.approx(lr_factor * cfg.card_lr)
+        assert model.bid_optimizer.param_groups[0]["lr"] == pytest.approx(lr_factor * cfg.bid_lr)
+    # Adam's first step moves the weights in proportion to the learning rate.
+    ratio = _step_size(changes, 10) / _step_size({"iterations": 11}, 10)
+    assert ratio == pytest.approx(0.1, rel=0.05)

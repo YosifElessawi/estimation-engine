@@ -13,6 +13,10 @@ Each card-play step also takes a batch of the recorded PIMC decisions and adds t
 imitation loss (``card_anchor_weight``). Without that anchor, a pilot's card play lost about 40
 points of RSA against HeuristicBots in 36 self-play iterations: it forgot PIMC-like play while
 training on the early, chaotic rounds of a bidder that starts from scratch.
+
+Optional linear schedules loosen the anchor (``card_anchor_end_factor``) and lower both learning
+rates (``lr_end_factor``) over the run, so a long run can drift further from PIMC once its
+bidding has settled, with smaller steps as it goes.
 """
 
 import copy
@@ -23,7 +27,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .config import SELFPLAY_STAGE, TrainConfig, derive_seed
+from .config import SELFPLAY_STAGE, TrainConfig, derive_seed, linear_schedule
 from .imitation import ImitationData, imitation_losses
 from .networks import REWARD_SCALE, BiddingNet, CardPlayNet, state_dict_of
 from .selfplay import NetWeights, Samples
@@ -44,6 +48,8 @@ class UpdateReport:
     anchor_loss: float
     bid_steps: int
     card_steps: int
+    lr_factor: float  # both learning rates' share of their configured value this iteration
+    anchor_weight: float  # card_anchor_weight this iteration
 
 
 class Learner:
@@ -92,6 +98,14 @@ class Learner:
 
     def update(self, bid: Samples, card: Samples, iteration: int, train_card: bool) -> UpdateReport:
         seed = self.config.seed
+        cfg = self.config.selfplay
+        lr_factor = linear_schedule(cfg.iterations, iteration, 1.0, cfg.lr_end_factor)
+        for optimizer, lr in ((self.bid_optimizer, cfg.bid_lr), (self.card_optimizer, cfg.card_lr)):
+            for group in optimizer.param_groups:
+                group["lr"] = lr * lr_factor
+        anchor_weight = cfg.card_anchor_weight * linear_schedule(
+            cfg.iterations, iteration, 1.0, cfg.card_anchor_end_factor
+        )
         bid_loss, bid_steps = 0.0, 0
         if len(bid):
             rng = np.random.default_rng(derive_seed(seed, SELFPLAY_STAGE, iteration, BID_SHUFFLE))
@@ -105,9 +119,18 @@ class Learner:
                 derive_seed(seed, SELFPLAY_STAGE, iteration, ANCHOR_ROWS)
             )
             value_loss, q_loss, anchor_loss, card_steps = self._fit_card(
-                card, rng, relabel, anchor_rng
+                card, rng, relabel, anchor_rng, anchor_weight
             )
-        return UpdateReport(bid_loss, value_loss, q_loss, anchor_loss, bid_steps, card_steps)
+        return UpdateReport(
+            bid_loss,
+            value_loss,
+            q_loss,
+            anchor_loss,
+            bid_steps,
+            card_steps,
+            lr_factor,
+            anchor_weight,
+        )
 
     def _tensors(self, samples: Samples) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         device = self.device
@@ -148,6 +171,7 @@ class Learner:
         rng: np.random.Generator,
         relabel: torch.Generator,
         anchor_rng: np.random.Generator,
+        anchor_weight: float,
     ) -> tuple[float, float, float, int]:
         cfg = self.config.selfplay
         imitation = self.config.imitation
@@ -178,7 +202,7 @@ class Learner:
                 anchor = (
                     imitation.advantage_weight * adv_loss + imitation.choice_weight * choice_loss
                 )
-                loss = loss + cfg.card_anchor_weight * anchor
+                loss = loss + anchor_weight * anchor
                 anchor_total += float(anchor.detach())
             optimizer.zero_grad(set_to_none=True)
             backward(loss)

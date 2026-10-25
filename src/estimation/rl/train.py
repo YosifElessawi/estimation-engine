@@ -37,6 +37,7 @@ from .config import (
     TrainConfig,
     config_to_dict,
     derive_seed,
+    linear_schedule,
     load_config,
 )
 from .imitation import ImitationData, train_imitation, training_rows
@@ -199,14 +200,6 @@ def imitation_stage(run: Run, records: CardRecords, device: torch.device) -> Pat
     return run.save(WARM_START, net, None, meta)
 
 
-def _schedule(config: TrainConfig, iteration: int, start: float, end: float) -> float:
-    """A linear schedule from ``start`` at the first iteration to ``end`` at the last."""
-    iterations = config.selfplay.iterations
-    if iterations <= 1:
-        return end
-    return start + iteration / (iterations - 1) * (end - start)
-
-
 def _summary(stats: Iterable[GameStats]) -> dict[str, dict[str, float]]:
     groups: dict[str, list[GameStats]] = {}
     for game in stats:
@@ -269,9 +262,11 @@ def selfplay_stage(
     path = final
     for iteration in range(start_iteration, cfg.iterations):
         tick = time.perf_counter()
-        epsilon = _schedule(config, iteration, cfg.epsilon_bid_start, cfg.epsilon_bid_end)
-        temperature = _schedule(
-            config, iteration, cfg.bid_temperature_start, cfg.bid_temperature_end
+        epsilon = linear_schedule(
+            cfg.iterations, iteration, cfg.epsilon_bid_start, cfg.epsilon_bid_end
+        )
+        temperature = linear_schedule(
+            cfg.iterations, iteration, cfg.bid_temperature_start, cfg.bid_temperature_end
         )
         train_card = iteration >= cfg.card_frozen_iterations
         seed_of = SeedFn(config.seed, SELFPLAY_STAGE, iteration + 1)
@@ -334,6 +329,8 @@ def selfplay_stage(
             "epsilon_bid": epsilon,
             "bid_temperature": temperature,
             "train_card": train_card,
+            "lr_factor": update.lr_factor,
+            "anchor_weight": update.anchor_weight,
             "bid_loss": update.bid_loss,
             "card_value_loss": update.card_value_loss,
             "card_q_loss": update.card_q_loss,
