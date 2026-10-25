@@ -25,6 +25,7 @@ from .ratings import (
     bradley_terry,
     mean_ci,
     pair_records,
+    set_first_places,
     set_rsa,
     set_scores,
     sweep_gap,
@@ -38,6 +39,7 @@ class BotSummary:
     bolas: int  # Bolas played across the run
     mean_score: float  # mean Bola score
     rsa: Interval  # mean RSA per Bola, interval over sets
+    first: Interval  # share of its Bolas finished first, interval over sets
     elo: float | None
 
 
@@ -76,6 +78,7 @@ def build_report(
         ratings, elo_error = {}, str(error)
     per_set_rsa = [set_rsa(result, lineup) for result in results]
     per_set_score = [set_scores(result, lineup) for result in results]
+    per_set_first = [set_first_places(result, lineup) for result in results]
     bots = tuple(
         BotSummary(
             name=name,
@@ -83,6 +86,7 @@ def build_report(
             bolas=lineup.count(name) * ROTATIONS * len(results),
             mean_score=math.fsum(s[name] for s in per_set_score) / len(results),
             rsa=mean_ci([r[name] for r in per_set_rsa]),
+            first=mean_ci([f[name] for f in per_set_first]),
             elo=ratings.get(name),
         )
         for name in dict.fromkeys(lineup)
@@ -115,6 +119,11 @@ def _signed(value: float) -> str:
     return f"{value:+,.1f}"
 
 
+def _percent(share: float) -> str:
+    """A share as a percentage, held to 0-100 (a t-interval over few sets can spill past)."""
+    return f"{100 * min(max(share, 0.0), 1.0):.1f}"
+
+
 def format_report(report: Report) -> str:
     rules = (
         ", ".join(f"{k}={v}" for k, v in report.rules.items()) if report.rules else "default rules"
@@ -127,7 +136,8 @@ def format_report(report: Report) -> str:
     ]
     width = max(len("Bot"), *(len(bot.name) for bot in report.bots))
     header = (
-        f"{'Bot':<{width}}  Slots  {'RSA per Bola':>12}  {'95% CI':<22}  {'Mean score':>10}  Elo"
+        f"{'Bot':<{width}}  Slots  {'1st place':>9}  {'95% CI':<14}  {'RSA per Bola':>12}  "
+        f"{'95% CI':<22}  {'Mean score':>10}  Elo"
     )
     lines += [header, "-" * len(header)]
     for bot in report.bots:
@@ -136,13 +146,23 @@ def format_report(report: Report) -> str:
             ci = f"[{_signed(interval.low)}, {_signed(interval.high)}]"
         else:
             ci = "n/a (one set)"
+        first = bot.first
+        if math.isfinite(first.low):
+            first_ci = f"[{_percent(first.low)}, {_percent(first.high)}]"
+        else:
+            first_ci = "n/a"
         elo = "n/a" if bot.elo is None else f"{bot.elo:,.0f}"
         if bot.name == ANCHOR and bot.elo is not None:
             elo += " (anchor)"
         lines.append(
-            f"{bot.name:<{width}}  {bot.slots:>5}  {_signed(interval.mean):>12}  {ci:<22}  "
+            f"{bot.name:<{width}}  {bot.slots:>5}  {_percent(first.mean) + '%':>9}  "
+            f"{first_ci:<14}  {_signed(interval.mean):>12}  {ci:<22}  "
             f"{_signed(bot.mean_score):>10}  {elo}"
         )
+    lines.append(
+        "1st place: how often one seat of the bot finished its Bola first, ties shared "
+        "(a fair share is 25%)."
+    )
     lines.append("")
     for pair in report.pairs:
         lines.append(
@@ -235,6 +255,12 @@ def report_to_json(report: Report) -> dict[str, Any]:
                     "high": _finite(bot.rsa.high),
                     "sd": bot.rsa.sd,
                     "sets": bot.rsa.n,
+                },
+                "first_place": {
+                    "mean": bot.first.mean,
+                    "low": _finite(bot.first.low),
+                    "high": _finite(bot.first.high),
+                    "sets": bot.first.n,
                 },
                 "elo": bot.elo,
             }

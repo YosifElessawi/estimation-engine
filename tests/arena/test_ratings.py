@@ -12,6 +12,7 @@ from estimation.arena.ratings import (
     mean_ci,
     pair_records,
     rsa,
+    set_first_places,
     set_rsa,
     set_scores,
     sweep_gap,
@@ -49,6 +50,16 @@ def test_set_scores_average_a_bot_over_its_seat_games():
     per_bot = set_scores(make_set(0, scores), AB)
     # a sits at seats 0, 2 / 3, 1 / 2, 0 / 1, 3 in rotations 0-3.
     assert per_bot == {"a": pytest.approx((30 + 30 + 30 + 30 + 0 + 12 + 0 + 12) / 8), "b": 0.0}
+
+
+def test_first_place_share_splits_ties_and_averages_over_seat_games():
+    # Rotation k seats slot (i + k) % 4 at seat i; a holds slots 0 and 2, b slots 1 and 3.
+    scores = [(30, 0, 30, 0), (30, 0, 30, 0), (12, 0, 0, 0), (0, 12, 9, 0)]
+    shares = set_first_places(make_set(0, scores), AB)
+    # k=0: a ties at seats 0 and 2 (half each). k=1: b ties at seats 0 and 2. k=2: a wins at
+    # seat 0. k=3: a wins at seat 1. So a has 3 first places in its 8 games, b has 1.
+    assert shares == {"a": pytest.approx(3 / 8), "b": pytest.approx(1 / 8)}
+    assert 2 * shares["a"] + 2 * shares["b"] == pytest.approx(1)  # one first place per game
 
 
 def test_mean_ci_is_a_student_t_interval():

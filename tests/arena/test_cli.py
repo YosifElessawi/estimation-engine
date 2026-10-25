@@ -19,6 +19,7 @@ def run_cli(capsys: pytest.CaptureFixture[str], *args: str) -> str:
 def test_prints_rsa_with_a_confidence_interval_and_elo(capsys: pytest.CaptureFixture[str]):
     out = run_cli(capsys, "--lineup", LINEUP, "--sets", "3", "--seed", "0")
     assert "RSA" in out
+    assert "1st place" in out
     assert "95% CI" in out
     assert "Elo" in out
     assert "heuristic" in out
@@ -45,6 +46,9 @@ def test_the_same_seed_gives_the_same_report(tmp_path: Path, capsys: pytest.Capt
     report1 = json.loads(first.read_text())
     report2 = json.loads(second.read_text())
     assert report1["report"] == report2["report"]
+    shares = {bot["name"]: bot["first_place"]["mean"] for bot in report1["report"]["bots"]}
+    assert shares["heuristic"] > shares["random"]
+    assert 2 * shares["heuristic"] + 2 * shares["random"] == pytest.approx(1)
     assert report1["run"]["workers"] == 1
     assert report2["run"]["workers"] == 2
 

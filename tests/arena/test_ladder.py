@@ -41,6 +41,8 @@ def test_rates_every_bot_from_one_run_per_pair(tmp_path: Path, capsys: pytest.Ca
     assert "400 (anchor)" in out
     summary = json.loads((tmp_path / "ladder.json").read_text())
     assert set(summary["ratings"]) == set(TINY.split(","))
+    assert "Stronger 1st" in out
+    assert all(0 <= pair["stronger_first_place"] <= 1 for pair in summary["pairs"])
     assert summary["ratings"]["random"] == 400
 
 

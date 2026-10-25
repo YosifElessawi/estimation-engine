@@ -2,6 +2,8 @@
 
 - **Relative Score Advantage (RSA):** a bot's Bola score minus the mean of the other three seats,
   averaged over all its Bolas, with a 95% Student-t confidence interval over duplicate sets.
+- **First place:** the share of its Bolas a bot finishes first (ties shared), the headline from
+  M4 on because winning the game is what counts; interval over sets like RSA.
 - **Elo:** a Bradley-Terry fit over pairwise results with RandomBot fixed at 400. Within each set,
   every pair of different bots is compared by score across the set: a win, a draw or a loss.
 """
@@ -43,6 +45,20 @@ def set_scores(result: SetResult, lineup: Sequence[str]) -> dict[str, float]:
     """Each bot's mean Bola score over its Bolas in one set."""
     return _per_bot(
         lineup, ((bot, float(result.scores[k][seat])) for bot, k, seat in _seat_games(lineup))
+    )
+
+
+def first_place_share(scores: Sequence[int], seat: int) -> float:
+    """``seat``'s share of first place in one game: 1, or 1/k when k seats tie on top (GAM-5)."""
+    top = max(scores)
+    return 1 / sum(1 for score in scores if score == top) if scores[seat] == top else 0.0
+
+
+def set_first_places(result: SetResult, lineup: Sequence[str]) -> dict[str, float]:
+    """Each bot's share of first places over its Bolas in one set (ties shared)."""
+    return _per_bot(
+        lineup,
+        ((bot, first_place_share(result.scores[k], seat)) for bot, k, seat in _seat_games(lineup)),
     )
 
 

@@ -22,8 +22,16 @@ from typing import Any
 
 from estimation.bots import make_bot
 
-from .duplicate import run_arena
-from .ratings import ANCHOR, ANCHOR_RATING, DEFAULT_PRIOR, PairRecord, bradley_terry, sweep_gap
+from .duplicate import SetResult, run_arena
+from .ratings import (
+    ANCHOR,
+    ANCHOR_RATING,
+    DEFAULT_PRIOR,
+    PairRecord,
+    bradley_terry,
+    set_first_places,
+    sweep_gap,
+)
 from .report import build_report, write_json
 
 DEFAULT_LADDER = (
@@ -60,6 +68,7 @@ class PairResult:
     upper_rsa: float
     upper_rsa_low: float | None
     upper_rsa_high: float | None
+    upper_first: float  # share of games one of the stronger bot's two seats finished first
     seconds: float  # 0 when reused
 
 
@@ -86,7 +95,16 @@ def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float)
     (pair,) = report["pairs"]
     record = PairRecord(pair["a"], pair["b"], pair["a_wins"], pair["draws"], pair["b_wins"])
     rsa = next(bot["rsa"] for bot in report["bots"] if bot["name"] == upper)
-    return PairResult(lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], seconds)
+    lineup = report["lineup"]
+    shares = [
+        set_first_places(
+            SetResult(r["index"], r["deal_seed"], tuple(tuple(s) for s in r["scores"]), ()),
+            lineup,
+        )[upper]
+        for r in report["set_results"]
+    ]
+    first = 2 * sum(shares) / len(shares)  # the stronger bot holds two of the four seats
+    return PairResult(lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], first, seconds)
 
 
 def _saved(path: Path, lineup: list[str], sets: int, seed: int) -> dict[str, Any] | None:
@@ -147,7 +165,7 @@ def format_ladder(
     )
     lines.append(
         f"{'Pair (weaker vs stronger)':<{pair_width}}  {'Stronger won':>12}  {'Drew':>4}  "
-        f"{'Weaker won':>10}  Stronger RSA per game (95% CI)"
+        f"{'Weaker won':>10}  {'Stronger 1st':>12}  Stronger RSA per game (95% CI)"
     )
     for r in results:
         upper_wins, draws, lower_wins = r.record.b_wins, r.record.draws, r.record.a_wins
@@ -160,7 +178,7 @@ def format_ladder(
         )
         lines.append(
             f"{f'{r.lower} vs {r.upper}':<{pair_width}}  {upper_wins:>12,}  {draws:>4,}  "
-            f"{lower_wins:>10,}  {_signed(r.upper_rsa)} {ci}"
+            f"{lower_wins:>10,}  {f'{100 * r.upper_first:.0f}%':>12}  {_signed(r.upper_rsa)} {ci}"
         )
     lines.append("")
     lines.append(
@@ -262,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
                 "stronger_rsa": r.upper_rsa,
                 "stronger_rsa_low": r.upper_rsa_low,
                 "stronger_rsa_high": r.upper_rsa_high,
+                "stronger_first_place": r.upper_first,
             }
             for r in results
         ],
