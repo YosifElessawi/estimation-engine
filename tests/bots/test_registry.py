@@ -1,5 +1,7 @@
 """Building bots by name, as the arena CLI does (SPEC §6 M2)."""
 
+from pathlib import Path
+
 import pytest
 
 from estimation.bots import BOT_NAMES, Bot, make_bot
@@ -7,10 +9,11 @@ from estimation.bots.heuristic import HeuristicBot, HeuristicConfig
 from estimation.bots.pimc import PIMCBot, PIMCConfig
 from estimation.bots.random_bot import RandomBot
 from estimation.engine import RulesConfig
+from tests.rl.helpers import make_checkpoint
 
 
-def test_random_heuristic_and_pimc_are_registered():
-    assert {"random", "heuristic", "pimc"} <= set(BOT_NAMES)
+def test_random_heuristic_pimc_and_rl_are_registered():
+    assert {"random", "heuristic", "pimc", "rl"} <= set(BOT_NAMES)
     assert isinstance(make_bot("random", 1), RandomBot)
     assert isinstance(make_bot("heuristic", 1), HeuristicBot)
 
@@ -42,9 +45,10 @@ def test_bots_are_built_for_the_rules_being_played():
     assert override.config.super_call_min == 9
 
 
-def test_every_bot_satisfies_the_bot_interface():
+def test_every_bot_satisfies_the_bot_interface(tmp_path: Path):
+    required = {"rl": f":checkpoint={make_checkpoint(tmp_path / 'net.pt')}"}
     for name in BOT_NAMES:
-        bot: Bot = make_bot(name, 0)
+        bot: Bot = make_bot(name + required.get(name, ""), 0)
         assert callable(bot.act)
 
 

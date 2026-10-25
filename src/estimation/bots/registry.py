@@ -3,7 +3,8 @@
 Options set fields of the bot's config dataclass, so ``heuristic:risk_aversion=0.5`` is a
 HeuristicBot with ``HeuristicConfig(risk_aversion=0.5)``. Any bot also takes ``noise`` and
 ``play_noise`` (0 to 1), which wrap it in a NoisyBot that plays that share of its decisions (or
-of its card plays) at random.
+of its card plays) at random. ``rl:checkpoint=<path>`` plays a trained self-play checkpoint (M4);
+PyTorch loads only when an rl bot is made.
 """
 
 import dataclasses
@@ -38,7 +39,19 @@ def _pimc(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     return PIMCBot(seed, configure(PIMCConfig(heuristic=heuristic, rules=rules), options, "pimc"))
 
 
-_FACTORIES: dict[str, BotFactory] = {"random": _random, "heuristic": _heuristic, "pimc": _pimc}
+def _rl(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    from .rl import RLBot, RLConfig  # PyTorch loads only when an rl bot is made
+
+    heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
+    return RLBot(seed, configure(RLConfig(heuristic=heuristic, rules=rules), options, "rl"))
+
+
+_FACTORIES: dict[str, BotFactory] = {
+    "random": _random,
+    "heuristic": _heuristic,
+    "pimc": _pimc,
+    "rl": _rl,
+}
 BOT_NAMES = tuple(_FACTORIES)
 NOISE_OPTIONS = ("noise", "play_noise")
 
@@ -94,6 +107,8 @@ def _parse(text: str, kind: type, label: str) -> object:
         if text.lower() in ("0", "false", "no", "off"):
             return False
         raise ValueError(f"{label} is not a true/false value")
+    if kind is str:
+        return text
     if kind is int or kind is float:
         try:
             return kind(text)

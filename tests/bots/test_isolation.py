@@ -4,6 +4,11 @@ Two guards: the bots package never touches the deal, a Bola or a ``hands`` attri
 every seat's cards; and a bot's choice never changes when the other seats' hidden cards do. The
 one exception is the bidding simulator, which builds Rounds of its own from hands it sampled
 (never a real game's), so it may name Round; the dynamic test checks it learns nothing hidden.
+
+The RL bot (M4) also reads the state encoder and the networks in ``estimation.rl``; every module
+it imports is held to the same static guard, and the encoder's features, like the bot's choices,
+must not change when another seat's hidden cards do. The trainer in ``estimation.rl`` runs real
+games, so it is outside the guard, but it shows the nets only these features.
 """
 
 import ast
@@ -11,13 +16,17 @@ import random
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from estimation.bots import Bot, HeuristicBot, PIMCBot, PIMCConfig, RandomBot
+from estimation.bots import Bot, HeuristicBot, PIMCBot, PIMCConfig, RandomBot, make_bot
 from estimation.engine import Bola, Phase, Round
 from estimation.engine.cards import SUIT_MASKS
+from estimation.rl.encoder import encode
+from tests.rl.helpers import make_checkpoint
 
-BOTS = Path(__file__).resolve().parents[2] / "src" / "estimation" / "bots"
+SRC = Path(__file__).resolve().parents[2] / "src"
+BOTS = SRC / "estimation" / "bots"
 FORBIDDEN_NAMES = {"Round", "Bola", "deal", "play_random_round", "play_random_bola"}
 FORBIDDEN_IMPORTS = FORBIDDEN_NAMES | {"round", "bola"}  # names, and the engine's modules
 FORBIDDEN_MODULES = {"estimation.engine.round", "estimation.engine.bola", "estimation.arena"}
@@ -59,6 +68,50 @@ def test_the_bots_package_never_reaches_for_hidden_cards():
         f"{path.name}: {hit}"
         for path in files
         for hit in hidden_card_access(path.read_text(), allow_round=path.name in SIMULATORS)
+    ]
+    assert found == []
+
+
+def imported_modules(path: Path) -> set[str]:
+    """The ``estimation`` modules imported by the file at ``path``, as dotted names."""
+    package = ".".join(path.relative_to(SRC).with_suffix("").parts[:-1])
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parent = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
+                base = f"{parent}.{base}" if base else parent
+            found.add(base)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+    return {name for name in found if name.startswith("estimation")}
+
+
+def rl_modules_the_bot_reads() -> list[Path]:
+    """Every ``estimation.rl`` module the RL bot imports, directly or through another one."""
+    todo = [BOTS / "rl.py"]
+    seen: set[Path] = set()
+    while todo:
+        path = todo.pop()
+        for name in imported_modules(path):
+            if not name.startswith("estimation.rl"):
+                continue
+            target = SRC.joinpath(*name.split("."))
+            module = target / "__init__.py" if target.is_dir() else target.with_suffix(".py")
+            if module not in seen:
+                seen.add(module)
+                todo.append(module)
+    return sorted(seen)
+
+
+def test_the_rl_modules_behind_the_bot_never_reach_for_hidden_cards():
+    modules = rl_modules_the_bot_reads()
+    names = {path.name for path in modules}
+    assert {"encoder.py", "networks.py", "standings.py"} <= names
+    assert not names & {"selfplay.py", "record.py", "train.py", "imitation.py"}
+    found = [
+        f"{path.name}: {hit}" for path in modules for hit in hidden_card_access(path.read_text())
     ]
     assert found == []
 
@@ -147,6 +200,33 @@ def test_a_bots_choice_ignores_other_seats_hidden_cards(name: str, make: Callabl
             assert make().act(other.observation(me), other.legal_actions()) == make().act(
                 rnd.observation(me), rnd.legal_actions()
             ), name
+            seen.add(rnd.phase)
+            checked += 1
+    assert checked > 100
+    assert len(seen) >= 3
+
+
+def test_the_encoder_ignores_other_seats_hidden_cards():
+    checked = 0
+    for seed in range(12):
+        for rnd, other, me in swapped_positions(seed):
+            assert np.array_equal(encode(other.observation(me)), encode(rnd.observation(me)))
+            checked += 1
+    assert checked > 100
+
+
+@pytest.mark.parametrize("bidding", ["net", "heuristic"])
+def test_the_rl_bots_choice_ignores_other_seats_hidden_cards(bidding: str, tmp_path: Path):
+    path = make_checkpoint(tmp_path / "net.pt", seed=4)
+    spec = f"rl:checkpoint={path}" + (":heuristic_bidding=true" if bidding == "heuristic" else "")
+    bot = make_bot(spec, 5)
+    checked = 0
+    seen: set[Phase] = set()
+    for seed in range(12):
+        for rnd, other, me in swapped_positions(seed):
+            assert bot.act(other.observation(me), other.legal_actions()) == bot.act(
+                rnd.observation(me), rnd.legal_actions()
+            )
             seen.add(rnd.phase)
             checked += 1
     assert checked > 100
