@@ -300,7 +300,7 @@ Round 17 replays Hearts, then round 18 plays Diamonds and round 19 Clubs. The ga
 
 ## 4. Open Questions
 
-- [ ] **Super caller and the fixed trump (FIX-4).** After a super call, may the super caller itself bid the fixed trump later in that auction, for example by raising into it on its final turn? That keeps the fixed trump, so the round is not replayed. Not yet checked in the app. Working default: yes (`super_caller_may_bid_fixed=True`); the switch turns it off.
+- [ ] **Super caller and the fixed trump (FIX-4).** After a super call, may the super caller itself bid the fixed trump later in that auction, for example by raising into it on its final turn? That keeps the fixed trump, so the round is not replayed. Not yet checked in the app. Working default: yes (`super_caller_may_bid_fixed=True`), kept by Yosif on 2026-10-25 until he checks the app; the switch turns it off.
 
 When a new question comes up, add it here as a checkbox with its working default, tag the affected rule `[Default]`, and update §5.3 and the examples once it is answered.
 
