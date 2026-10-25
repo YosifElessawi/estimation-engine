@@ -247,6 +247,7 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
   const resultActions =
     frame.kind === "game_end" ? (
       <>
+        {game.mode !== "review" && <span className="small muted result__saved">Saved under Past games on the start page.</span>}
         {game.mode === "play" && (
           <button type="button" className="button button--primary" onClick={review}>
             Review with every hand

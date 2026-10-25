@@ -182,3 +182,22 @@ export interface FramesView {
 }
 
 export type SeekTarget = "trick" | "round_end" | "deal" | "end";
+
+export interface SavedSeat {
+  spec: string;
+  label: string;
+  elo: number | null;
+}
+
+export interface SavedGame {
+  id: string;
+  finished_at: string;
+  mode: "play" | "watch";
+  seed: number;
+  seed_chosen: boolean;
+  human_seat: number | null;
+  seats: SavedSeat[];
+  scores: number[];
+  winners: number[];
+  rounds: number;
+}

@@ -1,6 +1,6 @@
 // Calls to the FastAPI server, proxied by Next at /api.
 
-import type { BotView, FramesView, GameView, SeekTarget } from "./types";
+import type { BotView, FramesView, GameView, SavedGame, SeekTarget } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -48,4 +48,6 @@ export const api = {
       body: JSON.stringify({ action, frame }),
     }),
   review: (id: string) => call<GameView>(`/games/${id}/review`, { method: "POST" }),
+  history: () => call<SavedGame[]>("/history"),
+  reviewSaved: (id: string) => call<GameView>(`/history/${id}/review`, { method: "POST" }),
 };

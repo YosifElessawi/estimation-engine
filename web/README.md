@@ -42,6 +42,14 @@ checkout.
   own legal moves; the seed (which fixes the deal) stays hidden until the game ends. Once it is
   over, **Review with every hand** replays it in watch mode.
 
+## Past games
+
+Every game that reaches its end, played or watched, is saved to `runs/web/games.jsonl` under the
+project root (git-ignored): its seats, seed, final scores and every move. A game still in progress
+is never written, so a hidden seed stays hidden. The start page lists them under **Past games**:
+copy a seed, **Same deals** fills in the same seats and seed for a new game, and **Review**
+replays the game with every hand shown, even after the server restarts.
+
 ## Checks
 
 ```bash

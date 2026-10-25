@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import { formatElo } from "@/lib/seats";
-import type { BotView, GameView } from "@/lib/types";
+import type { BotView, GameView, SavedGame } from "@/lib/types";
+
+import { PastGames } from "./PastGames";
 
 type Mode = "watch" | "play";
 
@@ -79,6 +81,16 @@ export function Setup({ bots, loadError, onStart }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [past, setPast] = useState<SavedGame[]>([]);
+
+  useEffect(() => {
+    if (!bots) return;
+    api
+      .history()
+      .then(setPast)
+      .catch((e: unknown) => setError(`Could not load past games: ${e instanceof Error ? e.message : String(e)}`));
+  }, [bots]);
+
   const seats = useMemo(() => chosen ?? (bots ? defaults(bots) : null), [chosen, bots]);
   const ladder = useMemo(
     () => (bots ?? []).filter((bot) => bot.elo !== null).sort((a, b) => (b.elo ?? 0) - (a.elo ?? 0)),
@@ -90,6 +102,27 @@ export function Setup({ bots, loadError, onStart }: Props) {
     const next = [...seats];
     next[seat] = spec;
     setChosen(next);
+  };
+
+  const sameDeals = (game: SavedGame) => {
+    const current = seats ?? defaults(bots ?? []);
+    setMode(game.human_seat === null ? "watch" : "play");
+    if (game.human_seat !== null) setHumanSeat(game.human_seat);
+    setChosen(game.seats.map((seat, i) => (i === game.human_seat ? (current[i] ?? "heuristic") : seat.spec)));
+    setSeed(String(game.seed));
+    setError(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const review = async (game: SavedGame) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onStart(await api.reviewSaved(game.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
   };
 
   const start = async () => {
@@ -137,6 +170,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
         )}
       </section>
 
+      <div className="setup__side">
       <section className="setup__card">
         <div className="mode-switch" role="tablist" aria-label="Mode">
           {(["watch", "play"] as const).map((m) => (
@@ -216,6 +250,8 @@ export function Setup({ bots, loadError, onStart }: Props) {
           {busy ? "Dealing…" : mode === "watch" ? "Deal and watch" : "Deal me in"}
         </button>
       </section>
+      <PastGames games={past} onSameDeals={sameDeals} onReview={(game) => void review(game)} />
+      </div>
     </main>
   );
 }
