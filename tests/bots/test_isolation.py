@@ -13,16 +13,31 @@ games, so it is outside the guard, but it shows the nets only these features.
 
 import ast
 import random
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from estimation.bots import Bot, HeuristicBot, PIMCBot, PIMCConfig, RandomBot, make_bot
-from estimation.engine import Bola, Phase, Round
+from estimation.engine import Bola, Observation, Phase, Round, RulesConfig
 from estimation.engine.cards import SUIT_MASKS
+from estimation.rl.config import config_from_dict
 from estimation.rl.encoder import encode
+from estimation.rl.networks import BiddingNet, CardPlayNet, state_dict_of
+from estimation.rl.record import record_game
+from estimation.rl.selfplay import (
+    HEURISTIC,
+    LEARNER,
+    ChunkTask,
+    GamePlan,
+    NetWeights,
+    SeatPlan,
+    play_chunk,
+)
+from estimation.rl.standings import RewardConfig
 from tests.rl.helpers import make_checkpoint
 
 SRC = Path(__file__).resolve().parents[2] / "src"
@@ -231,3 +246,33 @@ def test_the_rl_bots_choice_ignores_other_seats_hidden_cards(bidding: str, tmp_p
             checked += 1
     assert checked > 100
     assert len(seen) >= 3
+
+
+def test_the_trainer_shows_each_decision_only_the_acting_seats_observation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Training games (self-play and the PIMC recording) ask a Bola for observations only of the
+    seat to act, apart from one read of public fields (round number, fixed trumps left) to
+    count the rounds left for the match-win reward."""
+    calls: list[tuple[int, int | None, str]] = []
+    original = Bola.observation
+
+    def spy(self: Bola, seat: int) -> Observation:
+        calls.append((seat, self.current_player, sys._getframe(1).f_code.co_name))
+        return original(self, seat)
+
+    monkeypatch.setattr(Bola, "observation", spy)
+    torch.manual_seed(0)
+    weights = NetWeights(16, state_dict_of(CardPlayNet(16)), state_dict_of(BiddingNet(16)))
+    learner, heuristic = SeatPlan(LEARNER), SeatPlan(HEURISTIC)
+    plans = (
+        GamePlan(0, "self", 5, 6, (learner, learner, learner, learner)),
+        GamePlan(1, "heuristic", 7, 8, (heuristic, learner, heuristic, heuristic)),
+    )
+    task = ChunkTask(plans, weights, {}, 0.1, 0.1, 0.1, True, True, RulesConfig(), RewardConfig())
+    play_chunk(task)
+    record_game(0, config_from_dict({"record": {"pimc_samples": 2}}))
+    assert len(calls) > 1000
+    for seat, current, caller in calls:
+        assert seat == current or caller == "_rounds_left", (seat, current, caller)
+    assert {caller for seat, current, caller in calls if seat != current} == {"_rounds_left"}

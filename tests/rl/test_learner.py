@@ -94,3 +94,15 @@ def test_self_play_card_updates_keep_the_imitation_loss_as_an_anchor():
     free = Learner(CardPlayNet(32), BiddingNet(32), unanchored_config, torch.device("cpu"), anchor)
     assert free.anchor is None
     assert free.update(samples(256, 4, 0), samples(256, 3, 1), 0, train_card=True).anchor_loss == 0
+
+
+def test_card_updates_can_skip_the_suit_relabelling():
+    config = config_from_dict(
+        {"seed": 1, "selfplay": {"batch": 64, "epochs": 1, "augment_cards": False}}
+    )
+    torch.manual_seed(0)
+    plain = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    assert plain.augmenter is None
+    report = plain.update(samples(128, 4, 0), samples(128, 3, 1), 0, train_card=True)
+    assert report.card_steps == 2
+    assert learner().augmenter is not None  # on by default

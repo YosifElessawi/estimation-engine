@@ -7,7 +7,11 @@ import pytest
 
 from estimation.bots import Bot, HeuristicBot, RandomBot
 from estimation.engine import (
+    CLUBS,
+    DASH_CALL,
+    DIAMONDS,
     HEARTS,
+    NO_DASH_CALL,
     PASS,
     SPADES,
     WITH,
@@ -36,6 +40,7 @@ from estimation.rl.encoder import (
 )
 from tests.engine.helpers import NO_DASH_ROUND, bid, build_play, est, new_round, run
 
+NO, DASH = NO_DASH_CALL, DASH_CALL
 PLAYED = OFFSETS["played"]
 TABLE = OFFSETS["table"]
 UNSEEN = OFFSETS["unseen"]
@@ -298,3 +303,89 @@ def test_encoding_is_a_pure_function_of_the_observation():
     rnd, _ = g1_round()
     obs = rnd.observation(2)
     assert np.array_equal(encode(obs), encode(dataclasses.replace(obs)))
+
+
+def g3_round(rules: RulesConfig) -> Round:
+    """SPEC G3, ready for play: seat 2 Dash Calls, Caller seat 3 at 6 Clubs, seats 0 and 1
+    estimate 4 each (total 14, Over)."""
+    hands, _ = build_play(CLUBS, leader=3, targets=(4, 3, 0, 6))
+    rnd = run(Round.new(1, hands, config=rules), NO, NO, DASH, NO)
+    return run(rnd, bid(5, DIAMONDS), PASS, bid(6, CLUBS), PASS, PASS, est(4), est(4))
+
+
+@pytest.mark.parametrize(
+    ("rules", "dash_win"), [(RulesConfig(), 25), (RulesConfig(dash_replaces_base=False), 35)]
+)
+def test_stakes_of_a_dash_call_in_an_over_round_follow_G3(rules: RulesConfig, dash_win: int):
+    obs = g3_round(rules).observation(0)
+    assert obs.over
+    win, lose = stakes(obs, 2, rules)
+    assert win == dash_win
+    assert lose == (-25 if rules.dash_replaces_base else -26)
+    assert stakes(obs, 3, rules) == (26, -11)  # Caller at 6: 10 + 6 + 10, or -1 - 10
+
+
+@pytest.mark.parametrize(
+    ("rules", "caller"),
+    [(RulesConfig(), (74, -42)), (RulesConfig(super_call_scoring=False), (28, -11))],
+)
+def test_stakes_of_a_super_call_follow_G5(rules: RulesConfig, caller: tuple[int, int]):
+    hands, _ = build_play(SPADES, leader=0, targets=(8, 2, 1, 2))
+    rnd = run(Round.new(1, hands, config=rules), *NO_DASH_ROUND)
+    run(rnd, bid(8, SPADES), PASS, PASS, PASS, PASS, est(2), est(1), est(3))
+    # G5: 64 for the super call (or 10 + 8 without SCR-6) and 10 for the Caller.
+    assert stakes(rnd.observation(1), 0, rules) == caller
+
+
+def test_context_and_player_blocks_once_estimation_is_complete():
+    obs = g3_round(RulesConfig()).observation(3)
+    features = encode(obs)
+    assert features[CONTEXT + 3] == 1.0  # play phase
+    assert features[CONTEXT + 17] == pytest.approx(1 / 13)  # total 14: Over by 1
+    assert features[CONTEXT + 18] == 1.0  # estimation complete
+    assert features[CONTEXT + 19] == 0.0  # no carry
+    assert features[CONTEXT + 20] == 0.0  # one Caller, no With: x1
+    assert features[CONTEXT + 21] == 0.0  # no Risk
+    assert features[CONTEXT + 22] == 0.0  # no trick played yet
+    # Seat 3 itself (relative 0) is the Caller at 6; seat 2 (relative 3) Dash Called.
+    assert player(features, 0, 0) == pytest.approx(6 / 13)
+    assert player(features, 0, 1) == 1.0
+    assert player(features, 0, 3) == pytest.approx(6 / 13)
+    assert (player(features, 0, 6), player(features, 0, 7)) == (1.0, 0.0)
+    assert player(features, 0, 8) == 1.0
+    assert player(features, 3, 10) == 1.0
+    assert player(features, 3, 0) == 0.0
+    assert player(features, 3, 1) == 1.0  # a Dash caller's estimate of 0 is known
+    assert player(features, 2, 11) == 1.0  # seat 1 was the last estimator
+
+
+def test_tricks_and_alive_or_broken_follow_play():
+    rnd, cards = g1_round()
+    for card in cards[:40]:
+        rnd.step(68 + card)
+    obs = rnd.observation(rnd.current_player or 0)
+    features = encode(obs)
+    left = 13 - len(obs.tricks)
+    assert features[CONTEXT + 22] == pytest.approx(len(obs.tricks) / 13)
+    for r in range(4):
+        seat = (obs.seat + r) % 4
+        estimate, won = obs.estimates[seat], obs.tricks_won[seat]
+        assert estimate is not None
+        alive = won <= estimate <= won + left
+        assert player(features, r, 2) == pytest.approx(won / 13)
+        assert player(features, r, 3) == pytest.approx((estimate - won) / 13)
+        assert (player(features, r, 6), player(features, r, 7)) == (float(alive), float(not alive))
+
+
+def test_carry_and_the_three_call_double_set_the_multiplier():
+    # G6's auction: Caller seat 0 at 4 Clubs, seat 1 With, seat 2 estimates 4 and is With too,
+    # so 3 Callers and Withs double the round; with a carry of 2 it plays x4.
+    hands, _ = build_play(CLUBS, leader=0, targets=(5, 3, 2, 3))
+    rnd = run(Round.new(1, hands, carry=2), *NO_DASH_ROUND)
+    run(rnd, bid(4, CLUBS), WITH, PASS, PASS, PASS, PASS, est(4), est(4), est(0))
+    obs = rnd.observation(0)
+    features = encode(obs)
+    assert features[CONTEXT + 19] == pytest.approx(1 / 3)  # log2(2) / 3
+    assert features[CONTEXT + 20] == pytest.approx(2 / 3)  # log2(4) / 3
+    # Every stake is scaled by the x4: the Caller wins 10 + 4 + 10 = 24, times 4.
+    assert stakes(obs, 0, RulesConfig()) == (96, -44)

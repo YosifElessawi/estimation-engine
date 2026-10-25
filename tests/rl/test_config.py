@@ -72,3 +72,20 @@ def test_derived_seeds_depend_on_every_key():
     seeds = {derive_seed(0, 1, 2), derive_seed(0, 2, 1), derive_seed(1, 1, 2), derive_seed(0, 1)}
     assert len(seeds) == 4
     assert derive_seed(0, 1, 2) == derive_seed(0, 1, 2)
+
+
+def test_the_committed_m4_config_holds_the_decided_design():
+    config = load_config(Path(__file__).resolve().parents[2] / "configs" / "m4.toml")
+    assert config.seed == 0
+    # Yosif's M4 decisions (SPEC §6 M4, 2026-10-25).
+    assert (config.reward.ahead_weight, config.reward.behind_weight) == (1.0, 0.5)
+    assert config.reward.win_blend > 0
+    mix = config.opponents
+    assert (mix.self_play, mix.heuristic, mix.pimc) == (0.70, 0.15, 0.15)
+    assert set(mix.pimc_samples) == {4, 5, 6, 7, 8}
+    assert config.record.pimc_samples == 30  # the M3 PIMC bot is the warm start's teacher
+    # The design changes recorded in the M4 report.
+    assert config.reward.normalize_weights
+    assert config.selfplay.card_anchor_weight > 0
+    assert config.selfplay.bid_temperature_start > 0
+    assert config.nets.hidden == 384
