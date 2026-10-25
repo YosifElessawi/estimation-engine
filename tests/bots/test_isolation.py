@@ -1,7 +1,9 @@
 """Bots see only their own Observation (CLAUDE.md hard rule, SPEC §6 M2).
 
-Two guards: the bots package never touches the deal, a Round or a Bola, which hold every seat's
-cards; and a bot's choice never changes when the other seats' hidden cards do.
+Two guards: the bots package never touches the deal, a Bola or a ``hands`` attribute, which hold
+every seat's cards; and a bot's choice never changes when the other seats' hidden cards do. The
+one exception is the bidding simulator, which builds Rounds of its own from hands it sampled
+(never a real game's), so it may name Round; the dynamic test checks it learns nothing hidden.
 """
 
 import ast
@@ -22,22 +24,28 @@ FORBIDDEN_MODULES = {"estimation.engine.round", "estimation.engine.bola", "estim
 FORBIDDEN_ATTRIBUTES = FORBIDDEN_IMPORTS | {"hands", "_hands"}
 
 
-def hidden_card_access(source: str) -> list[str]:
+SIMULATORS = {"bid_search.py"}  # build imagined Rounds from their own sampled hands
+
+
+def hidden_card_access(source: str, allow_round: bool = False) -> list[str]:
     """Every way ``source`` could reach another seat's cards: importing or naming the deal, a
     Round or a Bola (directly, through a module alias or by a getattr string), or reading a
-    ``hands`` attribute."""
+    ``hands`` attribute. With ``allow_round`` it may import and name ``Round`` itself."""
     found: list[str] = []
+    allowed = {"Round"} if allow_round else set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module in FORBIDDEN_MODULES or module.startswith("estimation.arena"):
                 found.append(f"imports {module}")
-            found += [f"imports {a.name}" for a in node.names if a.name in FORBIDDEN_IMPORTS]
+            found += [
+                f"imports {a.name}" for a in node.names if a.name in FORBIDDEN_IMPORTS - allowed
+            ]
         elif isinstance(node, ast.Import):
             found += [f"imports {a.name}" for a in node.names if a.name in FORBIDDEN_MODULES]
-        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES - allowed:
             found.append(f"uses {node.id}")
-        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES:
+        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES - allowed:
             found.append(f"reads .{node.attr}")
         elif isinstance(node, ast.Constant) and node.value in FORBIDDEN_ATTRIBUTES:
             found.append(f"names {node.value!r}")
@@ -48,9 +56,20 @@ def test_the_bots_package_never_reaches_for_hidden_cards():
     files = sorted(BOTS.rglob("*.py"))
     assert files
     found = [
-        f"{path.name}: {hit}" for path in files for hit in hidden_card_access(path.read_text())
+        f"{path.name}: {hit}"
+        for path in files
+        for hit in hidden_card_access(path.read_text(), allow_round=path.name in SIMULATORS)
     ]
     assert found == []
+
+
+def test_the_simulator_exception_still_forbids_real_games_and_the_deal():
+    source = "from estimation.engine import Round, Bola, deal\nRound.replay\nx.hands"
+    assert hidden_card_access(source, allow_round=True) == [
+        "imports Bola",
+        "imports deal",
+        "reads .hands",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -116,6 +135,7 @@ def swapped_positions(seed: int) -> list[tuple[Round, Round, int]]:
         ("heuristic", lambda: HeuristicBot()),
         ("random", lambda: RandomBot(5)),
         ("pimc", lambda: PIMCBot(5, PIMCConfig(samples=4, oversample=2))),
+        ("bid search", lambda: PIMCBot(5, PIMCConfig(samples=2, bid_search=True, bid_samples=3))),
     ],
 )
 def test_a_bots_choice_ignores_other_seats_hidden_cards(name: str, make: Callable[[], Bot]):
