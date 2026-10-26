@@ -30,7 +30,7 @@ A bot that plays **Estimation**, the 4-player trick-taking card game, by the rul
 
 - Four players, each for themselves, 13 cards each; play goes counterclockwise. A game is 13 open rounds and then 5 fixed-trump rounds, and the most points wins.
 - Rounds 1-13 open with an optional **Dash Call**: a promise to take zero tricks. Starting with the first seat, each player decides in turn, and everyone sees each Dash Call as it is made.
-- Then an **auction** for trump. A bid is a number of tricks (4 to 13) plus a trump: Sans (no trump) > Spades > Hearts > Diamonds > Clubs. When everyone else has passed, the top bidder may still raise once. The winner is the **Caller**. Saying **With** at the top bid's number joins it and scores like the Caller, as long as the final bid stays in that trump. Saying With does not stop you bidding later.
+- Then an **auction** for trump. A bid is a number of tricks (4 to 13) plus a trump: Sans (no trump) > Spades > Hearts > Diamonds > Clubs. When everyone else is out, the top bidder may still raise once. The winner is the **Caller**. Saying **With** at the top bid's number joins it and ends your bidding; if that player raises, you answer: join the new number, stay at yours, or outbid. A player outbid in their own trump who passes is held at their bid. When the auction ends, everyone held in its trump is **With**: scored like the Caller, with that number as their estimate.
 - The others **estimate** how many tricks they will take, never more than the Caller. Estimates can never total 13, so someone always fails. A total of 14 or more is an **Over** round, 12 or less an **Under** round. The last estimator takes a **Risk** for every 2 the total is off 13.
 - Take exactly your estimate to win: +10 plus your estimate. Miss and you lose the difference. Being Caller or With, each Risk, and being the only winner or only loser each add or subtract 10. In place of the +10 plus estimate, a Dash Call is worth 25 (Over) or 33 (Under), and a **super call** of 8 or more is worth the estimate squared (8 gives +64, or -32 on a miss). A round where 3 or more players are Caller or With counts double.
 - Rounds 14-18 have fixed trumps (Sans, Spades, Hearts, Diamonds, Clubs), no Dash Call and no auction: everyone estimates in turn, with no minimum, and the highest estimate becomes Caller. A super call (8 or more in another trump) opens bidding, and if the trump ends up changed, that fixed trump is replayed in the next round.
@@ -53,8 +53,9 @@ A bot that plays **Estimation**, the 4-player trick-taking card game, by the rul
 | Final turn | The top bidder's last chance to raise, once everyone else is out of the auction (AUC-3) |
 | Caller | The winner of the auction, or a super caller. In a fixed-trump round without a super call, the player with the highest estimate. |
 | `c` | The Caller's trick count |
+| Held call | A bidder's latest call in the auction: the last bid they made, or the bid they said With to (AUC-2) |
 | With | A player scored like the Caller (AUC-2, AUC-4, EST-4, FIX-3) |
-| `w` | The trick count a With player joined at in the auction |
+| `w` | The trick count a With player is held at (AUC-4) |
 | Super call | A call of 8 or more tricks by the Caller or a With player, scored by SCR-6. In a fixed-trump round, also the way to open bidding and change the trump (FIX-4). |
 | Estimate `B`, tricks `T` | Tricks a player commits to, and tricks they actually take |
 | Last estimator | The player who makes the final estimate of the round |
@@ -114,44 +115,51 @@ stateDiagram-v2
 
 ### 2.6 Auction (Open Rounds)
 
-- **AUC-1** The bidders are the non-Dash players. The opener (GAM-2) acts first; turns then go counterclockwise, lap after lap, among bidders who have not passed, skipping whoever holds the top bid. `[Default]`
+- **AUC-1** The bidders are the non-Dash players. The opener (GAM-2) acts first; turns then go counterclockwise, lap after lap, among bidders who are still in, skipping whoever holds the top bid. A bidder is out once they pass or say With. `[Default]` order, `[Play]` With takes you out
 - **AUC-2** On their turn, a bidder does exactly one of:
   - **Bid** a `(tricks, trump)` that beats the current top bid (TBL-6). The lowest bid is 4 Clubs, the highest 13 Sans. `[Page]`
-  - **With**, only while another player holds the top bid and you are not already With on it: say With at that bid's trick count `w`, joining its trump. With is only possible at the top bid's number. Saying With does not end your bidding: on a later turn you may still bid (which drops your With), say With on a newer top bid, or pass (which keeps your With). `[Play]`
+  - **With**, only while another player holds the top bid: join that bid at its trick count `w` and its trump. With is only possible at the top bid's number, and it ends your bidding: from then on you act only to answer that player's raise (AUC-3). `[Play]`
   - **Pass**: out for the rest of the auction. `[Page]`
-- **AUC-3** When every bidder except the top bidder has passed, the top bidder gets one **final turn**: keep the bid (Pass), or raise it to any higher bid, with more tricks or the same tricks in a stronger trump. Then the auction ends: the top bidder is Caller, and their bid's trump is the round's trump. If nobody bid at all, the round is skipped (GAM-3). `[Page]`, `[Play]` final turn
-- **AUC-4** **With follows the trump.** A With player stays With if the auction ends on a bid in the trump they joined, however high it went. If the final bid is in another trump, whether their bidder switched or another player won, they lose With and estimate as a normal player. Several players may be With. `[Play]`
-- **AUC-5** If a bidder is the only non-Dash player, they may not bid 13 tricks, on either turn: nobody would estimate after them, so the total would be 13. `[Default]`
 
-The auction always ends: bids only go up, and nobody can say With twice on the same top bid.
+  Each bidder **holds** their latest call: the last bid they made, or the bid they said With to. Passing keeps it. `[Play]`
+- **AUC-3** When every bidder except the top bidder is out, the top bidder gets one **final turn**: keep the bid (Pass), or raise it to any higher bid, with more tricks or the same tricks in a stronger trump. After a raise, each player With on that top bidder answers at once, one at a time counterclockwise from it: say With at the new bid, stay (Pass) and keep their held call, or outbid it. If nobody outbids, the auction ends: the top bidder is Caller, and their bid's trump is the round's trump. If an answer outbids, that player holds the top bid, the old top bidder is back in, and the auction carries on by AUC-1. If nobody bid at all, the round is skipped (GAM-3). `[Page]` final turn, `[Play]` answers, `[Default]` answer order
+- **AUC-4** **With follows the trump.** When the auction ends, every other non-Dash player whose held call is in the round's trump is With, held at that call's trick count `w`: for example a player outbid in their own trump who then passed, or a With player who stayed when their bidder raised in the same trump, however high it went. A player whose held call is in another trump is not With. A With player whose bidder is outbid by someone else does not answer later raises: they stay out, keeping their held call. Several players may be With. `[Play]`
+- **AUC-5** If a bidder is the only non-Dash player, they may not bid 13 tricks, on either turn: nobody would estimate after them, so the total would be 13. `[Default]`
+- **AUC-6** **Nobody left to estimate.** If the move that ends the auction would leave every player other than the Caller With or a Dash caller, with the Caller's `c`, the With players' `w` and the Dash callers' 0 totalling 13, that move is not allowed: the top bidder must raise rather than keep, and a With player answering a raise must answer differently. `[Play]`
+
+(Changed 2026-10-26, Yosif: With ends your bidding and you answer your bidder's raises; a player outbid in their own trump is held at their bid; With players' estimates are fixed at their `w`; AUC-6 added.)
+
+The auction always ends: bids only go up, a player who is out comes back only to answer a raise or after outbidding on an answer, and each raise is answered once.
 
 Examples:
-- **L1** (With survives a raise in the same trump) F = seat 0. Seat 0 bids 4 Hearts, seat 1 says With, seats 2 and 3 pass, and seat 1 then passes too, keeping its With. On its final turn seat 0 raises to 6 Hearts. Seat 0 is Caller at 6 Hearts and seat 1 is still With (`w = 4`), so its legal estimates are exactly 4, 5 and 6. Had seat 0 raised to 5 Spades instead, seat 1 would lose With and could estimate 0-5. `[Play]`
-- **L2** (minimum raise) With a top bid of 5 Hearts held by another player, and no With on it yet, the legal actions are 5 Spades, 5 Sans, every bid of 6-13 tricks, With and Pass: 44 actions. On the top bidder's own final turn they are the same bids and Pass: 43 actions.
+- **L1** (answering a raise; held when outbid in your own trump) F = seat 0. Seat 0 bids 4 Hearts, seat 1 bids 5 Hearts, seat 2 says With (`w = 5`), and seat 3 passes. Seat 0 passes, holding 4 Hearts. Everyone but seat 1 is out, so seat 1 has its final turn and raises to 6 Hearts, and seat 2 answers With at 6. Seat 1 is Caller at 6 Hearts, seat 2 is With at 6, seat 0 is With at 4, and seat 3, the only player left to estimate, may estimate 0-6. Caller and two With make 3, so the round counts double (SCR-8). Had seat 2 answered Pass, it would be With at 5. `[Play]`
+- **L2** (minimum raise) With a top bid of 5 Hearts held by another player, the legal actions are 5 Spades, 5 Sans, every bid of 6-13 tricks, With and Pass: 44 actions. On the top bidder's own final turn they are the same bids and Pass: 43 actions.
 - **L3** (lone bidder) Seats 0, 1 and 2 Dash Call. Seat 3's legal actions are every bid of 4-12 tricks and Pass: 46 actions, no 13-trick bids and no With. If it bids, it then gets its final turn.
+- **L10** (With lost to another trump) F = seat 0. Seat 0 bids 4 Hearts, seat 1 says With, seat 2 bids 5 Spades, seat 3 passes and seat 0 passes. Seat 2 keeps 5 Spades on its final turn. Seats 0 and 1 hold Hearts calls, so neither is With: seats 3, 0 and 1 estimate 0-5, in that order. Seat 1 never answered seat 2's bid, because seat 2 is not the player it joined.
+- **L11** (outbid in another trump, own trump wins) F = seat 0. Seat 0 bids 4 Hearts, seat 1 bids 5 Spades, seat 2 bids 6 Hearts, and seats 3, 0 and 1 pass. Seat 2 keeps 6 Hearts on its final turn. Seat 0 holds 4 Hearts, so it is With at 4 even though it was outbid in Spades. Seat 1 holds 5 Spades and is not With: seats 3 and 1 estimate 0-6, in that order. `[Play]`
 
 ### 2.7 Estimation
 
 EST-1 to EST-4 apply when the Caller is known before estimation: open rounds, and fixed-trump rounds after a super call (FIX-4). EST-5 to EST-7 apply to every round.
 
 - **EST-1** The Caller's estimate is their winning trick count `c`. `[Page]`
-- **EST-2** The other non-Dash players estimate one at a time, counterclockwise, starting from the seat after the Caller. `[Play]`
-- **EST-3** A With player from the auction may estimate `w` to `c`. Every other estimating player may estimate 0 to `c`. `[Page]` cap of `c`, `[Play]` With range
+- **EST-2** Each With player from the auction has the trick count `w` they are held at (AUC-4) as their estimate, and does not estimate again. The other non-Dash players estimate one at a time, counterclockwise, starting from the seat after the Caller. `[Play]`
+- **EST-3** Every estimating player may estimate 0 to `c`. `[Page]` cap of `c`
 - **EST-4** A player who estimates exactly `c` is With. `[Page]`
-- **EST-5** **Sum rule:** the last estimator may not choose a value that makes the four estimates total 13 (Dash callers count as 0). If that leaves a With player no allowed value from `w` to `c`, their lower limit drops to 0 for this choice and they stay With. `[Page]` rule, `[Default]` edge case
+- **EST-5** **Sum rule:** the last estimator may not choose a value that makes the four estimates total 13 (Dash callers count as 0, With players as their `w`). When nobody estimates, AUC-6 has already kept the total off 13. `[Page]` rule, `[Play]` AUC-6
 - **EST-6** A total of 14 or more makes the round **Over**; 12 or less makes it **Under**. `[Page]`
-- **EST-7** **Risk:** the last estimator takes `abs(total - 13) // 2` Risks. Totals 12-14 give 0, 10-11 and 15-16 give 1, 8-9 and 17-18 give 2, and so on. One exception: when every player other than the Caller Dash Called, nobody estimates, so nobody takes Risk. `[Page]` rule, `[Default]` exception
+- **EST-7** **Risk:** the last estimator takes `abs(total - 13) // 2` Risks. Totals 12-14 give 0, 10-11 and 15-16 give 1, 8-9 and 17-18 give 2, and so on. One exception: when every player other than the Caller is With or Dash Called, nobody estimates, so nobody takes Risk. `[Page]` rule, `[Default]` exception
 
 Examples:
 - **L4** (sum rule) Caller seat 0 at 5. Seat 1 estimates 3, seat 2 estimates 4. Seat 3, the last estimator, may estimate 0, 2, 3, 4 or 5 (1 would make 13).
-- **L5** (With floor drops) F = seat 0. Seat 0 bids 6 Hearts, seats 1 and 2 pass, seat 3 says With (`w = 6`) and then passes, and seat 0 keeps its bid on its final turn. Seat 1 estimates 0 and seat 2 estimates 1. Seat 3 is last, and 6 would make 13, so seat 3 may estimate 0-5 and is still With.
+- **L5** (nobody left to estimate, AUC-6) F = seat 0. Seat 3 Dash Calls. Seat 0 bids 4 Hearts, seat 1 says With (`w = 4`), seat 2 bids 5 Hearts, and seat 0 passes, holding 4 Hearts. On its final turn seat 2 may not keep 5 Hearts: seats 0 and 1 would both be With at 4, and 5 + 4 + 4 + 0 = 13 with nobody left to estimate. It may raise, for example to 6 Hearts (total 14), or to 5 Spades, after which seats 0 and 1 hold Hearts calls, are not With, and estimate 0-5.
 
 ### 2.8 Fixed-Trump Rounds (14 Onward)
 
 - **FIX-1** After round 13, each round plays the next fixed trump still to be played, in this order: Sans, Spades, Hearts, Diamonds, Clubs. Without super calls these are rounds 14-18. `[Page]` order, `[Play]` replays (FIX-5)
 - **FIX-2** There is no Dash Call and no auction. Starting with F and going counterclockwise, each player estimates 0-13 under the fixed trump; nobody has to reach 4. The sum rule (EST-5) and Risk (EST-7) apply to the last estimator. `[Play]` no Dash Call and no minimum, `[Default]` order
 - **FIX-3** After all four estimates, the player with the highest estimate is Caller; on a tie, whoever said it first. Every other player with the same estimate is With. `[Page]` highest estimate is Caller, `[Play]` first one wins ties
-- **FIX-4** **Super call:** on their turn, instead of estimating, a player may bid 8 or more tricks in a trump other than the fixed one. All estimates are cleared and the bid opens an auction, which runs like AUC-1 to AUC-4 (With and the final turn included), starting with the player after the super caller. Answers may be in any trump, the fixed one included. So may the super caller's own later bids, its final turn included; with `super_caller_may_bid_fixed=False` they must stay out of the fixed trump (§4). The winner is Caller, their bid's trump is the round's trump, and estimation restarts as in 2.7. `[Play]` reset and answering, `[Default]` details and the super caller's later bids
+- **FIX-4** **Super call:** on their turn, instead of estimating, a player may bid 8 or more tricks in a trump other than the fixed one. All estimates are cleared and the bid opens an auction, which runs like AUC-1 to AUC-6 (With, answers and the final turn included), starting with the player after the super caller, who holds the super call. Answers may be in any trump, the fixed one included. So may the super caller's own later bids, its final turn included; with `super_caller_may_bid_fixed=False` they must stay out of the fixed trump (§4). The winner is Caller, their bid's trump is the round's trump, and estimation restarts as in 2.7. `[Play]` reset and answering, `[Default]` details and the super caller's later bids
 - **FIX-5** **Replay:** if a super call leaves the round with a trump other than the fixed one, the round is scored as usual and the next round plays the same fixed trump again. So the game ends only once all five fixed trumps have been played. Safety cap: after `max_fixed_replays` replays in one game (default 20), a changed round is no longer replayed. `[Play]` replay, `[Default]` cap
 
 Examples:
@@ -218,7 +226,7 @@ These are acceptance tests. G1-G7, G9 and G10 test `score_round` directly; G8 te
 
 Total 14: Over, 0 Risks. Seat 3 could not estimate 1 (L4).
 
-**G2. Under round with With and Risk.** Caller seat 1 at 4 Hearts. Seat 2 said With in the auction (`w = 4`). Estimates in order: seat 2, 3, 0.
+**G2. Under round with With and Risk.** Caller seat 1 at 4 Hearts. Seat 2 said With in the auction (`w = 4`), so its estimate is 4. Estimates in order: seat 3, 0.
 
 | Seat | Role | B | T | Result | Points | Score |
 | :--- | :--- | ---: | ---: | :--- | :--- | ---: |
@@ -260,7 +268,7 @@ Total 12: Under, 0 Risks (seat 3 could not estimate 5). With `dash_replaces_base
 
 With `super_call_scoring=False`, seat 0 scores 28 in (a) and -21 in (b). With `only_bonus_for_super_calls=False`, seat 0 scores -42 in (b).
 
-**G6. Everyone loses.** F = seat 0. Auction: seat 0 bids 4 Clubs, seat 1 says With, seats 2 and 3 pass, seat 1 then passes too (keeping its With), and seat 0 keeps its bid on its final turn. Estimates: seat 1 estimates 4 (its only option), seat 2 estimates 4 (so it is With too), seat 3 (last) estimates 0 (1 would make 13). Total 12: Under, 0 Risks. Tricks: 5, 3, 2, 3, so every player lost.
+**G6. Everyone loses.** F = seat 0. Auction: seat 0 bids 4 Clubs, seat 1 says With, seats 2 and 3 pass, and seat 0 keeps its bid on its final turn. Seat 1 is With at 4, so its estimate is 4. Estimates: seat 2 estimates 4 (so it is With too), seat 3 (last) estimates 0 (1 would make 13). Total 12: Under, 0 Risks. Tricks: 5, 3, 2, 3, so every player lost.
 
 | Config | Scores (seats 0, 1, 2, 3) | Next round |
 | :--- | :--- | :--- |
@@ -301,6 +309,8 @@ Round 17 replays Hearts, then round 18 plays Diamonds and round 19 Clubs. The ga
 ## 4. Open Questions
 
 - [ ] **Super caller and the fixed trump (FIX-4).** After a super call, may the super caller itself bid the fixed trump later in that auction, for example by raising into it on its final turn? That keeps the fixed trump, so the round is not replayed. Not yet checked in the app. Working default: yes (`super_caller_may_bid_fixed=True`), kept by Yosif on 2026-10-25 until he checks the app; the switch turns it off.
+
+- [ ] **A With player outbid in another trump (AUC-4).** You say With on Seat 1's 5 Hearts, then another player outbids with 6 Spades: your With is gone and you are out (confirmed 2026-10-26). If the auction still ends in Hearts, for example Seat 1 later bids 7 Hearts and wins, are you With at 5? Working default: yes, as for a bidder outbid in another trump whose own trump wins (L11).
 
 When a new question comes up, add it here as a checkbox with its working default, tag the affected rule `[Default]`, and update §5.3 and the examples once it is answered.
 
@@ -378,7 +388,7 @@ Python package `estimation`, engine code in `estimation.engine`.
   - `clone()`, and `Round.replay(round_no, hands, fixed_trump, carry, scores, config, actions)` to rebuild a round from its action log. Two rounds are in the same state when `phase`, `current_player`, `observation(seat)` for all four seats and (once `DONE`) `result()` are all equal.
   - `result() -> RoundResult`, once `phase == DONE`.
 - `Bola(seed, config=RulesConfig())`: a full game. It has the same `phase`, `current_player`, `legal_actions`, `step` and `observation`, plus `round_no`, `scores`, `history` (one `RoundResult` per round, skipped and replayed rounds included), `is_over` and `winners()` (every seat tied for the top score, GAM-5). It deals, picks each round's fixed trump, applies the carry, replays fixed-trump rounds whose trump changed (FIX-5) and moves to the next round by itself. Once `is_over`, it behaves like a round in `DONE`.
-- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, Dash callers, Caller and bid, With players with their `w` and trump, estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. Dash Calls are public as soon as they are made (DSH-2).
+- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, Dash callers, Caller and bid, With players with their `w` and trump (during the auction: the players out of it who hold a call in the top bid's trump), estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. Dash Calls are public as soon as they are made (DSH-2).
 - `RoundResult`: per seat: estimate, tricks, won, role flags (Dash caller, Caller, With, super call, last estimator), Risks, the points from each of SCR-1 to SCR-6, the multiplier and the final score. Per round: skipped, trump changed by a super call (so `Bola` replays it), estimate total, Over/Under, special-call count, all-lose and the carry for the next round. Under SCR-9 an all-lose round has multiplier 0, so components times multiplier always equals the final score.
 
 ### 5.5 Performance
