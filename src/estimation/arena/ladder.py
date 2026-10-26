@@ -8,7 +8,11 @@ finite, measured size, so ratings far from the anchor are measured too.
 Each pair's report is saved under ``<dir>/pairs/``, and a pair already played with the same sets
 and seed is reused, so the ladder can be extended or re-rated without replaying it.
 
-Example: ``uv run python -m estimation.arena.ladder --sets 200 --workers 5``.
+Every pair's games are saved under ``<dir>/games/`` (see ``games``), and a pair is reused only when
+it was played with the same lineup, sets, seed and code version and its games are on disk.
+
+Example: ``uv run python -m estimation.arena.ladder --sets 200 --workers 5``, or the full ladder
+with ``--preset v2 --workers 5``.
 """
 
 import argparse
@@ -23,6 +27,7 @@ from typing import Any
 from estimation.bots import make_bot
 
 from .duplicate import SetResult, run_arena
+from .games import code_version, make_header, write_games
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -57,6 +62,55 @@ DEFAULT_LADDER = (
 )
 """Calibrated by 20- and 50-set pilots so that each bot wins roughly 60-95% of its sets against
 the one below it."""
+
+M4 = "rl:checkpoint=runs/m4/checkpoints/"
+STAGED_FINAL = "rl:checkpoint=runs/m4-staged/checkpoints/staged-final.pt"
+V2_LADDER = (
+    *DEFAULT_LADDER[:11],  # random up to HeuristicBot
+    M4 + "iter-0010.pt",
+    "pimc:samples=1:play_noise=0.3",
+    "pimc:samples=1",
+    "pimc:samples=2",
+    "pimc:samples=4",
+    M4 + "warm-start.pt:heuristic_bidding=true",
+    M4 + "iter-0020.pt",
+    M4 + "iter-0060.pt",
+    M4 + "iter-0100.pt",
+    M4 + "final.pt",
+    "pimc:samples=8",
+    "pimc:samples=16",
+    STAGED_FINAL,
+    "pimc",
+    "yosif",
+)
+"""The full ladder after the With-auction rules (2026-10-26): the default rungs, the M4 checkpoints
+where the 2026-10-25 ladder placed them, and the yosif bot last."""
+V2_EXTRAS = (
+    ("heuristic", "pimc:samples=1:play_noise=0.3"),
+    ("pimc:samples=4", "pimc:samples=8"),
+    ("pimc:samples=2", M4 + "warm-start.pt:heuristic_bidding=true"),
+    (M4 + "final.pt", "pimc:samples=16"),
+    (M4 + "final.pt", "pimc"),
+    ("pimc:samples=16", "pimc"),
+    (M4 + "final.pt", STAGED_FINAL),
+    ("pimc:samples=8", STAGED_FINAL),
+    ("pimc", "yosif"),  # same card play, so this pair measures the yosif bot's bidding alone
+    ("heuristic", "yosif"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Preset:
+    """A named ladder: its bots weakest first, extra pairs, folder, sets per pair and seed."""
+
+    bots: tuple[str, ...]
+    extras: tuple[tuple[str, str], ...]
+    dir: Path
+    sets: int
+    seed: int
+
+
+PRESETS = {"v2": Preset(V2_LADDER, V2_EXTRAS, Path("runs/ladder-v2"), 200, 0)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +147,10 @@ def _pair_file(folder: Path, lower: str, upper: str) -> Path:
     return folder / "pairs" / f"{_slug(lower)}--{_slug(upper)}.json"
 
 
+def _games_file(folder: Path, lower: str, upper: str) -> Path:
+    return folder / "games" / f"{_slug(lower)}--{_slug(upper)}.jsonl.gz"
+
+
 def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float) -> PairResult:
     (pair,) = report["pairs"]
     record = PairRecord(pair["a"], pair["b"], pair["a_wins"], pair["draws"], pair["b_wins"])
@@ -109,12 +167,16 @@ def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float)
     return PairResult(lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], first, seconds)
 
 
-def _saved(path: Path, lineup: list[str], sets: int, seed: int) -> dict[str, Any] | None:
-    """The saved report of this pair, if it was played with the same lineup, sets and seed."""
-    if not path.exists():
+def _saved(
+    path: Path, games: Path, lineup: list[str], sets: int, seed: int, version: str
+) -> dict[str, Any] | None:
+    """The saved report of this pair, if it was played with the same lineup, sets, seed and code
+    version, and its games are saved too."""
+    if not path.exists() or not games.exists():
         return None
     report: dict[str, Any] = json.loads(path.read_text())["report"]
     same = report["lineup"] == lineup and report["sets"] == sets and report["seed"] == seed
+    same = same and report.get("code_version") == version
     return report if same and not report["rules"] else None
 
 
@@ -131,12 +193,16 @@ def play_pair(
     it was reused; ``on_set`` sees each set as it is played."""
     lineup = [lower, upper, lower, upper]
     path = _pair_file(folder, lower, upper)
-    saved = _saved(path, lineup, sets, seed)
+    games = _games_file(folder, lower, upper)
+    version = code_version()
+    saved = _saved(path, games, lineup, sets, seed, version)
     if saved is not None:
         return _from_report(lower, upper, saved, 0.0), True
-    run = run_arena(tuple(lineup), sets, seed, workers=workers, on_set=on_set)
+    run = run_arena(tuple(lineup), sets, seed, workers=workers, on_set=on_set, keep_games=True)
     report = build_report(run)
-    write_json(path, report, run)
+    write_json(path, report, run, version)
+    header = make_header(lineup, sets, seed, run.config)
+    write_games(games, header, (game for result in run.results for game in result.games))
     return _from_report(
         lower, upper, json.loads(path.read_text())["report"], run.wall_seconds
     ), False
@@ -230,16 +296,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Rate bots listed weakest first from duplicate runs of each neighbour pair.",
     )
     parser.add_argument(
-        "--bots",
-        default=",".join(DEFAULT_LADDER),
-        help="bots weakest first, comma-separated (default: random up to pimc)",
+        "--preset",
+        choices=sorted(PRESETS),
+        help="a named ladder (bots, extra pairs, folder, sets and seed); other flags override it",
     )
-    parser.add_argument("--sets", type=int, required=True, help="duplicate sets per pair")
-    parser.add_argument("--seed", type=int, default=0, help="run seed for every pair (default 0)")
-    parser.add_argument("--workers", type=int, default=1, help="worker processes (default 1)")
     parser.add_argument(
-        "--dir", type=Path, default=Path("runs/ladder"), help="where pair reports are kept"
+        "--bots", help="bots weakest first, comma-separated (default: random up to pimc)"
     )
+    parser.add_argument(
+        "--sets", type=int, help="duplicate sets per pair (required without a preset)"
+    )
+    parser.add_argument("--seed", type=int, help="run seed for every pair (default 0)")
+    parser.add_argument("--workers", type=int, default=1, help="worker processes (default 1)")
+    parser.add_argument("--dir", type=Path, help="where pair reports and games are kept")
     parser.add_argument(
         "--extra",
         action="append",
@@ -247,6 +316,19 @@ def main(argv: list[str] | None = None) -> int:
         help="an extra pair to rate, as weaker,stronger (repeatable)",
     )
     args = parser.parse_args(argv)
+    preset = PRESETS[args.preset] if args.preset else None
+    if args.bots is None:
+        args.bots = ",".join(preset.bots if preset else DEFAULT_LADDER)
+    if preset is not None and not args.extra:
+        args.extra = [f"{a},{b}" for a, b in preset.extras]
+    if args.sets is None:
+        if preset is None:
+            parser.error("--sets is required without a --preset")
+        args.sets = preset.sets
+    if args.seed is None:
+        args.seed = preset.seed if preset else 0
+    if args.dir is None:
+        args.dir = preset.dir if preset else Path("runs/ladder")
 
     bots = [bot.strip() for bot in args.bots.split(",")]
     if len(bots) < 2 or len(set(bots)) != len(bots) or not all(bots):

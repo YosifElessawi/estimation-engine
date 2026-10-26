@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .duplicate import ROTATIONS, ArenaRun, SetResult
-from .games import changed_rules
+from .games import changed_rules, code_version
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -289,9 +289,14 @@ def run_to_json(run: ArenaRun) -> dict[str, Any]:
     }
 
 
-def write_json(path: Path, report: Report, run: ArenaRun) -> None:
+def write_json(path: Path, report: Report, run: ArenaRun, version: str | None = None) -> None:
+    """Write the report and run, with the code version that played them (see
+    ``games.code_version``)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"report": report_to_json(report), "run": run_to_json(run)}
+    data = {
+        "report": {**report_to_json(report), "code_version": version or code_version()},
+        "run": run_to_json(run),
+    }
     path.write_text(json.dumps(data, indent=1, allow_nan=False) + "\n")
 
 

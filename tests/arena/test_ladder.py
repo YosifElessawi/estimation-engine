@@ -97,3 +97,52 @@ def test_extra_pairs_join_the_fit(tmp_path: Path, capsys: pytest.CaptureFixture[
 def test_bad_ladders_are_rejected(args: list[str], tmp_path: Path):
     with pytest.raises(SystemExit):
         main([*args, "--sets", "1", "--dir", str(tmp_path)])
+
+
+def test_a_pair_from_other_code_is_played_again(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    run_cli(capsys, "--bots", TINY, "--sets", "1", "--dir", str(tmp_path))
+    monkeypatch.setattr(ladder, "code_version", lambda: "other-code")
+    run_cli(capsys, "--bots", TINY, "--sets", "1", "--dir", str(tmp_path))
+    versions = {
+        json.loads(f.read_text())["report"]["code_version"] for f in (tmp_path / "pairs").glob("*")
+    }
+    assert versions == {"other-code"}
+
+
+def test_a_ladder_pair_saves_its_games(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    from estimation.arena.games import read_games, replay
+    from estimation.engine import RulesConfig
+
+    run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
+    (path,) = (tmp_path / "games").glob("*.jsonl.gz")
+    header, records = read_games(path)
+    assert header is not None
+    assert header.lineup == ("random", "heuristic", "random", "heuristic")
+    assert len(records) == 4
+    assert all(replay(record, RulesConfig()) is not None for record in records)
+
+
+def test_a_pair_without_saved_games_is_played_again(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
+    for path in (tmp_path / "games").glob("*"):
+        path.unlink()
+    run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
+    assert len(list((tmp_path / "games").glob("*.jsonl.gz"))) == 1
+
+
+def test_the_v2_preset_lists_26_bots_and_10_extras():
+    preset = ladder.PRESETS["v2"]
+    assert len(preset.bots) == 26
+    assert len(set(preset.bots)) == 26
+    assert preset.bots[0] == "random"
+    assert preset.bots[-1] == "yosif"
+    assert len(preset.extras) == 10
+    assert all(a in preset.bots and b in preset.bots for a, b in preset.extras)
+    assert ("pimc", "yosif") in preset.extras
+    assert ("heuristic", "yosif") in preset.extras
+    assert preset.dir == Path("runs/ladder-v2")
+    assert (preset.sets, preset.seed) == (200, 0)
