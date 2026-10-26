@@ -21,10 +21,11 @@ from .counting import HandCount
 @dataclass(frozen=True, slots=True)
 class Outlook:
     """The chance of each trick count, trying to win tricks (``most``) and to lose them
-    (``least``)."""
+    (``least``). ``control`` is how reliably dodging tricks lands exactly on a lower number."""
 
     most: tuple[float, ...]
     least: tuple[float, ...]
+    control: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,11 +59,12 @@ def _combine(a: Sequence[float], b: Sequence[float]) -> tuple[float, ...]:
     return tuple(out)
 
 
-def outlook(count: HandCount) -> Outlook:
-    """Trump tricks plus side tricks, wanted and dodged."""
+def outlook(count: HandCount, dodge_scale: float = 1.0, control: float = 1.0) -> Outlook:
+    """Trump tricks plus side tricks, wanted and dodged. ``dodge_scale`` weakens every dodge
+    (opponents forcing tricks on a player); ``control`` is carried to ``make_chance``."""
     most = _combine(count.trumps, spread(c.win for c in count.side))
-    least = _combine(count.trumps, spread(c.win * (1 - c.dodge) for c in count.side))
-    return Outlook(most, least)
+    least = _combine(count.trumps, spread(c.win * (1 - c.dodge * dodge_scale) for c in count.side))
+    return Outlook(most, least, control)
 
 
 def _at_least(odds: Sequence[float], k: int) -> float:
@@ -70,8 +72,11 @@ def _at_least(odds: Sequence[float], k: int) -> float:
 
 
 def make_chance(o: Outlook, k: int) -> float:
-    """The chance of taking exactly ``k`` tricks when aiming at ``k``."""
-    return max(0.0, _at_least(o.most, k) - _at_least(o.least, k + 1))
+    """The chance of taking exactly ``k`` tricks when aiming at ``k``: landing on it while
+    taking every trick possible, plus, weighted by ``control``, dodging down to it."""
+    natural = o.most[k] if 0 <= k < len(o.most) else 0.0
+    dodged = _at_least(o.most, k + 1) - _at_least(o.least, k + 1)
+    return max(0.0, natural + o.control * dodged)
 
 
 def expected_miss(o: Outlook, k: int) -> float:

@@ -145,3 +145,15 @@ def test_a_weak_hand_does_not_say_with():
     )
     assert rnd.current_player == 1
     assert act(bot, rnd) != WITH
+
+
+def test_a_hand_of_low_cards_dash_calls():
+    bot = YosifBot(0, FAST)
+    rnd = round_with(0, "2C 3C 4C 5C 2D 3D 4D 5D 2H 3H 4H 5H 2S")
+    assert act(bot, rnd) == DASH_CALL
+
+
+def test_a_hand_with_aces_does_not_dash_call():
+    bot = YosifBot(0, FAST)
+    rnd = round_with(0, "AC 3C 4C 5C AD 3D 4D 5D AH 3H 4H 5H 2S")
+    assert act(bot, rnd) == NO_DASH_CALL

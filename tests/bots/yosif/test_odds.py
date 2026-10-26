@@ -118,3 +118,16 @@ def test_example_hand_scores_best_at_8_spades():
         for k in range(4, 14)
     }
     assert max(points, key=points.__getitem__) == 8
+
+
+def test_make_chance_discounts_the_range_that_needs_dodging():
+    # Reaching 2 needs no control; landing on 0 or 1 means dodging tricks, counted at half.
+    o = Outlook(most=(0.0, 0.0, 1.0), least=(1.0, 0.0, 0.0), control=0.5)
+    assert [make_chance(o, k) for k in range(3)] == [0.5, 0.5, 1.0]
+
+
+def test_dodge_scale_weakens_every_dodge():
+    count = count_hand(parse_hand("KH 2H 3H 4H 5C 6C 7C 8C 9C 5D 6D 7D 8D"), SPADES)
+    free, pressed = outlook(count), outlook(count, dodge_scale=0.5)
+    assert pressed.least[0] < free.least[0]
+    assert pressed.most == free.most

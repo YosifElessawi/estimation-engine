@@ -40,7 +40,9 @@ class YosifConfig:
 
     count: CountValues = DEFAULT_COUNT
     others_make: float = 0.5  # chance each other player makes their estimate (SCR-5) [Claude]
-    dash_break: float = 0.6  # opponents try to break a Dash Call [Yosif]; the size [Claude]
+    dash_break: float = 0.6  # share of each dodge left when opponents try to break a Dash
+    # Call [Yosif]; the size [Claude]
+    control: float = 0.5  # how reliably dodging tricks lands exactly on a number [Claude]
     risk_mode: bool = True  # go for the bigger call when he needs a jump to win [Yosif]
     jump_points: float = 25.0  # about one good normal round, per round left [Claude]
     risk_min_make: float = 0.25  # a bigger call must still be makeable [Claude]
@@ -107,8 +109,16 @@ class Planner:
     def __init__(self, config: YosifConfig) -> None:
         self.config = config
 
-    def _outlook(self, hand: int, trump: int, reads: Reads, over: bool | None = None) -> Outlook:
-        return outlook(count_hand(hand, trump, reads, over, self.config.count))
+    def _outlook(
+        self,
+        hand: int,
+        trump: int,
+        reads: Reads,
+        over: bool | None = None,
+        dodge_scale: float = 1.0,
+    ) -> Outlook:
+        c = self.config
+        return outlook(count_hand(hand, trump, reads, over, c.count), dodge_scale, c.control)
 
     def _risk(self, obs: Observation) -> bool:
         return self.config.risk_mode and needs_jump(obs, self.config.jump_points)
@@ -153,13 +163,19 @@ class Planner:
         reads = read_bids(obs)
         outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
         best = max(TRUMPS, key=lambda t: sum(k * p for k, p in enumerate(outlooks[t].most)))
-        o = outlooks[best]
+        # A Dash caller's own best suit rarely becomes trump; the opponents press every dodge.
         s = stake(0, caller=False, dash=True, last_risks=0, over=None, rules=c.rules)
-        zero = c.dash_break * o.least[0]
-        bonus = c.rules.only_bonus if s.solo else 0
-        dash_value = zero * (s.win + bonus * (1 - c.others_make) ** 3) - (1 - zero) * (
-            s.lose + bonus * c.others_make**3
-        )
+        faced = [t for t in TRUMPS if t != best]
+        dash_value = sum(
+            expected_points(
+                self._outlook(obs.hand, t, reads, dodge_scale=c.dash_break),
+                0,
+                s,
+                c.others_make,
+                c.rules,
+            )
+            for t in faced
+        ) / len(faced)
         caller = max(
             self._caller_value(outlooks[t], range(MIN_BID, MAX_TRICKS + 1), False)[1]
             for t in TRUMPS
