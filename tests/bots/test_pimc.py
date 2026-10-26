@@ -10,8 +10,18 @@ from estimation.bots import make_bot
 from estimation.bots.hand_eval import expected_tricks
 from estimation.bots.heuristic import HeuristicBot
 from estimation.bots.knowledge import read_knowledge
-from estimation.bots.pimc import PIMCBot, PIMCConfig, RoundScorer, representatives
+from estimation.bots.pimc import (
+    PIMCBot,
+    PIMCConfig,
+    RoundScorer,
+    fits_announcements,
+    representatives,
+)
+from estimation.bots.sampling import deal_unseen
 from estimation.engine import (
+    CLUBS,
+    NO_DASH_CALL,
+    PASS,
     SANS,
     SPADES,
     Bola,
@@ -20,12 +30,14 @@ from estimation.engine import (
     Round,
     RulesConfig,
     TrickRecord,
+    bid_action,
     deal,
     parse_card,
     parse_hand,
     play_action,
 )
 from estimation.engine.cards import SUIT_MASKS
+from tests.engine.test_void_announcement import HANDS as VOID_HANDS
 
 from .helpers import play_observation
 
@@ -372,3 +384,23 @@ def test_pimc_leader_weight_can_be_set_by_name():
     bot = make_bot("pimc:leader_weight=true", 0)
     assert isinstance(bot, PIMCBot)
     assert bot.config.leader_weight
+
+
+def test_sampled_deals_fit_the_void_announcements():
+    """TBL-7: seat 2 is announced void, so every sampled deal gives it a missing suit, and seats
+    1 and 3 all four suits; plain dealing of the unseen cards would usually break both."""
+    rnd = Round.new(1, VOID_HANDS)
+    for action in (NO_DASH_CALL,) * 4 + (bid_action(4, CLUBS), PASS, PASS, PASS, PASS):
+        rnd.step(action)
+    while rnd.phase is Phase.ESTIMATION:
+        rnd.step(rnd.legal_actions()[0])
+    obs = rnd.observation(0)
+    assert obs.void_announced == (2,)
+    know = read_knowledge(obs)
+    for hands in PIMCBot(0).sample_deals(obs, know):
+        three = [hands[1], hands[2], hands[3]]
+        assert fits_announcements(three, (1, 2, 3), know.played_by, obs.void_announced)
+    rng = random.Random(0)
+    sizes = [know.sizes[seat] for seat in (1, 2, 3)]
+    plain = [deal_unseen(know.unseen, sizes, [0, 0, 0], rng) for _ in range(50)]
+    assert sum(fits_announcements(t, (1, 2, 3), know.played_by, (2,)) for t in plain) < 25

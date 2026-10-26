@@ -1,4 +1,4 @@
-"""Estimation once the Caller is known: EST-1 to EST-7, L4 and L5."""
+"""Estimation once the Caller is known: EST-1 to EST-7 and L4."""
 
 import pytest
 
@@ -49,12 +49,17 @@ def test_EST_3_other_players_estimate_0_to_c():
         rnd.step(est(7))
 
 
-def test_EST_3_with_player_estimates_w_to_c():
-    rnd = run(new_round(1), *NO_DASH_ROUND, bid(5, HEARTS), WITH, PASS, PASS, PASS, bid(7, HEARTS))
-    assert rnd.current_player == 1
-    assert legal_estimates(rnd) == [5, 6, 7]
-    with pytest.raises(IllegalActionError):
-        rnd.step(est(4))
+def test_EST_2_with_players_have_their_w_as_estimate_and_do_not_estimate():
+    rnd = run(new_round(1), *NO_DASH_ROUND, bid(5, HEARTS), WITH, PASS, PASS, bid(7, HEARTS))
+    rnd.step(PASS)  # seat 1 stays at 5 when seat 0 raises to 7
+    obs = rnd.observation(0)
+    assert obs.with_players == (WithInfo(1, 5, HEARTS),)
+    assert obs.estimates == (7, 5, None, None)
+    order = []
+    while rnd.phase is Phase.ESTIMATION:
+        order.append(rnd.current_player)
+        rnd.step(rnd.legal_actions()[0])
+    assert order == [2, 3]
 
 
 def test_EST_4_estimating_exactly_c_makes_a_player_with():
@@ -73,18 +78,12 @@ def test_EST_5_last_estimator_cannot_make_13():
         rnd.step(est(1))
 
 
-def test_EST_5_with_floor_drops_to_zero_only_when_w_to_c_is_blocked():
-    rnd = run(new_round(1), *NO_DASH_ROUND, bid(6, HEARTS), PASS, PASS, WITH, PASS, PASS)
-    run(rnd, est(0), est(1))
-    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5]
-    rnd.step(est(3))
-    assert WithInfo(3, 6, HEARTS) in rnd.observation(0).with_players
-
-
-def test_EST_5_with_floor_stays_when_another_value_is_allowed():
-    rnd = run(new_round(1), *NO_DASH_ROUND, bid(5, HEARTS), PASS, PASS, WITH, PASS, bid(6, HEARTS))
-    run(rnd, est(0), est(1))  # total 7: seat 3 may not say 6, but 5 (its w) is allowed
-    assert legal_estimates(rnd) == [5]
+def test_EST_5_with_players_count_their_w_toward_the_total():
+    rnd = run(new_round(1), *NO_DASH_ROUND, bid(5, HEARTS), WITH, PASS, PASS, PASS)
+    rnd.step(est(2))  # 5 + 5 + 2 so far
+    assert rnd.current_player == 3
+    assert 1 not in legal_estimates(rnd)  # 13
+    assert legal_estimates(rnd) == [0, 2, 3, 4, 5]
 
 
 @pytest.mark.parametrize(
@@ -136,22 +135,18 @@ def test_EST_7_no_risk_when_everyone_but_the_caller_dash_called():
     assert (obs.total, obs.over) == (4, False)
 
 
+def test_EST_7_no_risk_when_everyone_but_the_caller_is_with_or_dash():
+    rnd = run(new_round(1), NO, NO, DASH, NO, bid(4, HEARTS), WITH, WITH)
+    rnd.step(PASS)  # seat 0 keeps 4 Hearts: 4 + 4 + 0 + 4 = 12
+    assert rnd.phase is Phase.PLAY
+    obs = rnd.observation(0)
+    assert obs.last_estimator is None
+    assert obs.risks == 0
+    assert (obs.total, obs.over) == (12, False)
+
+
 def test_L4_sum_rule_example():
     rnd = caller_round(5)
     run(rnd, est(3), est(4))
     assert rnd.current_player == 3
     assert legal_estimates(rnd) == [0, 2, 3, 4, 5]
-
-
-def test_L5_with_floor_drops_example():
-    rnd = run(new_round(1), *NO_DASH_ROUND, bid(6, HEARTS), PASS, PASS, WITH, PASS)
-    assert rnd.current_player == 0  # seat 0's final turn
-    rnd.step(PASS)
-    obs = rnd.observation(0)
-    assert (obs.caller, obs.estimates[0]) == (0, 6)
-    assert obs.with_players == (WithInfo(3, 6, HEARTS),)
-    run(rnd, est(0), est(1))
-    assert rnd.current_player == 3
-    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5]
-    rnd.step(est(5))
-    assert rnd.observation(0).with_players == (WithInfo(3, 6, HEARTS),)

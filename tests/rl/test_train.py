@@ -10,7 +10,9 @@ import torch
 
 from estimation.bots import make_bot
 from estimation.rl.config import TrainConfig, config_from_dict
+from estimation.rl.networks import load_policy
 from estimation.rl.train import main, record_elo, train
+from tests.rl.test_networks import as_version_1
 
 TINY: dict[str, Any] = {
     "seed": 3,
@@ -250,3 +252,29 @@ def test_the_command_line_trains_from_a_config_file(
     assert capsys.readouterr().out.strip().endswith("warm-start.pt")
     saved = json.loads((tmp_path / "cli/config.json").read_text())
     assert saved["seed"] == 6
+
+
+def test_a_run_can_continue_from_a_trained_checkpoint(first_run: Path, tmp_path: Path):
+    """selfplay.start_from: no imitation stage, and both nets start as the checkpoint's, here a
+    version 1 checkpoint widened for the void announcements. Held still (card play frozen, no
+    bidding steps), they come out exactly as they went in."""
+    start = tmp_path / "start.pt"
+    shutil.copy(first_run / "checkpoints" / "final.pt", start)
+    as_version_1(start)
+    out = tmp_path / "run"
+    reuse_records(first_run, out)
+    config = tiny_play(start_from=str(start), iterations=1, card_frozen_iterations=1, bid_lr=0.0)
+    train(config, out)
+    assert not (out / "checkpoints" / "warm-start.pt").exists()
+    final, begun = load_policy(out / "checkpoints" / "final.pt"), load_policy(start)
+    assert begun.bidding is not None
+    assert final.bidding is not None
+    for net, before in ((final.card, begun.card), (final.bidding, begun.bidding)):
+        after = net.state_dict()
+        assert all(torch.equal(after[key], value) for key, value in before.state_dict().items())
+
+
+def test_a_missing_start_checkpoint_stops_the_run_before_any_games(tmp_path: Path):
+    with pytest.raises(SystemExit, match="is not a file"):
+        train(tiny_play(start_from=str(tmp_path / "nope.pt")), tmp_path / "run")
+    assert not (tmp_path / "run" / "warmstart").exists()

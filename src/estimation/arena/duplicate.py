@@ -99,8 +99,10 @@ def run_arena(
     workers: int = 1,
     budget: float = DEFAULT_BUDGET,
     progress: Progress | None = None,
+    on_set: Callable[[SetResult], None] | None = None,
 ) -> ArenaRun:
-    """Play ``sets`` duplicate sets, on ``workers`` processes. Results come back in set order."""
+    """Play ``sets`` duplicate sets, on ``workers`` processes. Results come back in set order;
+    ``on_set`` sees each one as it arrives."""
     names = tuple(lineup)
     if len(names) != 4:
         raise ValueError("a lineup has exactly 4 bots")
@@ -118,6 +120,8 @@ def run_arena(
         results.append(result)
         for name, timing in set_timings.items():
             timings[name].merge(timing)
+        if on_set is not None:
+            on_set(result)
         if progress is not None:
             progress(len(results), sets, time.perf_counter() - start)
 

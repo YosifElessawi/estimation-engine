@@ -63,6 +63,7 @@ def play_observation(
         trump=trump,
         hand=hand,
         log=(),
+        void_announced=(),
         dash_callers=(),
         top_bid=bid_action(estimates[caller], trump),
         top_bidder=caller,

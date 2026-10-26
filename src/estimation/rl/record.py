@@ -144,7 +144,16 @@ def save_records(path: str, records: CardRecords) -> None:
 
 
 def load_records(path: str) -> CardRecords:
+    """Recorded decisions saved by ``save_records``. Raises ValueError for a file recorded with
+    another encoder: its features do not fit the nets, and the games behind it followed the
+    rules of that time, so record again."""
     with np.load(path) as data:
+        width = int(data["features"].shape[1])
+        if width != NUM_FEATURES:
+            raise ValueError(
+                f"{path} was recorded with {width} features; this encoder has {NUM_FEATURES}. "
+                "Delete it and record again."
+            )
         return CardRecords(
             features=data["features"],
             legal=data["legal"],

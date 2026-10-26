@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "A bot for Estimation, the 4-player trick-taking card game, played by the rules of the Pocket Estimation app."
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.162.0",
     "numpy>=2.5.4",
     "rich>=15.0.0",
     "torch>=2.14.1",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
@@ -26,8 +28,14 @@ extend-exclude = ["*.md"]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PIE", "PT"]
 
 [tool.pyright]
-include = ["src", "tests"]
-strict = ["src/estimation/engine", "src/estimation/bots", "src/estimation/arena", "src/estimation/rl"]
+include = ["src", "server", "tests"]
+strict = [
+    "src/estimation/engine",
+    "src/estimation/bots",
+    "src/estimation/arena",
+    "src/estimation/rl",
+    "server",
+]
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
@@ -38,6 +46,7 @@ addopts = ["-ra", "--strict-markers", "--strict-config"]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16.0",
     "hypothesis>=6.170.9",
     "pre-commit>=4.7.0",
     "pyright>=1.1.414",

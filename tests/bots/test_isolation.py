@@ -171,8 +171,9 @@ def test_the_guard_allows_reading_an_observation():
 
 def swapped_positions(seed: int) -> list[tuple[Round, Round, int]]:
     """Positions from a HeuristicBot game, each paired with the same position after swapping
-    one hidden card between two other seats (same suit once cards are played, so the history
-    stays legal). Returns ``(position, swapped, acting seat)``."""
+    one hidden card between two other seats (same suit, so the history stays legal and every
+    seat's suit counts, and with them the void announcements of TBL-7, stay the same). Returns
+    ``(position, swapped, acting seat)``."""
     rng = random.Random(seed)
     bot = HeuristicBot()
     bola = Bola(seed)

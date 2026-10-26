@@ -13,6 +13,7 @@ from estimation.bots import make_bot
 from .duplicate import run_arena
 from .ratings import DEFAULT_PRIOR, PairRecord
 from .report import build_report, format_report, format_run, load_pairs, write_json
+from .status import StatusWriter, status_path
 
 
 def _progress(done: int, total: int, elapsed: float) -> None:
@@ -60,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         help="virtual draws added to each compared pair in the Elo fit (default 1)",
     )
     parser.add_argument("--progress", action="store_true", help="print progress to stderr")
+    parser.add_argument(
+        "--status",
+        type=Path,
+        help="keep the live status here for python -m estimation.arena.watch "
+        "(default: next to --out, as <name>.status.json)",
+    )
     args = parser.parse_args(argv)
 
     lineup = tuple(name.strip() for name in args.lineup.split(","))
@@ -85,15 +92,37 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             parser.error(f"--elo-from {path}: {error}")
 
-    run = run_arena(
-        lineup,
-        args.sets,
-        args.seed,
-        workers=args.workers,
-        budget=args.budget_ms / 1000,
-        progress=_progress if args.progress else None,
-    )
+    status = None
+    status_file = args.status or (status_path(args.out) if args.out else None)
+    if status_file is not None:
+        status = StatusWriter(
+            status_file,
+            "arena",
+            [(", ".join(lineup), lineup)],
+            args.sets,
+            args.seed,
+            args.workers,
+            ["python -m estimation.arena", *(argv if argv is not None else sys.argv[1:])],
+        )
+        status.start(0)
+    try:
+        run = run_arena(
+            lineup,
+            args.sets,
+            args.seed,
+            workers=args.workers,
+            budget=args.budget_ms / 1000,
+            progress=_progress if args.progress else None,
+            on_set=status.set_done if status is not None else None,
+        )
+    except BaseException as exc:  # Ctrl-C included: the watch screen shows why the run stopped
+        if status is not None:
+            status.finish(error=f"stopped: {exc!r}")
+        raise
     report = build_report(run, earlier, [str(path) for path in args.elo_from], args.elo_prior)
+    if status is not None:
+        status.done(0)
+        status.finish(ratings=dict(report.elo_ratings) or None)
     print(format_report(report))
     print()
     print(format_run(run))

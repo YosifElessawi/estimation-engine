@@ -106,6 +106,8 @@ class Round:
     """
 
     __slots__ = (
+        "_announced",
+        "_answers",
         "_c",
         "_caller",
         "_chosen",
@@ -114,13 +116,15 @@ class Round:
         "_est",
         "_final",
         "_hands",
+        "_hold",
+        "_joined",
         "_last",
         "_leader",
         "_led",
         "_log",
         "_max_bid",
         "_order",
-        "_passed",
+        "_out",
         "_past",
         "_pos",
         "_result",
@@ -132,7 +136,6 @@ class Round:
         "_total",
         "_trick",
         "_trump",
-        "_with_bid",
         "_with_w",
         "_won",
         "carry",
@@ -160,14 +163,17 @@ class Round:
 
     _cur: int  # seat to act
     _hands: list[int]  # remaining hands
+    _announced: tuple[int, ...]  # seats announced void at the deal (TBL-7)
     _log: list[tuple[int, int]]  # every (seat, action), all public
     _dash: list[bool]
     _chosen: int  # Dash choices made so far
-    _passed: list[bool]  # out of the auction: passed, or a Dash caller
+    _out: list[bool]  # out of the auction's turns: passed, said With, or a Dash caller (AUC-1)
     _top: int  # top bid id, or _NO_BID
     _top_seat: int
-    _with_bid: list[int]  # bid id each seat said With on in the auction
+    _hold: list[int]  # each seat's held call (AUC-2): its last bid or the bid it joined, or -1
+    _joined: list[int]  # the top bidder each seat said With to and answers (AUC-3), or -1
     _final: bool  # the top bidder's final turn (AUC-3)
+    _answers: list[int]  # seats still to answer the final turn's raise, in order (AUC-3)
     _max_bid: int
     _super: bool  # a super call was made (FIX-4)
     _super_seat: int  # the super caller, kept out of the fixed trump when the switch is off
@@ -247,14 +253,21 @@ class Round:
         rnd.hands = deal
         rnd._cur = first
         rnd._hands = list(deal)
+        rnd._announced = tuple(  # TBL-7: every seat missing a suit, announced at the deal
+            seat
+            for seat in range(4)
+            if any(not (deal[seat] >> (13 * suit)) & 0x1FFF for suit in range(4))
+        )
         rnd._log = []
         rnd._dash = [False, False, False, False]
         rnd._chosen = 0
-        rnd._passed = [False, False, False, False]
+        rnd._out = [False, False, False, False]
         rnd._top = _NO_BID
         rnd._top_seat = -1
-        rnd._with_bid = [-1, -1, -1, -1]
+        rnd._hold = [-1, -1, -1, -1]
+        rnd._joined = [-1, -1, -1, -1]
         rnd._final = False
+        rnd._answers = []
         rnd._max_bid = LAST_BID
         rnd._super = False
         rnd._super_seat = -1
@@ -336,22 +349,7 @@ class Round:
                 *_PLAYS_S[hand >> 39],
             ]
         if phase is AUCTION:
-            seat = self._cur
-            top = self._top
-            actions = list(range(top + 1, self._max_bid + 1))
-            if seat == self._super_seat and not self.config.super_caller_may_bid_fixed:
-                fixed = self.fixed_trump  # FIX-4: the super caller stays out of the fixed trump
-                actions = [a for a in actions if (a - FIRST_BID) % 5 != fixed]
-            top_seat = self._top_seat
-            if (
-                not self._final
-                and top_seat >= 0
-                and top_seat != seat
-                and self._with_bid[seat] != top
-            ):
-                actions.append(WITH)
-            actions.append(PASS)
-            return actions
+            return self._legal_auction()
         if phase is ESTIMATION:
             return self._legal_estimates()
         if phase is DASH:
@@ -368,15 +366,35 @@ class Round:
                 actions.extend(range(ESTIMATE_BASE, PLAY_BASE))
             return actions
         c = self._c
-        w = self._with_w[self._cur]
-        low = w if w >= 0 else 0  # EST-3
         if self._pos == len(self._order) - 1:
             forbidden = 13 - self._total  # EST-5
-            if low <= forbidden <= c:
-                if low == c:
-                    low = 0  # EST-5: nothing from w to c is allowed, so the floor drops
-                return [ESTIMATE_BASE + k for k in range(low, c + 1) if k != forbidden]
-        return list(range(ESTIMATE_BASE + low, ESTIMATE_BASE + c + 1))
+            return [ESTIMATE_BASE + k for k in range(c + 1) if k != forbidden]
+        return list(range(ESTIMATE_BASE, ESTIMATE_BASE + c + 1))  # EST-3
+
+    def _legal_auction(self) -> list[int]:
+        seat = self._cur
+        top = self._top
+        bids = range(top + 1, self._max_bid + 1)
+        if seat == self._super_seat and not self.config.super_caller_may_bid_fixed:
+            fixed = self.fixed_trump  # FIX-4: the super caller stays out of the fixed trump
+            actions = [a for a in bids if (a - FIRST_BID) % 5 != fixed]
+        else:
+            actions = list(bids)
+        if self._answers:  # AUC-3: answering the top bidder's raise
+            if len(self._answers) > 1 or not self._ends_on_13(top, seat, top):
+                actions.append(WITH)
+            if len(self._answers) > 1 or not self._ends_on_13(top, seat, self._hold[seat]):
+                actions.append(PASS)
+        elif self._final:  # AUC-3: the top bidder keeps or raises
+            if not self._answerers(seat):  # an answered raise cannot end the auction yet
+                actions = [a for a in actions if not self._ends_on_13(a, -1, -1)]  # AUC-6
+            if not self._ends_on_13(top, -1, -1):
+                actions.append(PASS)
+        else:
+            if self._top_seat >= 0:
+                actions.append(WITH)  # AUC-2
+            actions.append(PASS)
+        return actions
 
     def legal_mask(self) -> npt.NDArray[np.bool_]:
         """Legal actions as a bool array of length 120."""
@@ -446,7 +464,7 @@ class Round:
         if callers == 4:
             self._skip()  # DSH-5
             return
-        self._passed = dash.copy()  # DSH-4: Dash callers sit out the auction
+        self._out = dash.copy()  # DSH-4: Dash callers sit out the auction
         if callers == 3:
             self._max_bid = _LONE_MAX_BID  # AUC-5
         self.phase = AUCTION
@@ -457,48 +475,131 @@ class Round:
                 self._cur = seat
                 return
 
+    def _check_bid(self, seat: int, action: int) -> None:
+        if action <= self._top:
+            raise IllegalActionError(f"{_describe(action)} does not beat the top bid")
+        if (
+            seat == self._super_seat
+            and not self.config.super_caller_may_bid_fixed
+            and (action - FIRST_BID) % 5 == self.fixed_trump
+        ):
+            raise IllegalActionError("the super caller may not bid the fixed trump (FIX-4)")
+
+    def _take_top(self, seat: int, action: int) -> None:
+        """``seat`` outbids the top bidder: it holds the bid and is in the auction. Players With
+        on the old top bidder no longer answer its raises (AUC-4)."""
+        old = self._top_seat
+        joined = self._joined
+        if old >= 0:
+            for s in range(4):
+                if joined[s] == old:
+                    joined[s] = -1
+        self._top = action
+        self._top_seat = seat
+        self._hold[seat] = action
+        joined[seat] = -1
+        self._out[seat] = False
+
+    def _answerers(self, bidder: int) -> list[int]:
+        """The players With on ``bidder``, counterclockwise from it (AUC-3)."""
+        joined = self._joined
+        return [
+            s for s in ((bidder + 1) & 3, (bidder + 2) & 3, (bidder + 3) & 3) if joined[s] == bidder
+        ]
+
+    def _ends_on_13(self, bid: int, seat: int, held: int) -> bool:
+        """AUC-6: whether the auction ending on ``bid`` by the top bidder, with ``seat`` holding
+        ``held`` (the others as they are), leaves nobody to estimate and estimates totalling 13."""
+        caller = self._top_seat
+        tricks, trump = divmod(bid - FIRST_BID, 5)
+        total = tricks + 4
+        dash = self._dash
+        hold = self._hold
+        for s in range(4):
+            if s == caller or dash[s]:
+                continue
+            h = held if s == seat else hold[s]
+            if h < 0 or (h - FIRST_BID) % 5 != trump:
+                return False  # s estimates
+            total += (h - FIRST_BID) // 5 + 4
+        return total == 13
+
     def _step_auction(self, action: int) -> None:
         seat = self._cur
-        top = self._top
+        if self._answers:
+            self._step_answer(seat, action)
+            return
         if FIRST_BID <= action <= self._max_bid:
-            if action <= top:
-                raise IllegalActionError(f"{_describe(action)} does not beat the top bid")
-            if (
-                seat == self._super_seat
-                and not self.config.super_caller_may_bid_fixed
-                and (action - FIRST_BID) % 5 == self.fixed_trump
-            ):
-                raise IllegalActionError("the super caller may not bid the fixed trump (FIX-4)")
-            self._top = action
-            self._top_seat = seat
-            self._with_bid[seat] = -1  # AUC-2: bidding drops your With
+            self._check_bid(seat, action)
+            if self._final:  # AUC-3: a raise on the final turn
+                answerers = self._answerers(seat)
+                if not answerers and self._ends_on_13(action, -1, -1):
+                    raise IllegalActionError(f"{_describe(action)} would leave 13 (AUC-6)")
+                self._top = action
+                self._hold[seat] = action
+                self._log.append((seat, action))
+                if answerers:
+                    self._final = False
+                    self._answers = answerers
+                    self._cur = answerers[0]
+                else:
+                    self._end_auction()
+                return
+            self._take_top(seat, action)
         elif action == PASS:
-            if not self._final:
-                self._passed[seat] = True
+            if self._final:  # AUC-3: keep the bid
+                if self._ends_on_13(self._top, -1, -1):
+                    raise IllegalActionError("keeping the bid would leave 13 (AUC-6)")
+                self._log.append((seat, action))
+                self._end_auction()
+                return
+            self._out[seat] = True
         elif action == WITH:
-            if (
-                self._final
-                or self._top_seat < 0
-                or self._top_seat == seat
-                or self._with_bid[seat] == top
-            ):
-                raise IllegalActionError("With needs another player's top bid, joined only once")
-            self._with_bid[seat] = top
+            if self._final or self._top_seat < 0:
+                raise IllegalActionError("With needs another player's top bid (AUC-2)")
+            self._hold[seat] = self._top  # AUC-2: join the top bid; your bidding ends
+            self._joined[seat] = self._top_seat
+            self._out[seat] = True
         else:
             raise IllegalActionError(f"{_describe(action)} is not legal in the auction")
         self._log.append((seat, action))
-        if self._final:
-            self._end_auction()
-        else:
+        self._next_bidder(seat)
+
+    def _step_answer(self, seat: int, action: int) -> None:
+        """AUC-3: a With player answers the top bidder's raise."""
+        answers = self._answers
+        last = len(answers) == 1
+        if FIRST_BID <= action <= self._max_bid:
+            self._check_bid(seat, action)
+            self._answers = []
+            self._log.append((seat, action))
+            self._take_top(seat, action)  # the old top bidder is back in
             self._next_bidder(seat)
+            return
+        if action == WITH:
+            if last and self._ends_on_13(self._top, seat, self._top):
+                raise IllegalActionError("With here would leave 13 (AUC-6)")
+            self._hold[seat] = self._top
+        elif action == PASS:
+            if last and self._ends_on_13(self._top, seat, self._hold[seat]):
+                raise IllegalActionError("staying here would leave 13 (AUC-6)")
+            self._joined[seat] = -1  # stays at its held call and answers no more raises
+        else:
+            raise IllegalActionError(f"{_describe(action)} is not an answer to a raise")
+        self._log.append((seat, action))
+        answers.pop(0)
+        if answers:
+            self._cur = answers[0]
+        else:
+            self._end_auction()
 
     def _next_bidder(self, seat: int) -> None:
-        """AUC-1: the next seat counterclockwise that has not passed and is not the top bidder."""
-        passed = self._passed
+        """AUC-1: the next seat counterclockwise still in the auction and not the top bidder."""
+        out = self._out
         top_seat = self._top_seat
         for k in (1, 2, 3, 4):
             seat_next = (seat + k) & 3
-            if not passed[seat_next] and seat_next != top_seat:
+            if not out[seat_next] and seat_next != top_seat:
                 self._cur = seat_next
                 return
         if top_seat < 0:
@@ -514,17 +615,22 @@ class Round:
         self._caller = caller
         self._c = tricks
         self._trump = trump
-        with_w = self._with_w
-        for seat, joined in enumerate(self._with_bid):
-            if joined >= 0 and (joined - FIRST_BID) % 5 == trump:  # AUC-4: With follows the trump
-                with_w[seat] = (joined - FIRST_BID) // 5 + 4
-        self._est[caller] = tricks  # EST-1
-        self._total += tricks
+        self._final = False
         dash = self._dash
-        order = tuple(  # EST-2: from the seat after the Caller, skipping Dash callers
+        est = self._est
+        with_w = self._with_w
+        for seat, held in enumerate(self._hold):
+            if seat != caller and not dash[seat] and held >= 0 and (held - FIRST_BID) % 5 == trump:
+                w = (held - FIRST_BID) // 5 + 4  # AUC-4: With follows the trump
+                with_w[seat] = w
+                est[seat] = w  # EST-2: a With player's estimate is its w
+                self._total += w
+        est[caller] = tricks  # EST-1
+        self._total += tricks
+        order = tuple(  # EST-2: from the seat after the Caller, skipping Dash and With players
             seat
             for seat in ((caller + 1) & 3, (caller + 2) & 3, (caller + 3) & 3)
-            if not dash[seat]
+            if not dash[seat] and with_w[seat] < 0
         )
         self._order = order
         self._pos = 0
@@ -556,17 +662,9 @@ class Round:
         c = self._c
         if not 0 <= k <= c:
             raise IllegalActionError(f"{_describe(action)} is not an estimate from 0 to {c}")
-        w = self._with_w[seat]
-        low = w if w >= 0 else 0  # EST-3
-        if self._pos == len(self._order) - 1:
-            forbidden = 13 - self._total
-            if k == forbidden:
-                raise IllegalActionError(f"estimate {k} would make the total 13 (EST-5)")
-            if low == c == forbidden:
-                low = 0  # EST-5: nothing from w to c is allowed, so the floor drops
-        if k < low:
-            raise IllegalActionError(f"a With player estimates {low} to {c} (EST-3)")
-        if k == c and w < 0:
+        if self._pos == len(self._order) - 1 and k == 13 - self._total:
+            raise IllegalActionError(f"estimate {k} would make the total 13 (EST-5)")
+        if k == c:
             self._with_w[seat] = c  # EST-4
         self._record_estimate(seat, k, action)
         if self._pos == len(self._order):
@@ -603,9 +701,12 @@ class Round:
         self._trump = -1
         self._top = action
         self._top_seat = seat
-        self._passed = [False, False, False, False]
-        self._with_bid = [-1, -1, -1, -1]
+        self._out = [False, False, False, False]
+        self._hold = [-1, -1, -1, -1]
+        self._hold[seat] = action  # the super caller holds its super call
+        self._joined = [-1, -1, -1, -1]
         self._final = False
+        self._answers = []
         self.phase = AUCTION
         self._next_bidder(seat)  # starts with the player after the super caller
 
@@ -695,11 +796,19 @@ class Round:
         phase = self.phase
         dash = self._dash
         e0, e1, e2, e3 = self._est
+        out = self._out
         if phase is AUCTION:
-            with_players = tuple(
-                WithInfo(s, (b - FIRST_BID) // 5 + 4, (b - FIRST_BID) % 5)
-                for s, b in enumerate(self._with_bid)
-                if b >= 0
+            top_seat = self._top_seat
+            top_trump = (self._top - FIRST_BID) % 5
+            with_players = tuple(  # those out of the auction holding a call in the top trump
+                WithInfo(s, (h - FIRST_BID) // 5 + 4, top_trump)
+                for s, h in enumerate(self._hold)
+                if top_seat >= 0
+                and s != top_seat
+                and out[s]
+                and not dash[s]
+                and h >= 0
+                and (h - FIRST_BID) % 5 == top_trump
             )
         else:
             trump = self._trump
@@ -726,10 +835,15 @@ class Round:
             trump=self._trump if self._trump >= 0 else None,
             hand=self._hands[seat],
             log=tuple(self._log),
+            void_announced=self._announced,
             dash_callers=tuple(s for s in range(4) if dash[s]),
             top_bid=self._top if self._top_seat >= 0 else None,
             top_bidder=self._top_seat if self._top_seat >= 0 else None,
-            passed=tuple(s for s in range(4) if self._passed[s] and not dash[s]),
+            passed=tuple(
+                s
+                for s in range(4)
+                if out[s] and not dash[s] and all(w.seat != s for w in with_players)
+            ),
             caller=caller if caller >= 0 else None,
             with_players=with_players,
             estimates=(
@@ -763,14 +877,17 @@ class Round:
         rnd.phase = self.phase
         rnd._cur = self._cur
         rnd._hands = self._hands.copy()
+        rnd._announced = self._announced
         rnd._log = self._log.copy()
         rnd._dash = self._dash.copy()
         rnd._chosen = self._chosen
-        rnd._passed = self._passed.copy()
+        rnd._out = self._out.copy()
         rnd._top = self._top
         rnd._top_seat = self._top_seat
-        rnd._with_bid = self._with_bid.copy()
+        rnd._hold = self._hold.copy()
+        rnd._joined = self._joined.copy()
         rnd._final = self._final
+        rnd._answers = self._answers.copy()
         rnd._max_bid = self._max_bid
         rnd._super = self._super
         rnd._super_seat = self._super_seat

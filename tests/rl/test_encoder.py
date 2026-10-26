@@ -24,6 +24,7 @@ from estimation.engine import (
 )
 from estimation.engine.cards import cards_of
 from estimation.rl.encoder import (
+    ANNOUNCED,
     AUCTION,
     CONTEXT,
     HAND,
@@ -39,6 +40,7 @@ from estimation.rl.encoder import (
     stakes,
 )
 from tests.engine.helpers import NO_DASH_ROUND, bid, build_play, est, new_round, run
+from tests.engine.test_void_announcement import HANDS
 
 NO, DASH = NO_DASH_CALL, DASH_CALL
 PLAYED = OFFSETS["played"]
@@ -65,7 +67,7 @@ def g1_round() -> tuple[Round, list[int]]:
 
 
 def test_about_420_features_in_the_spec_blocks():
-    assert sum((52, 156, 52, 52, 12, 14, 23, 13, 56, 13, 9)) == NUM_FEATURES
+    assert sum((52, 156, 52, 52, 12, 14, 23, 13, 56, 13, 9, 4)) == NUM_FEATURES
     assert 400 <= NUM_FEATURES <= 460
     assert list(OFFSETS) == [
         "hand",
@@ -79,6 +81,7 @@ def test_about_420_features_in_the_spec_blocks():
         "players",
         "scores",
         "shape",
+        "announced",
     ]
 
 
@@ -187,9 +190,7 @@ def test_the_contract_threshold_follows_the_rules():
 
 def test_auction_block_shows_the_top_bid_and_the_final_turn():
     rnd = run(new_round(1), *NO_DASH_ROUND, bid(5, HEARTS), WITH, PASS, PASS)
-    assert rnd.current_player == 1  # seat 1 is With and may still act
-    rnd.step(PASS)
-    obs = rnd.observation(0)
+    obs = rnd.observation(0)  # seat 1's With took it out, so seat 0 has its final turn
     assert obs.phase is Phase.AUCTION
     assert obs.current_player == 0
     features = encode(obs)
@@ -261,7 +262,7 @@ def round_ends(bot: Bot, seeds: range, rules: RulesConfig) -> list[tuple[Observa
 )
 def test_stakes_match_the_engines_scores(rules: RulesConfig):
     checked = {"win": 0, "lose": 0}
-    ends = round_ends(RandomBot(7), range(4), rules) + round_ends(HeuristicBot(), range(2), rules)
+    ends = round_ends(RandomBot(7), range(6), rules) + round_ends(HeuristicBot(), range(2), rules)
     for obs, result in ends:
         if result.multiplier == 0:
             continue  # SCR-9 zeroed the round
@@ -382,10 +383,22 @@ def test_carry_and_the_three_call_double_set_the_multiplier():
     # so 3 Callers and Withs double the round; with a carry of 2 it plays x4.
     hands, _ = build_play(CLUBS, leader=0, targets=(5, 3, 2, 3))
     rnd = run(Round.new(1, hands, carry=2), *NO_DASH_ROUND)
-    run(rnd, bid(4, CLUBS), WITH, PASS, PASS, PASS, PASS, est(4), est(4), est(0))
+    run(rnd, bid(4, CLUBS), WITH, PASS, PASS, PASS, est(4), est(0))
     obs = rnd.observation(0)
     features = encode(obs)
     assert features[CONTEXT + 19] == pytest.approx(1 / 3)  # log2(2) / 3
     assert features[CONTEXT + 20] == pytest.approx(2 / 3)  # log2(4) / 3
     # Every stake is scaled by the x4: the Caller wins 10 + 4 + 10 = 24, times 4.
     assert stakes(obs, 0, RulesConfig()) == (96, -44)
+
+
+def test_the_announced_block_marks_who_was_announced_void_from_the_acting_seat():
+    """TBL-7: in the test deal only seat 2 misses a suit; each seat sees it at its own offset."""
+    rnd = Round.new(1, HANDS)
+    for seat in range(4):
+        block = encode(rnd.observation(seat))[ANNOUNCED : ANNOUNCED + 4]
+        expected = [0.0, 0.0, 0.0, 0.0]
+        expected[(2 - seat) & 3] = 1.0
+        assert block.tolist() == expected
+    assert ANNOUNCED + 4 == NUM_FEATURES  # appended last, so version 1's features keep their place
+    assert OFFSETS["shape"] + 9 == ANNOUNCED

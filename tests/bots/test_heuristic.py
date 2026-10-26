@@ -90,20 +90,47 @@ def test_passes_with_a_weak_hand():
     assert act(rnd) == PASS
 
 
-def test_keeps_its_with_when_its_turn_comes_back():
+def test_answers_a_raise_by_the_player_it_joined_with_a_legal_move():
     rnd = round_with(1, HEART_FIT, *NO_DASH, bid_action(5, HEARTS), WITH, PASS, PASS)
-    assert rnd.current_player == 1
-    assert act(rnd) == PASS
+    rnd.step(bid_action(6, HEARTS))  # seat 0 raises on its final turn
+    assert rnd.current_player == 1  # seat 1 answers (AUC-3)
+    assert act(rnd) in rnd.legal_actions()
+
+
+def test_raises_when_keeping_its_bid_would_leave_13():
+    """AUC-6: with nobody left to estimate, keeping 5 Hearts would total 13."""
+    rnd = round_with(2, HEART_FIT, NO, NO, NO, DASH_CALL, bid_action(4, HEARTS), WITH)
+    rnd.step(bid_action(5, HEARTS))  # seat 2 outbids seat 0; seat 1 joined seat 0
+    rnd.step(PASS)  # seat 0 passes, holding 4 Hearts
+    assert rnd.current_player == 2
+    assert PASS not in rnd.legal_actions()
+    assert act(rnd) in rnd.legal_actions()
 
 
 @pytest.mark.parametrize(
     ("expected", "target"),
-    [(3.4, 3), (4.4, 4), (4.5, 5), (7.4, 7), (7.6, 7), (8.4, 7), (8.5, 9), (12.6, 13), (13.4, 13)],
+    [(3.4, 3), (4.4, 4), (4.5, 5), (7.4, 7), (7.6, 8), (8.4, 8), (8.5, 9), (12.6, 13), (13.4, 13)],
 )
-def test_targets_round_expected_tricks_and_super_call_only_when_very_strong(
-    expected: float, target: int
-):
+def test_targets_round_expected_tricks_and_super_call_from_8(expected: float, target: int):
     assert target_tricks(expected, HeuristicConfig()) == target
+
+
+def test_super_calls_8_with_a_hand_worth_8():
+    """Yosif's hand (2026-10-25): 7.8 expected tricks in Spades. It used to be held at 7; a
+    simulation over 500 deals scored 8 Spades +17 a round against +4 for 7 Spades."""
+    hand = "AS KS QS JS 9S 7S QH TH 3H AD QD 7D 4D"
+    rnd = round_with(0, hand, *NO_DASH)
+    assert act(rnd) == bid_action(4, SPADES)  # opens low
+    for action in (bid_action(4, SPADES), PASS, PASS, PASS):
+        rnd.step(action)
+    assert rnd.current_player == 0  # its final turn
+    assert act(rnd) == bid_action(8, SPADES)
+
+
+def test_never_bids_8_from_a_hand_below_7_and_a_half():
+    assert target_tricks(7.49, HeuristicConfig()) == 7
+    held = HeuristicConfig(super_call_tricks=8.5)  # the old threshold, still a setting
+    assert target_tricks(7.8, held) == 7
 
 
 def test_super_calls_in_a_fixed_round_with_a_much_better_trump():

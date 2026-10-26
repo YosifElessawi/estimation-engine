@@ -316,24 +316,47 @@ def save_checkpoint(
     tmp.replace(path)
 
 
+FIRST_LAYER = "trunk.0.weight"  # (hidden, features): the only weights that see the inputs
+UPGRADABLE = {1: 452}  # older encoder versions whose features begin this version's, by count
+
+
+def widen(state: Mapping[str, torch.Tensor], features: int) -> dict[str, torch.Tensor]:
+    """``state``, saved for ``features`` inputs, with zero weights for the inputs appended
+    since: the net gives exactly the same values as before, whatever the new inputs hold, and
+    training learns their weights from there."""
+    weight = state[FIRST_LAYER]
+    extra = torch.zeros(weight.shape[0], NUM_FEATURES - features, dtype=weight.dtype)
+    return {**state, FIRST_LAYER: torch.cat([weight, extra], dim=1)}
+
+
 def load_policy(path: Path) -> Policy:
-    """Load a checkpoint saved by ``save_checkpoint`` for play on the CPU."""
+    """Load a checkpoint saved by ``save_checkpoint`` for play on the CPU. A checkpoint of an
+    older encoder whose features this one only appends to (``UPGRADABLE``) is widened by
+    ``widen``, and its meta records ``upgraded_from_encoder``."""
     payload = cast(dict[str, Any], torch.load(path, map_location="cpu", weights_only=True))
     if payload.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"{path} is not an M4 checkpoint (format {payload.get('format')})")
-    if payload["encoder"] != ENCODER_VERSION or payload["num_features"] != NUM_FEATURES:
-        raise ValueError(
-            f"{path} was trained on encoder version {payload['encoder']} with "
-            f"{payload['num_features']} features; this code has version {ENCODER_VERSION} with "
-            f"{NUM_FEATURES}"
-        )
+    encoder, features = int(payload["encoder"]), int(payload["num_features"])
+    card_state = cast(dict[str, torch.Tensor], payload["card"])
+    bidding_state = cast(dict[str, torch.Tensor] | None, payload["bidding"])
+    meta = dict(payload["meta"])
+    if (encoder, features) != (ENCODER_VERSION, NUM_FEATURES):
+        if UPGRADABLE.get(encoder) != features:
+            raise ValueError(
+                f"{path} was trained on encoder version {encoder} with {features} features; "
+                f"this code has version {ENCODER_VERSION} with {NUM_FEATURES}"
+            )
+        card_state = widen(card_state, features)
+        if bidding_state is not None:
+            bidding_state = widen(bidding_state, features)
+        meta["upgraded_from_encoder"] = encoder
     hidden = int(payload["hidden"])
     card = CardPlayNet(hidden)
-    card.load_state_dict(payload["card"])
+    card.load_state_dict(card_state)
     card.eval()
     bidding = None
-    if payload["bidding"] is not None:
+    if bidding_state is not None:
         bidding = BiddingNet(hidden)
-        bidding.load_state_dict(payload["bidding"])
+        bidding.load_state_dict(bidding_state)
         bidding.eval()
-    return Policy(card, bidding, dict(payload["meta"]))
+    return Policy(card, bidding, meta)

@@ -54,6 +54,24 @@ class PIMCConfig:
 
 
 DEFAULT_PIMC = PIMCConfig()
+MAX_REDEALS = 200  # draws per deal to fit the void announcements before keeping the last one
+
+
+def fits_announcements(
+    three: Sequence[int],
+    others: Sequence[int],
+    played_by: Sequence[int],
+    announced: Sequence[int],
+) -> bool:
+    """Whether sampled hands ``three`` for seats ``others`` fit the void announcements: a seat
+    announced void misses a suit in its dealt hand (sampled cards plus those it played), any
+    other seat holds all four suits (TBL-7)."""
+    for hand, seat in zip(three, others, strict=True):
+        dealt = hand | played_by[seat]
+        void = any(not (dealt >> (13 * suit)) & 0x1FFF for suit in range(4))
+        if void != (seat in announced):
+            return False
+    return True
 
 
 class PIMCBot:
@@ -128,11 +146,11 @@ class PIMCBot:
 
     def sample_deals(self, obs: Observation, know: Knowledge | None = None) -> list[list[int]]:
         """``samples`` full deals (four remaining hands, own hand included) that fit the hand
-        sizes, voids and played cards. With ``oversample`` > 1 it draws that many times more
-        and keeps the ones whose hands best fit the estimates, by weighted sampling without
-        replacement: a deal's weight falls with the squared gap, over the other three seats,
-        between each player's whole hand valued by HeuristicBot's hand model and its estimate
-        (a Dash caller's Sans value against 0)."""
+        sizes, voids, played cards and void announcements (TBL-7). With ``oversample`` > 1 it
+        draws that many times more and keeps the ones whose hands best fit the estimates, by
+        weighted sampling without replacement: a deal's weight falls with the squared gap, over
+        the other three seats, between each player's whole hand valued by HeuristicBot's hand
+        model and its estimate (a Dash caller's Sans value against 0)."""
         config = self.config
         rng = self._rng
         if know is None:
@@ -146,9 +164,14 @@ class PIMCBot:
         sizes = [know.sizes[seat] for seat in others]
         voids = [know.voids[seat] for seat in others]
         unseen = know.unseen
+        announced = obs.void_announced
         deals: list[list[int]] = []
         for _ in range(config.samples * config.oversample):
             three = deal_unseen(unseen, sizes, voids, rng)
+            for _ in range(MAX_REDEALS):  # TBL-7: re-deal until the announcements fit
+                if fits_announcements(three, others, know.played_by, announced):
+                    break
+                three = deal_unseen(unseen, sizes, voids, rng)
             hands = [0, 0, 0, 0]
             hands[me] = know.hand
             for i, seat in enumerate(others):

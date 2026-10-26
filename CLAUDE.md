@@ -11,7 +11,7 @@ When asked to execute a milestone (for example "Execute Milestone 1 from SPEC.md
 1. Branch from `main`: `git checkout -b m<N>-<short-name>`, for example `m1-rules-engine`.
 2. Read SPEC.md: §2-§3 (rules and scoring), §5 (engine contract), the milestone in §6, and §8 (conventions). For M1, also scaffold the project as described in §8 if `pyproject.toml` does not exist yet.
 3. Build only that milestone. Do not start work from a later one.
-4. Test as you go. Every rule ID (`AUC-3`, `SCR-6`, ...) and every worked example (`G1`-`G10`, `L1`-`L9`, `T1`-`T4`) gets a test whose name contains the ID, for example `test_EST_5_last_estimator_cannot_make_13`. Worked examples are acceptance tests: match their numbers exactly.
+4. Test as you go. Every rule ID (`AUC-3`, `SCR-6`, ...) and every worked example (`G1`-`G10`, `L1`-`L11`, `T1`-`T4`) gets a test whose name contains the ID, for example `test_EST_5_last_estimator_cannot_make_13`. Worked examples are acceptance tests: match their numbers exactly.
 5. Run the full gate (below) until it is clean.
 6. Run the `spec-checker` subagent on the work and fix everything it reports.
 7. Stop and report: the milestone's **Done when** list with pass or fail for each item, the benchmark number (M1), and anything blocked. Do not start the next milestone unprompted.
@@ -23,6 +23,7 @@ When asked to execute a milestone (for example "Execute Milestone 1 from SPEC.md
 - **Config mirrors the spec.** `RulesConfig` defaults (§5.3) must equal the rules in §2-§3, and every bool flag is tested both on and off.
 - **The action space is frozen.** The 120 action ids in §5.2 never change; RL milestones depend on them.
 - **Bots see only their own `Observation`.** Nothing may leak another seat's cards.
+- **Ask Yosif before any long or heavy run.** Never start an arena run, an Elo ladder or any other rating, bidding statistics, training, data recording, a long benchmark or any job on several worker processes without asking him first: say what it is, roughly how long it takes and how many workers it uses, and wait for his yes. Check `ps` for other sessions' jobs first; the Mac runs one heavy job at a time. The test gate (pre-commit, pytest on 2 workers) and short runs inside tests need no asking. Watch a rating run with `uv run python -m estimation.arena.watch <its folder>` and a training run with `uv run python -m estimation.rl.watch <run>`.
 
 ## Commands
 

@@ -67,26 +67,6 @@ def test_lone_bidder_never_bids_13_L3():
     assert top is None or bid_of(top)[0] <= 12
 
 
-def test_with_range_and_floor_drop_L5():
-    bot = YosifBot(0, FAST)
-    rnd = round_with(
-        3,
-        "2C 3C 4C 5C 6C 2D 3D 4D 5D 6D 2H 3H 4H",
-        *[NO_DASH_CALL] * 4,
-        bid_action(6, HEARTS),
-        PASS,
-        PASS,
-        WITH,
-        PASS,
-        PASS,
-        estimate_action(0),
-        estimate_action(1),
-    )
-    legal = rnd.legal_actions()
-    assert legal == [estimate_action(k) for k in range(6)]
-    assert bot.act(rnd.observation(3), legal) in legal
-
-
 def test_last_estimator_banned_number_picks_the_best_legal_value_L4():
     planner = Planner(FAST)
     rnd = round_with(
