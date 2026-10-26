@@ -117,7 +117,7 @@ def test_a_ladder_pair_saves_its_games(tmp_path: Path, capsys: pytest.CaptureFix
 
     run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
     (path,) = (tmp_path / "games").glob("*.jsonl.gz")
-    header, records = read_games(path)
+    header, records, _ = read_games(path)
     assert header is not None
     assert header.lineup == ("random", "heuristic", "random", "heuristic")
     assert len(records) == 4
@@ -162,3 +162,24 @@ def test_the_report_shows_named_tables_with_elo_ranges(
     assert summary["groups"]["random"] == ["Leaderboard"]
     low, high = summary["ranges"]["heuristic"]
     assert low <= summary["ratings"]["heuristic"] <= high
+
+
+def test_a_pair_whose_games_file_is_from_other_code_is_played_again(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    import dataclasses
+
+    from estimation.arena.games import read_games, write_games
+
+    run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
+    (path,) = (tmp_path / "games").glob("*.jsonl.gz")
+    header, records, _ = read_games(path)
+    assert header is not None
+    write_games(path, dataclasses.replace(header, code_version="older"), records)
+
+    def played(*args: object, **kwargs: object) -> None:
+        raise AssertionError("played again")
+
+    monkeypatch.setattr(ladder, "run_arena", played)
+    with pytest.raises(AssertionError, match="played again"):
+        run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))

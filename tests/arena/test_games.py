@@ -49,7 +49,7 @@ def test_a_saved_game_replays_to_its_scores(tmp_path: Path):
     record = one_game()
     path = tmp_path / "games.jsonl.gz"
     write_games(path, HEADER, [record])
-    header, records = read_games(path)
+    header, records, _ = read_games(path)
     assert header == HEADER
     assert records == [record]
     bola = replay(records[0], RULES)
@@ -94,7 +94,7 @@ def test_web_games_are_read(tmp_path: Path):
     }
     path = tmp_path / "games.jsonl"
     path.write_text(json.dumps(line) + "\n")
-    header, records = read_games(path)
+    header, records, _ = read_games(path)
     assert header is None
     assert len(records) == 1
     assert records[0].seats == ("heuristic",) * 4
@@ -123,8 +123,32 @@ def test_the_arena_cli_saves_its_games(tmp_path: Path):
         )
         == 0
     )
-    header, records = read_games(path)
+    header, records, _ = read_games(path)
     assert header is not None
     assert header.lineup == ("heuristic", "random", "heuristic", "random")
     assert len(records) == 4
     assert all(replay(record, RULES) is not None for record in records)
+
+
+def test_dirty_trees_with_different_changes_get_different_versions():
+    from estimation.arena.games import version_of
+
+    assert version_of("abc1234", "") == "abc1234"
+    one, two = version_of("abc1234", "diff one"), version_of("abc1234", "diff two")
+    assert one.startswith("abc1234+dirty")
+    assert one != two
+
+
+def test_damaged_files_and_lines_are_skipped_and_counted(tmp_path: Path):
+    record = one_game()
+    path = tmp_path / "plain-name.jsonl"  # gzip data under a plain name
+    write_games(path, HEADER, [record, record])
+    header, records, bad = read_games(path)
+    assert (header, len(records), bad) == (HEADER, 2, 0)
+    truncated = tmp_path / "cut.jsonl.gz"
+    truncated.write_bytes(path.read_bytes()[:-40])
+    _, records, bad = read_games(truncated)
+    assert bad >= 1
+    web = tmp_path / "games.jsonl"
+    web.write_text('{"not": "a game"}\n{broken json\n')
+    assert read_games(web) == (None, [], 2)

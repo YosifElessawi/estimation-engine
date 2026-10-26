@@ -289,7 +289,11 @@ def main(argv: list[str] | None = None) -> int:
         files = games_files(path)
         if not files:
             parser.error(f"no saved games under {path}")
-        groups = [read_games(file) for file in files]
+        read = [read_games(file) for file in files]
+        groups = [(header, records) for header, records, _ in read]
+        unreadable = sum(bad for _, _, bad in read)
+        if unreadable:
+            notes.append(f"Skipped {unreadable} damaged lines in the games files.")
         current = code_version()
         versions = {h.code_version for h, _ in groups if h is not None}
         if any(h is None for h, _ in groups):

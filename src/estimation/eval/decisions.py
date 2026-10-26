@@ -131,7 +131,9 @@ def candidates(d: Decision, heuristic_choice: int) -> list[int]:
             if is_bid(action):
                 wanted += _bid_neighbours(action)
         top = d.obs.top_bid
-        if top is not None and not is_bid(d.chosen):
+        if top is None:  # an opening: a pass is weighed against opening in every trump
+            wanted += [bid_action(4, trump) for trump in range(5)]
+        elif not is_bid(d.chosen):
             tricks, trump = bid_of(top)
             if tricks < 13:
                 wanted.append(bid_action(tricks + 1, trump))

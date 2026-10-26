@@ -295,7 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         files = games_files(args.source)
         if not files:
             parser.error(f"no saved games under {args.source}")
-        groups = [read_games(path) for path in files]
+        read = [read_games(path) for path in files]
+        groups = [(header, records) for header, records, _ in read]
+        unreadable = sum(bad for _, _, bad in read)
     else:
         spec, games = str(args.bot), args.games
         if games is None:  # checked above: without --from, --games is given
@@ -305,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as error:
             parser.error(str(error))
         groups = [(None, play_games(spec, games, args.seed, args.workers))]
+        unreadable = 0
     try:
         bots, tables, replayed = stats_from_games(groups, allow_mixed=args.allow_mixed)
     except ValueError as error:
@@ -312,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
     print(format_stats(bots, tables, args.bot if args.source is not None else None))
     if replayed.skipped:
         print(f"\nSkipped {replayed.skipped:,} saved games that no longer replay.")
+    if unreadable:
+        print(f"Skipped {unreadable:,} damaged lines in the games files.")
+    if any(header is None for header, _ in groups) and args.source is not None:
+        print("Note: web games carry no code version.")
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         data = {

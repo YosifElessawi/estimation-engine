@@ -80,3 +80,12 @@ def test_estimate_candidates_reach_two_either_side():
     assert d.kind == "estimate"
     options = candidates(d, estimate_action(3))
     assert {estimate_action(k) for k in (1, 2, 3, 4, 5)} <= set(options)
+
+
+def test_a_passed_opening_still_tries_opening_bids():
+    rnd = round_with(0, "2C 3C 4C 5C 2D 3D 4D 5D 2H 3H 4H 5H 6S", *[0] * 4)
+    d = decision_at(rnd.observation(0), rnd.legal_actions(), PASS)
+    assert d.kind == "open"
+    options = candidates(d, PASS)
+    assert options[0] == PASS
+    assert {bid_action(4, trump) for trump in range(5)} <= set(options)

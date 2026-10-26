@@ -27,7 +27,7 @@ from typing import Any
 from estimation.bots import make_bot
 
 from .duplicate import SetResult, run_arena
-from .games import code_version, make_header, write_games
+from .games import code_version, make_header, read_header, write_games
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -173,13 +173,20 @@ def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float)
 def _saved(
     path: Path, games: Path, lineup: list[str], sets: int, seed: int, version: str
 ) -> dict[str, Any] | None:
-    """The saved report of this pair, if it was played with the same lineup, sets, seed and code
-    version, and its games are saved too."""
+    """The saved report of this pair, if it and its games file were played with the same lineup,
+    sets, seed and code version."""
     if not path.exists() or not games.exists():
         return None
-    report: dict[str, Any] = json.loads(path.read_text())["report"]
+    try:
+        report: dict[str, Any] = json.loads(path.read_text())["report"]
+    except (ValueError, KeyError):  # a damaged report: play the pair again
+        return None
+    header = read_header(games)
     same = report["lineup"] == lineup and report["sets"] == sets and report["seed"] == seed
     same = same and report.get("code_version") == version
+    same = same and header is not None and header.code_version == version
+    same = same and header is not None and list(header.lineup) == lineup
+    same = same and header is not None and (header.sets, header.seed) == (sets, seed)
     return report if same and not report["rules"] else None
 
 
@@ -203,9 +210,11 @@ def play_pair(
         return _from_report(lower, upper, saved, 0.0), True
     run = run_arena(tuple(lineup), sets, seed, workers=workers, on_set=on_set, keep_games=True)
     report = build_report(run)
-    write_json(path, report, run, version)
-    header = make_header(lineup, sets, seed, run.config)
+    # The games first and the report last, each written whole: a report on disk means its
+    # games are too.
+    header = make_header(lineup, sets, seed, run.config, version)
     write_games(games, header, (game for result in run.results for game in result.games))
+    write_json(path, report, run, version)
     return _from_report(
         lower, upper, json.loads(path.read_text())["report"], run.wall_seconds
     ), False

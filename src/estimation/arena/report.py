@@ -8,6 +8,7 @@ the run section printed after the report.
 import dataclasses
 import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -297,7 +298,9 @@ def write_json(path: Path, report: Report, run: ArenaRun, version: str | None = 
         "report": {**report_to_json(report), "code_version": version or code_version()},
         "run": run_to_json(run),
     }
-    path.write_text(json.dumps(data, indent=1, allow_nan=False) + "\n")
+    temporary = path.with_name(path.name + ".tmp")  # written whole, then renamed into place
+    temporary.write_text(json.dumps(data, indent=1, allow_nan=False) + "\n")
+    os.replace(temporary, path)
 
 
 def load_pairs(path: Path) -> list[PairRecord]:

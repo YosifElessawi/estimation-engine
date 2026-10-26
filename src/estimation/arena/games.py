@@ -9,7 +9,9 @@ games takes seconds. The web table's own ``games.jsonl`` (plain JSON lines, no h
 
 import dataclasses
 import gzip
+import hashlib
 import json
+import os
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from typing import Any, cast
 from estimation.engine import Bola, IllegalActionError, RulesConfig
 
 ROOT = Path(__file__).resolve().parents[3]
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,9 +58,17 @@ class ReplayStats:
     skipped: int
 
 
+def version_of(commit: str, changes: str) -> str:
+    """A code version: the commit, plus a fingerprint of uncommitted changes to tracked files, so
+    two different sets of edits never share a version."""
+    if not changes:
+        return commit
+    return f"{commit}+dirty.{hashlib.sha1(changes.encode()).hexdigest()[:8]}"
+
+
 def code_version() -> str:
-    """The checked-out commit, with ``+dirty`` when tracked files have changes; ``unknown``
-    outside git."""
+    """The checked-out commit and any uncommitted changes to tracked files (``version_of``);
+    ``unknown`` outside git. Untracked files are not part of it."""
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -67,15 +78,11 @@ def code_version() -> str:
             check=True,
         ).stdout.strip()
         changes = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+            ["git", "diff", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-    return commit + ("+dirty" if changes else "")
+    return version_of(commit, changes)
 
 
 def changed_rules(config: RulesConfig) -> dict[str, Any]:
@@ -93,9 +100,12 @@ def rules_of(header: GamesHeader | None) -> RulesConfig:
     return RulesConfig(**header.rules) if header is not None else RulesConfig()
 
 
-def make_header(lineup: Sequence[str], sets: int, seed: int, config: RulesConfig) -> GamesHeader:
+def make_header(
+    lineup: Sequence[str], sets: int, seed: int, config: RulesConfig, version: str | None = None
+) -> GamesHeader:
+    """A games file's header; ``version`` defaults to the current ``code_version()``."""
     return GamesHeader(
-        code_version=code_version(),
+        code_version=version or code_version(),
         rules=changed_rules(config),
         lineup=tuple(lineup),
         sets=sets,
@@ -105,11 +115,26 @@ def make_header(lineup: Sequence[str], sets: int, seed: int, config: RulesConfig
 
 
 def write_games(path: Path, header: GamesHeader, records: Iterable[GameRecord]) -> None:
+    """Write a games file all at once: to a temporary file first, then renamed into place, so a
+    stopped run never leaves a half-written file under the real name."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8") as out:
+    temporary = path.with_name(path.name + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as out:
         out.write(json.dumps({"header": dataclasses.asdict(header)}) + "\n")
         for record in records:
             out.write(json.dumps(dataclasses.asdict(record)) + "\n")
+    os.replace(temporary, path)
+
+
+def _header(h: dict[str, Any]) -> GamesHeader:
+    return GamesHeader(
+        code_version=str(h["code_version"]),
+        rules=dict(h["rules"]),
+        lineup=tuple(str(bot) for bot in h["lineup"]),
+        sets=int(h["sets"]),
+        seed=int(h["seed"]),
+        created=str(h["created"]),
+    )
 
 
 def _record(data: dict[str, Any]) -> GameRecord:
@@ -142,31 +167,47 @@ def _web_record(data: dict[str, Any]) -> GameRecord:
     )
 
 
-def read_games(path: Path) -> tuple[GamesHeader | None, list[GameRecord]]:
-    """A games file's header and records; a web table file has no header."""
-    opener = gzip.open if path.suffix == ".gz" else open
+def _is_gzip(path: Path) -> bool:
+    with open(path, "rb") as raw:
+        return raw.read(2) == GZIP_MAGIC
+
+
+def read_games(path: Path) -> tuple[GamesHeader | None, list[GameRecord], int]:
+    """A games file's header, records and how many lines could not be read (a damaged line, or
+    the rest of a cut-off file, counts once). A web table file has no header. Gzip is recognised
+    by its content, whatever the file is called."""
     header: GamesHeader | None = None
     records: list[GameRecord] = []
-    with opener(path, "rt", encoding="utf-8") as lines:
-        for line in lines:
-            if not line.strip():
-                continue
-            data = cast(dict[str, Any], json.loads(line))
-            if "header" in data:
-                h = data["header"]
-                header = GamesHeader(
-                    code_version=str(h["code_version"]),
-                    rules=dict(h["rules"]),
-                    lineup=tuple(str(bot) for bot in h["lineup"]),
-                    sets=int(h["sets"]),
-                    seed=int(h["seed"]),
-                    created=str(h["created"]),
-                )
-            elif "deal_seed" in data:
-                records.append(_record(data))
-            else:
-                records.append(_web_record(data))
-    return header, records
+    bad = 0
+    opener = gzip.open if _is_gzip(path) else open
+    try:
+        with opener(path, "rt", encoding="utf-8") as lines:
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = cast(dict[str, Any], json.loads(line))
+                    if "header" in data:
+                        header = _header(data["header"])
+                    elif "deal_seed" in data:
+                        records.append(_record(data))
+                    else:
+                        records.append(_web_record(data))
+                except (ValueError, KeyError, TypeError, IndexError):
+                    bad += 1
+    except (EOFError, OSError, UnicodeDecodeError):  # a cut-off or damaged file
+        bad += 1
+    return header, records, bad
+
+
+def read_header(path: Path) -> GamesHeader | None:
+    """Only the header of a games file, or None if it has none or cannot be read."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as lines:
+            data = json.loads(lines.readline())
+        return _header(data["header"])
+    except (EOFError, OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def replay(record: GameRecord, rules: RulesConfig) -> Bola | None:
