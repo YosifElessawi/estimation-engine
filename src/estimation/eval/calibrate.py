@@ -37,6 +37,7 @@ from estimation.engine import (
     RoundResult,
     RulesConfig,
 )
+from estimation.eval.measure import Trial, read_trials
 
 DEFAULT_SPECS = ("pimc", "pimc:samples=16", "pimc:samples=8", "yosif")  # strong card players
 PER_FILE = 400  # games read per games file
@@ -137,8 +138,12 @@ def fit(
     source: dict[str, object] | None = None,
     min_rows: int = MIN_ROWS,
     min_dash_rows: int = MIN_DASH_ROWS,
+    trials: Sequence[Trial] | None = None,
 ) -> Calibration:
-    """The calibration that best describes ``rows`` (see the module docstring)."""
+    """The calibration that best describes ``rows`` (see the module docstring). With play-out
+    ``trials`` (``measure``), the make, miss and Dash curves come from them instead: their calls
+    were assigned, not chosen, so calls nobody would choose are measured too. The natural count
+    always comes from ``rows``."""
     plays = [r for r in rows if not r.dash]
     if not plays:
         raise ValueError("no estimating seats to fit")
@@ -150,6 +155,15 @@ def fit(
     distance = np.array([r.estimate for r in plays]) - natural
     won = np.array([float(r.won) for r in plays])
     off = np.abs(tricks - np.array([r.estimate for r in plays]))
+    dash_points = [(r.zero, r.won) for r in rows if r.dash]
+    if trials:
+        played = [t for t in trials if t.scenario != "dash"]
+        tx = np.array([[1.0, t.em, t.el, t.trumps, float(t.sans), 0.0] for t in played])
+        calls = np.array([float(t.call) for t in played])
+        distance = calls - tx @ weights
+        won = np.array([float(t.made) for t in played])
+        off = np.abs(np.array([float(t.tricks) for t in played]) - calls)
+        dash_points = [(t.zero, t.made) for t in trials if t.scenario == "dash"]
     offsets, made, miss = [], [], []
     for centre in np.arange(-4.0, 4.0 + STEP, STEP):
         inside = np.abs(distance - centre) <= STEP / 2
@@ -160,13 +174,16 @@ def fit(
             miss.append(float(off[missed].mean()) if missed.any() else 1.0)
     if not offsets:
         raise ValueError("too few rows to measure make chances")
-    dashes = [r for r in rows if r.dash]
     dash_p0, dash_made = [], []
     for low in np.arange(0.0, 1.0, 0.1):
-        inside = [r for r in dashes if low <= r.zero < low + 0.1 or (low >= 0.9 and r.zero == 1)]
+        inside = [
+            won
+            for zero, won in dash_points
+            if low <= zero < low + 0.1 or (low >= 0.9 and zero == 1)
+        ]
         if len(inside) >= min_dash_rows:
             dash_p0.append(float(low + 0.05))
-            dash_made.append(sum(r.won for r in inside) / len(inside))
+            dash_made.append(sum(inside) / len(inside))
     if not dash_p0:  # too few Dash Calls to measure: the counting's chance, as before
         dash_p0, dash_made = [0.0, 1.0], [0.0, 1.0]
     w = [float(v) for v in weights]
@@ -184,7 +201,12 @@ def fit(
         dash_p0=tuple(dash_p0),
         dash_made=tuple(dash_made),
         spread=spread,
-        source={**(source or {}), "rows": len(plays), "dash_rows": len(dashes)},
+        source={
+            **(source or {}),
+            "rows": len(plays),
+            "dash_rows": sum(r.dash for r in rows),
+            "trials": len(trials or ()),
+        },
     )
 
 
@@ -199,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--per-file", type=int, default=PER_FILE, help="games per file (400)")
     parser.add_argument("--out", type=Path, default=CALIBRATION_FILE, help="where to write it")
+    parser.add_argument(
+        "--playouts", type=Path, help="play-out trials (measure) for the make and Dash curves"
+    )
     parser.add_argument(
         "--min-rows", type=int, default=MIN_ROWS, help="rows a distance step needs (200)"
     )
@@ -217,8 +242,12 @@ def main(argv: list[str] | None = None) -> int:
         "code_version": code_version(),
         "created": datetime.now(UTC).isoformat(timespec="seconds"),
     }
+    trials = None
+    if args.playouts is not None:
+        playout_header, trials = read_trials(args.playouts)
+        source["playouts"] = {"file": str(args.playouts), **playout_header}
     try:
-        calibration = fit(rows, source, args.min_rows, max(1, args.min_rows // 7))
+        calibration = fit(rows, source, args.min_rows, max(1, args.min_rows // 7), trials)
     except ValueError as error:
         parser.error(str(error))
     args.out.parent.mkdir(parents=True, exist_ok=True)

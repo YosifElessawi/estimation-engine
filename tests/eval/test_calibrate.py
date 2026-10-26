@@ -55,3 +55,26 @@ def test_the_cli_writes_a_calibration_the_bot_loads(tmp_path: Path):
     calibration = load_calibration(out)
     assert calibration is not None
     assert calibration.source["rows"] > 0
+
+
+def test_play_out_trials_set_the_make_and_dash_curves():
+    from estimation.eval.measure import Trial
+
+    rows = synthetic(4000)  # the natural count: 1 + em + 0.5 per trump
+    trials = []
+    for i in range(3000):
+        call = 6 + (i % 5) - 2  # assigned calls around the natural count of 6
+        made = (i % 5 == 2) or (i % 10 == 1)  # right at it: always; one step under: half
+        trials.append(
+            Trial("caller", i, call, 3, 4.0, 2.0, 2, False, 0.0, call if made else 9, made)
+        )
+    for i in range(600):
+        zero = (i % 10) / 10 + 0.05
+        trials.append(Trial("dash", i, 0, -1, 0.0, 0.0, 0, False, zero, 0, i % 10 >= 5))
+    calibration = fit(rows, trials=trials)
+    assert calibration.make(0.0) == pytest.approx(1.0, abs=0.05)
+    assert calibration.make(-1.0) == pytest.approx(0.5, abs=0.05)
+    assert calibration.make(1.0) == pytest.approx(0.0, abs=0.05)
+    assert calibration.dash(0.95) == pytest.approx(1.0)
+    assert calibration.dash(0.15) == pytest.approx(0.0)
+    assert calibration.source["trials"] == 3600

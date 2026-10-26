@@ -18,9 +18,7 @@ import json
 import math
 import random
 import sys
-import time
-from collections.abc import Callable, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +38,7 @@ from estimation.engine import Bola, IllegalActionError, Phase, RulesConfig
 from .decisions import KINDS, Decision, candidates, decisions_of
 from .playout import value_table
 from .report import action_text, situation
+from .work import Progress, print_progress, run_tasks
 
 DEFAULT_DECISIONS = 300
 DEFAULT_DEALS = 12  # [Claude]
@@ -96,42 +95,6 @@ def _evaluate_one(task: tuple[Decision, int, str, int, RulesConfig]) -> Evaluate
     return Evaluated(d, values, best, lost)
 
 
-Progress = Callable[[str, int, int, float], None]  # what, done, in all, seconds elapsed
-
-
-def print_progress(what: str, done: int, total: int, elapsed: float) -> None:
-    """A progress line on stderr: done so far, time spent and time left."""
-    left = elapsed / done * (total - done)
-    print(
-        f"[eval] {what} {done}/{total}, {elapsed / 60:.1f} min so far, "
-        f"about {left / 60:.1f} min left",
-        file=sys.stderr,
-        flush=True,
-    )
-
-
-def _run[T, R](
-    work: Callable[[T], R], tasks: Sequence[T], workers: int, what: str, progress: Progress | None
-) -> list[R]:
-    """``work`` over ``tasks`` in order, on ``workers`` processes, reporting each one done."""
-    start = time.perf_counter()
-    results: list[R] = []
-
-    def collect(result: R) -> None:
-        results.append(result)
-        if progress is not None:
-            progress(what, len(results), len(tasks), time.perf_counter() - start)
-
-    if workers == 1:
-        for task in tasks:
-            collect(work(task))
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            for result in pool.map(work, tasks):
-                collect(result)
-    return results
-
-
 def evaluate(
     decisions: Sequence[Decision],
     deals: int = DEFAULT_DEALS,
@@ -143,7 +106,7 @@ def evaluate(
 ) -> list[Evaluated]:
     rules = rules or RulesConfig()
     tasks = [(d, deals, card_play, seed + 7919 * i, rules) for i, d in enumerate(decisions)]
-    return _run(_evaluate_one, tasks, workers, "decisions", progress)
+    return run_tasks(_evaluate_one, tasks, workers, "decisions", progress)
 
 
 def calibration(
@@ -289,7 +252,7 @@ def _play_lineup(
     lineup: Sequence[str], games: int, seed: int, workers: int, progress: Progress | None
 ) -> list[GameRecord]:
     tasks = [(tuple(lineup), seed + i, i) for i in range(games)]
-    return _run(_play_game, tasks, workers, "games", progress)
+    return run_tasks(_play_game, tasks, workers, "games", progress)
 
 
 def main(argv: list[str] | None = None) -> int:
