@@ -15,7 +15,16 @@ from dataclasses import dataclass
 
 from estimation.engine import RulesConfig
 
+from .calibration import Calibration
 from .counting import HandCount
+
+
+@dataclass(frozen=True, slots=True)
+class Calibrated:
+    """A hand's natural trick count and the fit that prices calls around it (``calibration``)."""
+
+    natural: float
+    fit: Calibration
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +35,7 @@ class Outlook:
     most: tuple[float, ...]
     least: tuple[float, ...]
     control: float = 1.0
+    calibrated: Calibrated | None = None  # when set, make chances come from the saved games
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +82,11 @@ def _at_least(odds: Sequence[float], k: int) -> float:
 
 
 def make_chance(o: Outlook, k: int) -> float:
-    """The chance of taking exactly ``k`` tricks when aiming at ``k``: landing on it while
-    taking every trick possible, plus, weighted by ``control``, dodging down to it."""
+    """The chance of taking exactly ``k`` tricks when aiming at ``k``: from the saved games when
+    the outlook is calibrated, else landing on it while taking every trick possible, plus,
+    weighted by ``control``, dodging down to it."""
+    if o.calibrated is not None:
+        return o.calibrated.fit.make(k - o.calibrated.natural)
     natural = o.most[k] if 0 <= k < len(o.most) else 0.0
     dodged = _at_least(o.most, k + 1) - _at_least(o.least, k + 1)
     return max(0.0, natural + o.control * dodged)
@@ -81,6 +94,9 @@ def make_chance(o: Outlook, k: int) -> float:
 
 def expected_miss(o: Outlook, k: int) -> float:
     """Expected tricks short of ``k`` plus expected tricks over it."""
+    if o.calibrated is not None:
+        distance = k - o.calibrated.natural
+        return (1 - o.calibrated.fit.make(distance)) * o.calibrated.fit.miss_size(distance)
     short = sum((k - n) * p for n, p in enumerate(o.most) if n < k)
     over = sum((n - k) * p for n, p in enumerate(o.least) if n > k)
     return short + over

@@ -7,6 +7,7 @@ it is made, as long as it can still be made [Yosif]. In the auction he starts lo
 information and raises on his final turn [Yosif].
 """
 
+import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -28,8 +29,9 @@ from estimation.engine.config import DEFAULT_CONFIG
 
 from ..heuristic import STRONGEST_FIRST, lowest_bid
 from ..pimc import PIMCConfig
+from .calibration import Calibration, load_calibration
 from .counting import DEFAULT_COUNT, CountValues, Reads, count_hand, read_bids
-from .odds import Outlook, Stake, expected_points, make_chance, outlook, stake
+from .odds import Calibrated, Outlook, Stake, expected_points, make_chance, outlook, stake
 
 TRUMPS = (0, 1, 2, 3, SANS)
 MIN_BID, MAX_TRICKS = 4, 13
@@ -50,6 +52,9 @@ class YosifConfig:
     risk_min_make: float = 0.25  # a bigger call must still be makeable [Claude]
     rules: RulesConfig = DEFAULT_CONFIG  # the rules the stakes are priced by
     pimc: PIMCConfig = field(default_factory=lambda: PIMCConfig(leader_weight=True))
+    calibrated: bool = False  # price calls by the fit to saved games (``calibration``); off
+    # until a play-out measurement backs it: the saved-games fit over-reaches (2026-10-27)
+    calibration: Calibration | None = field(default_factory=load_calibration)
 
 
 def best_number(
@@ -119,10 +124,49 @@ class Planner:
         over: bool | None = None,
         dodge_scale: float = 1.0,
         control: float | None = None,
+        calibrate: bool = True,
     ) -> Outlook:
         c = self.config
         steer = c.control if control is None else control
-        return outlook(count_hand(hand, trump, reads, over, c.count), dodge_scale, steer)
+        o = outlook(count_hand(hand, trump, reads, over, c.count), dodge_scale, steer)
+        fit = self._fit()
+        if fit is None or not calibrate:
+            return o
+        natural = fit.natural(
+            em=sum(k * p for k, p in enumerate(o.most)),
+            el=sum(k * p for k, p in enumerate(o.least)),
+            trumps=0 if trump == SANS else ((hand >> (13 * trump)) & 0x1FFF).bit_count(),
+            sans=trump == SANS,
+            fixed=False,
+            last_over=0 if over is None else 1 if over else -1,
+        )
+        return dataclasses.replace(o, calibrated=Calibrated(natural, fit))
+
+    def counting_outlook(
+        self, hand: int, trump: int, reads: Reads, over: bool | None = None
+    ) -> Outlook:
+        """The counting's own outlook, before any calibration (what the fit learns from)."""
+        return self._outlook(hand, trump, reads, over, calibrate=False)
+
+    def _fit(self) -> Calibration | None:
+        """The saved-games calibration when the bot uses it."""
+        return self.config.calibration if self.config.calibrated else None
+
+    def dash_zero_chance(self, hand: int, reads: Reads) -> float:
+        """The counting's chance of taking no trick as a Dash caller, under the opponents'
+        pressure, averaged over the trumps it is likely to face."""
+        outlooks = {t: self._outlook(hand, t, reads, calibrate=False) for t in TRUMPS}
+        pressed = self._dash_outlooks(hand, reads, outlooks)
+        return sum(o.least[0] for o in pressed) / len(pressed)
+
+    def _chance_points(self, chance: float, s: Stake) -> float:
+        """Expected points of a call made with ``chance``, SCR-5 included (``expected_points``
+        without the per-trick part)."""
+        c = self.config
+        bonus = c.rules.only_bonus if s.solo else 0
+        return chance * (s.win + bonus * (1 - c.others_make) ** 3) - (1 - chance) * (
+            s.lose + bonus * c.others_make**3
+        )
 
     def _risk(self, obs: Observation) -> bool:
         return self.config.risk_mode and needs_jump(obs, self.config.jump_points)
@@ -168,7 +212,7 @@ class Planner:
         c = self.config
         best = max(TRUMPS, key=lambda t: sum(k * p for k, p in enumerate(outlooks[t].most)))
         return [
-            self._outlook(hand, t, reads, dodge_scale=c.dash_break, control=1.0)
+            self._outlook(hand, t, reads, dodge_scale=c.dash_break, control=1.0, calibrate=False)
             for t in TRUMPS
             if t != best
         ]
@@ -182,9 +226,9 @@ class Planner:
         if obs.phase is Phase.DASH:
             if action != DASH_CALL:
                 return None
-            outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
-            pressed = self._dash_outlooks(obs.hand, reads, outlooks)
-            return sum(o.least[0] for o in pressed) / len(pressed)
+            zero = self.dash_zero_chance(obs.hand, reads)
+            fit = self._fit()
+            return fit.dash(zero) if fit is not None else zero
         if obs.phase is Phase.AUCTION:
             if (action == WITH and top is not None) or (
                 obs.top_bidder == obs.seat and top is not None and action == PASS
@@ -219,10 +263,14 @@ class Planner:
         reads = read_bids(obs)
         outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
         s = stake(0, caller=False, dash=True, last_risks=0, over=None, rules=c.rules)
-        pressed = self._dash_outlooks(obs.hand, reads, outlooks)
-        dash_value = sum(expected_points(o, 0, s, c.others_make, c.rules) for o in pressed) / len(
-            pressed
-        )
+        fit = self._fit()
+        if fit is None:
+            pressed = self._dash_outlooks(obs.hand, reads, outlooks)
+            dash_value = sum(
+                expected_points(o, 0, s, c.others_make, c.rules) for o in pressed
+            ) / len(pressed)
+        else:
+            dash_value = self._chance_points(fit.dash(self.dash_zero_chance(obs.hand, reads)), s)
         caller = max(
             self._caller_value(outlooks[t], range(MIN_BID, MAX_TRICKS + 1), False)[1]
             for t in TRUMPS
