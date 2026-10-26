@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from estimation.engine import Bola, Phase
 from estimation.engine.actions import PLAY_BASE
@@ -65,3 +66,18 @@ def test_records_concatenate_and_round_trip_through_a_file(tmp_path: Path):
     loaded = load_records(str(path))
     for field in ("features", "legal", "choice", "values", "reward", "game"):
         assert np.array_equal(getattr(loaded, field), getattr(records, field))
+
+
+def test_records_from_another_encoder_are_refused(tmp_path: Path):
+    path = tmp_path / "old.npz"
+    np.savez(
+        path,
+        features=np.zeros((2, 452), np.float16),
+        legal=np.zeros((2, 52), bool),
+        choice=np.zeros(2, np.int8),
+        values=np.zeros((2, 52), np.float32),
+        reward=np.zeros(2, np.float32),
+        game=np.zeros(2, np.int32),
+    )
+    with pytest.raises(ValueError, match="record again"):
+        load_records(str(path))

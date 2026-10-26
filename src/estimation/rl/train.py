@@ -7,9 +7,10 @@ Three stages, each skipped when its output already exists, so an interrupted run
 1. **record:** whole Bolas of four PIMC bots, every card decision recorded
    (``<out>/warmstart/pimc.npz``).
 2. **imitate:** CardPlayNet imitates PIMC's card play (``<out>/checkpoints/warm-start.pt``,
-   played with ``heuristic_bidding=true``).
+   played with ``heuristic_bidding=true``). Skipped with ``selfplay.start_from``.
 3. **selfplay:** Deep Monte Carlo self-play from the warm start, BiddingNet from scratch, with a
-   checkpoint every ``checkpoint_every`` iterations and ``final.pt`` at the end.
+   checkpoint every ``checkpoint_every`` iterations and ``final.pt`` at the end. With
+   ``selfplay.start_from`` it continues from that checkpoint's nets instead, both of them.
    ``<out>/selfplay/state.pt`` resumes it exactly. With ``overlap``, each iteration's games are
    played while the learner trains on the previous ones; with ``balance``, the slowest games
    start first. Every ``yardstick_every`` iterations a fixed duplicate match rates the latest
@@ -376,9 +377,16 @@ def selfplay_stage(
         _say("selfplay", f"reusing {final}")
         return final
     _check_yardstick(config)
-    card = load_policy(warm_start).card
+    start = load_policy(warm_start)
+    card = start.card
+    if card.hidden != config.nets.hidden:
+        raise SystemExit(
+            f"{warm_start} has {card.hidden} hidden units; the config says {config.nets.hidden}"
+        )
     seed_torch(derive_seed(config.seed, SELFPLAY_STAGE, 0, 0))
     bidding = BiddingNet(config.nets.hidden)
+    if cfg.start_from and start.bidding is not None:
+        bidding = start.bidding  # continue its bidding too
     anchor = None
     if cfg.card_anchor_weight > 0:
         anchor = ImitationData(records, training_rows(records, config), device)
@@ -387,7 +395,7 @@ def selfplay_stage(
     snapshots: dict[int, NetWeights] = {}
     start_iteration = 0
     totals = {"games": 0, "seconds": 0.0, "bid_samples": 0, "card_samples": 0}
-    warm_meta = load_policy(warm_start).meta
+    warm_meta = start.meta
     base_seconds = float(warm_meta.get("seconds", 0.0))
     view: ActorView | None = None
     if state_path.exists():
@@ -540,12 +548,15 @@ def train(
     recorded data's path after ``record``)."""
     run = Run(out, config)
     run.check_config()
+    start_from = config.selfplay.start_from
+    if start_from and not Path(start_from).is_file():
+        raise SystemExit(f"selfplay.start_from {start_from} is not a file")  # before any games
     device = resolve_device(config.nets.device)
     with worker_pool(config.workers) as pool:
         records = record_stage(run, pool)
         if until == "record":
             return out / "warmstart" / "pimc.npz"
-        warm_start = imitation_stage(run, records, device)
+        warm_start = Path(start_from) if start_from else imitation_stage(run, records, device)
         if until == "imitate":
             return warm_start
         return selfplay_stage(run, warm_start, records, pool, device, on_iteration)

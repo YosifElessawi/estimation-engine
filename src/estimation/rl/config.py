@@ -93,6 +93,9 @@ class SelfPlayConfig:
     yardstick_seed: int = 0
     yardstick_pimc_samples: int = 8
     yardstick_reference: str = ""  # path to a checkpoint to play head-to-head ("" skips it)
+    # Continue from a trained checkpoint instead of the imitation warm start: its CardPlayNet
+    # and, if it has one, its BiddingNet. An older encoder's checkpoint is widened on loading.
+    start_from: str = ""
 
 
 @dataclass(frozen=True, slots=True)

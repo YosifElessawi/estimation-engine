@@ -71,3 +71,40 @@ def test_a_file_that_is_not_a_checkpoint_is_refused(tmp_path: Path):
     torch.save({"format": 99}, path)
     with pytest.raises(ValueError, match="not an M4 checkpoint"):
         load_policy(path)
+
+
+def as_version_1(path: Path) -> None:
+    """Rewrite a checkpoint as encoder version 1 saved it: 452 inputs, before the void
+    announcements (TBL-7) were appended."""
+    payload = torch.load(path, weights_only=True)
+    for net in ("card", "bidding"):
+        if payload[net] is not None:
+            payload[net]["trunk.0.weight"] = payload[net]["trunk.0.weight"][:, :452]
+    payload["encoder"], payload["num_features"] = 1, 452
+    torch.save(payload, path)
+
+
+def test_a_version_1_checkpoint_loads_and_ignores_the_new_inputs(tmp_path: Path):
+    path = make_checkpoint(tmp_path / "v1.pt")
+    as_version_1(path)
+    policy = load_policy(path)
+    assert policy.meta["upgraded_from_encoder"] == 1
+    assert policy.bidding is not None
+    first = policy.card.state_dict()["trunk.0.weight"]
+    assert first.shape[1] == NUM_FEATURES
+    rng = np.random.default_rng(0)
+    x = rng.random((5, NUM_FEATURES), dtype=np.float32)
+    y = x.copy()
+    y[:, 452:] = 1.0 - y[:, 452:]  # any announcement values at all
+    assert np.allclose(policy.bid_values(x), policy.bid_values(y))
+    assert np.allclose(policy.card_values(x), policy.card_values(y))
+    assert not first[:, 452:].any()  # zero weights, learned from there
+
+
+def test_a_checkpoint_whose_inputs_cannot_be_widened_is_refused(tmp_path: Path):
+    path = make_checkpoint(tmp_path / "odd.pt")
+    payload = torch.load(path, weights_only=True)
+    payload["encoder"], payload["num_features"] = 1, 400
+    torch.save(payload, path)
+    with pytest.raises(ValueError, match="encoder version 1 with 400 features"):
+        load_policy(path)

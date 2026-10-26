@@ -21,7 +21,12 @@ players       56  per seat: estimate, tricks, points if it wins or loses, alive 
 scores        13  game scores, gap to first place, standings weights, open rounds and fixed
                   trumps left, replays, own match-win probability
 shape          9  suit lengths and HeuristicBot's expected tricks under each trump
+announced      4  per seat: announced void at the deal (TBL-7)
 ==========  ====  ===========================================================================
+
+Version 2 appended the ``announced`` block; the 452 features before it are version 1's, in the
+same places, so a version 1 checkpoint loads with zero weights for the new inputs
+(``networks.load_policy``).
 
 ``points_if_win`` and ``points_if_lose`` come from the RulesConfig, so a rule change shows up in
 the inputs instead of needing a retrain from scratch. The standings weights and the match-win
@@ -41,7 +46,7 @@ from estimation.engine.config import DEFAULT_CONFIG
 
 from .standings import ROUND_SD, rounds_remaining, standings_weights, win_probabilities
 
-ENCODER_VERSION = 1
+ENCODER_VERSION = 2
 
 _BLOCKS = (
     ("hand", 52),
@@ -55,6 +60,7 @@ _BLOCKS = (
     ("players", 56),
     ("scores", 13),
     ("shape", 9),
+    ("announced", 4),
 )
 OFFSETS: dict[str, int] = {}
 _offset = 0
@@ -72,6 +78,7 @@ AUCTION = OFFSETS["auction"]
 PLAYERS = OFFSETS["players"]
 SCORES = OFFSETS["scores"]
 SHAPE = OFFSETS["shape"]
+ANNOUNCED = OFFSETS["announced"]
 
 STAKES_SCALE = 100.0  # points_if_win and points_if_lose are given in hundreds of points
 CLIP = 5.0  # stakes, scores and multipliers are clipped to +-5 (random play stacks carries)
@@ -247,6 +254,10 @@ def encode_into(out: npt.NDArray[np.float32], obs: Observation, rules: RulesConf
     values = trump_values(original)
     for t in range(5):
         out[SHAPE + 4 + t] = values[t] / 13.0
+
+    # Seats announced void at the deal (TBL-7), counted from the acting seat.
+    for seat in obs.void_announced:
+        out[ANNOUNCED + ((seat - me) & 3)] = 1.0
 
 
 def _clip(value: float) -> float:
