@@ -135,3 +135,13 @@ def test_full_games_are_legal():
             assert seat is not None
             bola.step(bots[seat].act(bola.observation(seat), bola.legal_actions()))
         assert len(bola.history) >= 18
+
+
+def test_a_weak_hand_does_not_say_with():
+    # Seat 0 opens 4 Hearts; seat 1 holds nothing that can make 4 Hearts.
+    bot = YosifBot(0, FAST)
+    rnd = round_with(
+        1, "2C 3C 4C 5C 2D 3D 4D 5D 2H 3H 4H 5H 6S", *[NO_DASH_CALL] * 4, bid_action(4, HEARTS)
+    )
+    assert rnd.current_player == 1
+    assert act(bot, rnd) != WITH

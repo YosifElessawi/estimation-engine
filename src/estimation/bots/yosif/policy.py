@@ -126,22 +126,23 @@ class Planner:
         k = max(values.items(), key=lambda item: (item[1], -item[0]))[0]
         return k, values[k]
 
+    def _plain_trump_value(self, o: Outlook) -> float:
+        """The best expected points as an ordinary estimator under one trump."""
+        c = self.config
+        return max(
+            expected_points(
+                o,
+                k,
+                stake(k, caller=False, dash=False, last_risks=0, over=None, rules=c.rules),
+                c.others_make,
+                c.rules,
+            )
+            for k in range(MAX_TRICKS + 1)
+        )
+
     def _plain_value(self, hand: int, reads: Reads) -> float:
         """What the hand expects as an ordinary estimator, averaged over the five trumps."""
-        c = self.config
-        total = 0.0
-        for trump in TRUMPS:
-            o = self._outlook(hand, trump, reads)
-            total += max(
-                expected_points(
-                    o,
-                    k,
-                    stake(k, caller=False, dash=False, last_risks=0, over=None, rules=c.rules),
-                    c.others_make,
-                    c.rules,
-                )
-                for k in range(MAX_TRICKS + 1)
-            )
+        total = sum(self._plain_trump_value(self._outlook(hand, t, reads)) for t in TRUMPS)
         return total / len(TRUMPS)
 
     def dash(self, obs: Observation, legal: list[int]) -> int:
@@ -197,8 +198,12 @@ class Planner:
         if best >= 0:
             return best
         if top is not None and WITH in legal:
+            # With means estimating at least the top bid's number, scored like the Caller
+            # (AUC-2, EST-3): say it only when that beats estimating normally in its trump.
             tricks, trump = bid_of(top)
-            if targets[trump][0] >= tricks:
+            o = self._outlook(obs.hand, trump, reads)
+            with_value = self._caller_value(o, range(tricks, MAX_TRICKS + 1), risk)[1]
+            if with_value > self._plain_trump_value(o):
                 return WITH
         return PASS
 
