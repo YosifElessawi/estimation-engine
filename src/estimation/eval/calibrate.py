@@ -44,6 +44,7 @@ PER_FILE = 400  # games read per games file
 STEP = 0.5  # width of a distance bin, in tricks
 MIN_ROWS = 200  # rows a distance bin needs to be kept
 MIN_DASH_ROWS = 30  # rows a Dash Call bin needs to be kept
+BIG_FROM = 8  # calls this big (super calls) get their own make curve
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,23 @@ def _row(spec: str, result: RoundResult, seat: int, obs: Observation, planner: P
     )
 
 
+def _curve(
+    distance: np.ndarray, won: np.ndarray, off: np.ndarray, min_rows: int
+) -> tuple[list[float], list[float], list[float]]:
+    """Made share and mean miss size per half-trick distance, where there are enough rows."""
+    offsets: list[float] = []
+    made: list[float] = []
+    miss: list[float] = []
+    for centre in np.arange(-4.0, 4.0 + STEP, STEP):
+        inside = np.abs(distance - centre) <= STEP / 2
+        if inside.sum() >= min_rows:
+            offsets.append(float(centre))
+            made.append(float(won[inside].mean()))
+            missed = inside & (won == 0)
+            miss.append(float(off[missed].mean()) if missed.any() else 1.0)
+    return offsets, made, miss
+
+
 def fit(
     rows: Sequence[Row],
     source: dict[str, object] | None = None,
@@ -164,16 +182,16 @@ def fit(
         won = np.array([float(t.made) for t in played])
         off = np.abs(np.array([float(t.tricks) for t in played]) - calls)
         dash_points = [(t.zero, t.made) for t in trials if t.scenario == "dash"]
-    offsets, made, miss = [], [], []
-    for centre in np.arange(-4.0, 4.0 + STEP, STEP):
-        inside = np.abs(distance - centre) <= STEP / 2
-        if inside.sum() >= min_rows:
-            offsets.append(float(centre))
-            made.append(float(won[inside].mean()))
-            missed = inside & (won == 0)
-            miss.append(float(off[missed].mean()) if missed.any() else 1.0)
+    calls = np.array([float(r.estimate) for r in plays])
+    if trials:
+        calls = np.array([float(t.call) for t in trials if t.scenario != "dash"])
+    small = calls < BIG_FROM
+    offsets, made, miss = _curve(distance[small], won[small], off[small], min_rows)
     if not offsets:
         raise ValueError("too few rows to measure make chances")
+    big: tuple[list[float], list[float], list[float]] = ([], [], [])
+    if trials:  # only assigned calls show how hard big contracts are to land
+        big = _curve(distance[~small], won[~small], off[~small], max(1, min_rows // 5))
     dash_p0, dash_made = [], []
     for low in np.arange(0.0, 1.0, 0.1):
         inside = [
@@ -201,6 +219,10 @@ def fit(
         dash_p0=tuple(dash_p0),
         dash_made=tuple(dash_made),
         spread=spread,
+        big_offsets=tuple(big[0]),
+        big_made=tuple(big[1]),
+        big_miss=tuple(big[2]),
+        big_from=BIG_FROM,
         source={
             **(source or {}),
             "rows": len(plays),

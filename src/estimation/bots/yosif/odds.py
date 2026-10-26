@@ -86,7 +86,7 @@ def make_chance(o: Outlook, k: int) -> float:
     the outlook is calibrated, else landing on it while taking every trick possible, plus,
     weighted by ``control``, dodging down to it."""
     if o.calibrated is not None:
-        return o.calibrated.fit.make(k - o.calibrated.natural)
+        return o.calibrated.fit.make(k - o.calibrated.natural, call=k)
     natural = o.most[k] if 0 <= k < len(o.most) else 0.0
     dodged = _at_least(o.most, k + 1) - _at_least(o.least, k + 1)
     return max(0.0, natural + o.control * dodged)
@@ -96,7 +96,8 @@ def expected_miss(o: Outlook, k: int) -> float:
     """Expected tricks short of ``k`` plus expected tricks over it."""
     if o.calibrated is not None:
         distance = k - o.calibrated.natural
-        return (1 - o.calibrated.fit.make(distance)) * o.calibrated.fit.miss_size(distance)
+        fit = o.calibrated.fit
+        return (1 - fit.make(distance, call=k)) * fit.miss_size(distance, call=k)
     short = sum((k - n) * p for n, p in enumerate(o.most) if n < k)
     over = sum((n - k) * p for n, p in enumerate(o.least) if n > k)
     return short + over

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 CALIBRATION_FILE = Path(__file__).with_name("calibration.json")
+Points = tuple[float, ...]
 
 
 def _interp(x: float, xs: tuple[float, ...], ys: tuple[float, ...]) -> float:
@@ -51,6 +52,10 @@ class Calibration:
     dash_p0: tuple[float, ...]  # the counting's chance of no trick under pressure
     dash_made: tuple[float, ...]  # how often such Dash Calls are made
     spread: float = 1.1  # how far hands stray from the natural count, in tricks (residual sd)
+    big_offsets: tuple[float, ...] = ()  # calls of ``big_from`` or more (super calls) have their
+    big_made: tuple[float, ...] = ()  # own curve: they are harder to land exactly
+    big_miss: tuple[float, ...] = ()
+    big_from: int = 8
     source: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())
 
     def natural(
@@ -67,22 +72,28 @@ class Calibration:
             + self.last_over * last_over
         )
 
-    def _beyond(self, distance: float) -> float:
-        """How far ``distance`` lies outside the measured distances (0 inside them)."""
-        return max(self.offsets[0] - distance, distance - self.offsets[-1], 0.0)
+    def _curve(
+        self, call: int | None
+    ) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
+        if call is not None and call >= self.big_from and self.big_offsets:
+            return self.big_offsets, self.big_made, self.big_miss
+        return self.offsets, self.made, self.miss
 
-    def make(self, distance: float) -> float:
-        """The chance of making a call ``distance`` tricks above the natural count. Inside the
+    def make(self, distance: float, call: int | None = None) -> float:
+        """The chance of making ``call``, ``distance`` tricks above the natural count. Inside the
         measured distances, the measured share; beyond them, falling away as hands spread
-        (games hold almost no calls that far off, so the edge share must not carry on)."""
-        gap = self._beyond(distance)
-        return _interp(distance, self.offsets, self.made) * math.exp(
+        (there are almost no calls that far off, so the edge share must not carry on)."""
+        offsets, made, _ = self._curve(call)
+        gap = max(offsets[0] - distance, distance - offsets[-1], 0.0)
+        return _interp(distance, offsets, made) * math.exp(
             -(gap * gap) / (2 * self.spread * self.spread)
         )
 
-    def miss_size(self, distance: float) -> float:
+    def miss_size(self, distance: float, call: int | None = None) -> float:
         """Mean tricks off when the call is missed: measured, then growing past the edges."""
-        return _interp(distance, self.offsets, self.miss) + self._beyond(distance)
+        offsets, _, miss = self._curve(call)
+        gap = max(offsets[0] - distance, distance - offsets[-1], 0.0)
+        return _interp(distance, offsets, miss) + gap
 
     def dash(self, zero_chance: float) -> float:
         """The chance a Dash Call is made, from the counting's pressed chance of no trick."""
@@ -111,6 +122,10 @@ def _from_json(data: dict[str, Any]) -> Calibration:
         dash_p0=_floats(data["dash_p0"]),
         dash_made=_floats(data["dash_made"]),
         spread=float(data.get("spread", 1.1)),
+        big_offsets=_floats(data.get("big_offsets", ())),
+        big_made=_floats(data.get("big_made", ())),
+        big_miss=_floats(data.get("big_miss", ())),
+        big_from=int(data.get("big_from", 8)),
         source=dict(data.get("source", {})),
     )
 

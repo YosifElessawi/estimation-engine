@@ -78,3 +78,16 @@ def test_play_out_trials_set_the_make_and_dash_curves():
     assert calibration.dash(0.95) == pytest.approx(1.0)
     assert calibration.dash(0.15) == pytest.approx(0.0)
     assert calibration.source["trials"] == 3600
+
+
+def test_play_outs_give_big_calls_their_own_curve():
+    from estimation.eval.measure import Trial
+
+    trials = []
+    for i in range(2000):
+        small = Trial("caller", i, 6, 3, 4.0, 2.0, 2, False, 0.0, 6 if i % 2 else 7, i % 2 == 1)
+        big = Trial("caller", i, 9, 3, 7.0, 3.5, 2, False, 0.0, 9 if i % 5 == 0 else 8, i % 5 == 0)
+        trials += [small, big]
+    calibration = fit(synthetic(4000), trials=trials, min_rows=40)
+    assert calibration.make(0.0, call=6) == pytest.approx(0.5, abs=0.05)
+    assert calibration.make(0.0, call=9) == pytest.approx(0.2, abs=0.05)
