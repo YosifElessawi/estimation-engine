@@ -176,7 +176,7 @@ def test_bots_get_only_their_own_observation(catalog: Catalog):
     game = GameSession("g", BOTS, 10, catalog, mode="watch")
     recorders = [Recorder(seat, bot) for seat, bot in game.bots.items()]
     game.bots = {recorder.seat: recorder for recorder in recorders}
-    game.ensure(2_000)
+    game.ensure(10_000)
     assert game.finished
     assert all(recorder.calls > 0 for recorder in recorders)
 

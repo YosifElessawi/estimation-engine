@@ -28,7 +28,8 @@ from estimation.engine.cards import TRUMP_NAMES
 
 class ActionView(TypedDict):
     """One action with a readable label. ``kind`` is one of no_dash, dash, bid, super_call,
-    with, pass, keep (Pass on the top bidder's final turn), estimate and play."""
+    with, pass, keep (Pass on the top bidder's final turn), stay (Pass by a With player answering
+    a raise, AUC-3), estimate and play."""
 
     id: int
     kind: str
@@ -204,6 +205,10 @@ def describe_action(obs: Observation, action: int) -> ActionView:
     if action == PASS:
         if actor is not None and actor == obs.top_bidder:
             return _action(action, "keep", "Keep bid")
+        held = next((w for w in obs.with_players if w.seat == actor), None)
+        if obs.phase is Phase.AUCTION and held is not None and actor == obs.current_player:
+            # AUC-3: a With player answering a raise in its trump stays at its number
+            return _action(action, "stay", f"Stay at {held.w}", held.w, held.trump)
         return _action(action, "pass", "Pass")
     if is_estimate(action):
         k = estimate_of(action)
@@ -281,6 +286,7 @@ CALL_STAGES = {
     "with": Phase.AUCTION,
     "pass": Phase.AUCTION,
     "keep": Phase.AUCTION,
+    "stay": Phase.AUCTION,
     "estimate": Phase.ESTIMATION,
 }
 

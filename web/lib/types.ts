@@ -10,6 +10,7 @@ export type ActionKind =
   | "with"
   | "pass"
   | "keep"
+  | "stay"
   | "estimate"
   | "play";
 

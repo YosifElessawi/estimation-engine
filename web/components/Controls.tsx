@@ -241,7 +241,8 @@ export function DecisionPanel({ legal, busy, onAct }: { legal: ActionView[]; bus
   const bids = legal.filter((action) => action.kind === "bid");
   const supers = legal.filter((action) => action.kind === "super_call");
   const estimates = legal.filter((action) => action.kind === "estimate");
-  const others = legal.filter((action) => ["no_dash", "dash", "with", "pass", "keep"].includes(action.kind));
+  const others = legal.filter((action) => ["no_dash", "dash", "with", "pass", "keep", "stay"].includes(action.kind));
+  const stay = legal.find((action) => action.kind === "stay");
   const legalEstimates = new Map(estimates.map((action) => [action.tricks, action]));
   return (
     <section className="panel panel--decide" aria-label="Your call">
@@ -251,7 +252,9 @@ export function DecisionPanel({ legal, busy, onAct }: { legal: ActionView[]; bus
           ? "A Dash Call promises to take zero tricks."
           : estimates.length > 0
             ? "How many tricks will you take? Crossed-out numbers are not allowed here."
-            : "Bid a number of tricks and a trump, say With, or pass."}
+            : stay
+              ? `The player you said With to raised. Join the new bid, stay at ${stay.tricks ?? ""}, or outbid.`
+              : "Bid a number of tricks and a trump, say With, or pass."}
       </p>
       {others.length > 0 && (
         <div className="decide__row">
@@ -259,7 +262,7 @@ export function DecisionPanel({ legal, busy, onAct }: { legal: ActionView[]; bus
             <button
               key={action.id}
               type="button"
-              className={`button ${action.kind === "dash" ? "button--accent" : ""} ${action.kind === "no_dash" || action.kind === "pass" || action.kind === "keep" ? "button--primary" : ""}`}
+              className={`button ${action.kind === "dash" ? "button--accent" : ""} ${["no_dash", "pass", "keep", "stay"].includes(action.kind) ? "button--primary" : ""}`}
               onClick={() => onAct(action.id)}
               disabled={busy}
             >

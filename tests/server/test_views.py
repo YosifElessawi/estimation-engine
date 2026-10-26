@@ -33,7 +33,13 @@ def check_label(obs: Observation, action: int) -> str:
     assert (kind == "no_dash") == (action == NO_DASH_CALL)
     # AUC-3: Pass on the top bidder's own final turn keeps the bid.
     assert (kind == "keep") == (action == PASS and obs.current_player == obs.top_bidder)
-    assert (kind == "pass") == (action == PASS and obs.current_player != obs.top_bidder)
+    # AUC-3: Pass by a With player answering a raise in its trump keeps its number.
+    answering = any(w.seat == obs.current_player for w in obs.with_players)
+    stays = action == PASS and obs.current_player != obs.top_bidder and answering
+    assert (kind == "stay") == (stays and obs.phase is Phase.AUCTION)
+    assert (kind == "pass") == (
+        action == PASS and obs.current_player != obs.top_bidder and not stays
+    )
     # FIX-4: a bid made instead of an estimate in a fixed-trump round is a super call.
     assert (kind == "super_call") == (is_bid(action) and obs.phase is Phase.ESTIMATION)
     if kind == "super_call":
@@ -61,7 +67,18 @@ def test_every_legal_action_in_random_games_is_labelled_by_the_rules():
             for action in legal:
                 seen.add(check_label(obs, action))
             bola.step(rng.choice(legal))
-    kinds = {"no_dash", "dash", "bid", "super_call", "with", "pass", "keep", "estimate", "play"}
+    kinds = {
+        "no_dash",
+        "dash",
+        "bid",
+        "super_call",
+        "with",
+        "pass",
+        "keep",
+        "stay",
+        "estimate",
+        "play",
+    }
     assert seen == kinds
 
 
@@ -107,8 +124,8 @@ def test_L7_calls_restart_after_a_super_call():
 
 
 def test_a_lost_with_is_not_shown_as_a_current_call():
-    """AUC-4: seat 1 says With on 4 Hearts, seat 0 then wins at 5 Spades, and seat 1 estimates as
-    a normal player; its With bubble is gone once estimation starts."""
+    """AUC-4: seat 1 says With on 4 Hearts, seat 0 raises to 5 Spades on its final turn, and
+    seat 1 passes, losing its With; its With bubble is gone once estimation starts."""
     rnd = Round.new(1, deal(0, 1))
     events: list[EventView] = []
     script = [NO_DASH_CALL] * 4 + [
@@ -116,8 +133,8 @@ def test_a_lost_with_is_not_shown_as_a_current_call():
         WITH,
         PASS,
         PASS,
-        PASS,
         bid_action(5, SPADES),
+        PASS,
     ]
     for action in script:
         seat = rnd.current_player
