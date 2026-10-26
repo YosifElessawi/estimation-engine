@@ -15,7 +15,7 @@ import argparse
 import json
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from .ratings import (
     sweep_gap,
 )
 from .report import build_report, write_json
+from .status import STATUS_FILE, StatusWriter
 
 DEFAULT_LADDER = (
     "random",
@@ -118,21 +119,45 @@ def _saved(path: Path, lineup: list[str], sets: int, seed: int) -> dict[str, Any
 
 
 def play_pair(
-    lower: str, upper: str, sets: int, seed: int, workers: int, folder: Path
+    lower: str,
+    upper: str,
+    sets: int,
+    seed: int,
+    workers: int,
+    folder: Path,
+    on_set: Callable[[SetResult], None] | None = None,
 ) -> tuple[PairResult, bool]:
     """Rate one pair, reusing its saved report when it matches. Returns the result and whether
-    it was reused."""
+    it was reused; ``on_set`` sees each set as it is played."""
     lineup = [lower, upper, lower, upper]
     path = _pair_file(folder, lower, upper)
     saved = _saved(path, lineup, sets, seed)
     if saved is not None:
         return _from_report(lower, upper, saved, 0.0), True
-    run = run_arena(tuple(lineup), sets, seed, workers=workers)
+    run = run_arena(tuple(lineup), sets, seed, workers=workers, on_set=on_set)
     report = build_report(run)
     write_json(path, report, run)
     return _from_report(
         lower, upper, json.loads(path.read_text())["report"], run.wall_seconds
     ), False
+
+
+def _summary(result: PairResult) -> dict[str, Any]:
+    """A pair's results for the status file (see ``status.unit_results``)."""
+    record = result.record
+    return {
+        "bots": [
+            {"bot": result.upper, "rsa": result.upper_rsa, "first": result.upper_first},
+            {"bot": result.lower, "rsa": None, "first": None},
+        ],
+        "record": {
+            "a": record.a,
+            "b": record.b,
+            "a_wins": record.a_wins,
+            "draws": record.draws,
+            "b_wins": record.b_wins,
+        },
+    }
 
 
 def _signed(value: float) -> str:
@@ -242,20 +267,40 @@ def main(argv: list[str] | None = None) -> int:
 
     pairs = ladder_pairs(bots, extras)
     start = time.perf_counter()
+    status = StatusWriter(
+        args.dir / STATUS_FILE,
+        "ladder",
+        [(f"{lower} vs {upper}", (lower, upper, lower, upper)) for lower, upper in pairs],
+        args.sets,
+        args.seed,
+        args.workers,
+        ["python -m estimation.arena.ladder", *(argv if argv is not None else sys.argv[1:])],
+    )
     results: list[PairResult] = []
     played = 0
-    for n, (lower, upper) in enumerate(pairs, 1):
-        result, reused = play_pair(lower, upper, args.sets, args.seed, args.workers, args.dir)
-        results.append(result)
-        played += not reused
-        note = "reused" if reused else f"{result.seconds:,.0f} s"
-        print(f"[ladder] {n}/{len(pairs)} {lower} vs {upper}: {note}", file=sys.stderr, flush=True)
+    try:
+        for n, (lower, upper) in enumerate(pairs, 1):
+            status.start(n - 1)
+            result, reused = play_pair(
+                lower, upper, args.sets, args.seed, args.workers, args.dir, status.set_done
+            )
+            results.append(result)
+            played += not reused
+            status.done(n - 1, reused, args.sets, _summary(result))
+            note = "reused" if reused else f"{result.seconds:,.0f} s"
+            print(
+                f"[ladder] {n}/{len(pairs)} {lower} vs {upper}: {note}", file=sys.stderr, flush=True
+            )
+    except BaseException as exc:  # Ctrl-C included: the watch screen shows why the run stopped
+        status.finish(error=f"stopped: {exc!r}")
+        raise
 
     error = None
     try:
         ratings = bradley_terry([r.record for r in results], prior=DEFAULT_PRIOR)
     except ValueError as exc:
         ratings, error = {}, str(exc)
+    status.finish(ratings=ratings or None)
     print(format_ladder(bots, results, ratings, args.sets, args.seed, error))
     print()
     wall = time.perf_counter() - start
