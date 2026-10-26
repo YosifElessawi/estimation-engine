@@ -108,6 +108,20 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return cast(dict[str, Any], data)  # a JSON object's keys are always strings
 
 
+def runs_root(checkout: Path = ROOT) -> Path:
+    """The checkout whose ``runs/`` holds the ratings and checkpoints: the main checkout when
+    ``checkout`` is a git worktree (``runs/`` is git-ignored, so worktrees start without it and
+    ladders and training write to the main one), else ``checkout`` itself."""
+    git = checkout / ".git"
+    if git.is_file():  # a worktree: "gitdir: <main>/.git/worktrees/<name>"
+        text = git.read_text().strip()
+        if text.startswith("gitdir:"):
+            gitdir = Path(text.removeprefix("gitdir:").strip())
+            if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
+                return gitdir.parent.parent.parent
+    return checkout
+
+
 class Catalog:
     """The bots on offer, weakest first (unrated bots last), and a factory for seat specs."""
 
@@ -166,8 +180,9 @@ class Catalog:
 
     @classmethod
     def from_env(cls) -> "Catalog":
-        """The catalog under ``$ESTIMATION_ROOT`` (default: this checkout)."""
-        return cls.load(Path(os.environ.get("ESTIMATION_ROOT", ROOT)))
+        """The catalog under ``$ESTIMATION_ROOT``, else under ``runs_root()``."""
+        env = os.environ.get("ESTIMATION_ROOT")
+        return cls.load(Path(env) if env else runs_root())
 
     def entry(self, spec: str) -> BotEntry:
         """The listed entry for ``spec``, or an unrated one for any other spec."""

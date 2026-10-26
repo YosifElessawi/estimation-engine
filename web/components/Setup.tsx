@@ -10,26 +10,36 @@ import { PastGames } from "./PastGames";
 
 type Mode = "watch" | "play";
 
-const FAMILIES: { family: string; title: string }[] = [
-  { family: "rl", title: "Self-play RL (M4)" },
-  { family: "pimc", title: "PIMC search (M3)" },
-  { family: "heuristic", title: "HeuristicBot (M2)" },
-  { family: "random", title: "RandomBot" },
-];
+// The roster's tables (estimation.arena.roster), in the order the menus list them. A bot sits
+// under its first table; one the roster has no table for goes under "Other".
+const GROUPS = ["Leaderboard", "RL checkpoints", "Measuring rungs"];
+const OTHER = "Other";
 
 const SEAT_TITLES = ["Seat 0", "Seat 1", "Seat 2", "Seat 3"];
 
-function pick(bots: BotView[], prefix: string, fallback: number): string {
-  const found = bots.find((bot) => bot.label === prefix) ?? bots.find((bot) => bot.label.startsWith(prefix));
-  return (found ?? bots[Math.min(fallback, bots.length - 1)])?.spec ?? "heuristic";
+const groupOf = (bot: BotView): string => {
+  const first = bot.groups[0];
+  return first && GROUPS.includes(first) ? first : OTHER;
+};
+
+const byElo = (a: BotView, b: BotView): number => (b.elo ?? -1) - (a.elo ?? -1);
+
+function pick(bots: BotView[], names: string[], fallback: number): string {
+  for (const name of names) {
+    const found = bots.find((bot) => bot.label === name);
+    if (found) return found.spec;
+  }
+  const leaders = bots.filter((bot) => groupOf(bot) === "Leaderboard").sort(byElo);
+  return (leaders[fallback] ?? bots[0])?.spec ?? "heuristic";
 }
 
+/** The strongest bots of the leaderboard, one per seat. */
 function defaults(bots: BotView[]): string[] {
   return [
-    pick(bots, "RL final", bots.length - 1),
-    pick(bots, "PIMC, 8 deals", bots.length - 2),
-    pick(bots, "HeuristicBot", 0),
-    pick(bots, "RL warm start", bots.length - 3),
+    pick(bots, ["RL staged final", "RL M4 final"], 1),
+    pick(bots, ["PIMC"], 0),
+    pick(bots, ["Yosif bot"], 2),
+    pick(bots, ["HeuristicBot"], 3),
   ];
 }
 
@@ -44,12 +54,9 @@ function BotSelect({
   onChange: (spec: string) => void;
   id: string;
 }) {
-  const groups = FAMILIES.map(({ family, title }) => ({
-    title,
-    bots: bots
-      .filter((bot) => bot.family === family)
-      .sort((a, b) => (b.elo ?? -1) - (a.elo ?? -1)),
-  })).filter((group) => group.bots.length > 0);
+  const groups = [...GROUPS, OTHER]
+    .map((title) => ({ title, bots: bots.filter((bot) => groupOf(bot) === title).sort(byElo) }))
+    .filter((group) => group.bots.length > 0);
   const known = bots.some((bot) => bot.spec === value);
   return (
     <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value)}>
@@ -57,7 +64,7 @@ function BotSelect({
       {groups.map((group) => (
         <optgroup key={group.title} label={group.title}>
           {group.bots.map((bot) => (
-            <option key={bot.spec} value={bot.spec}>
+            <option key={bot.spec} value={bot.spec} title={bot.description}>
               {bot.label} · {formatElo(bot.elo)}
             </option>
           ))}
@@ -92,10 +99,10 @@ export function Setup({ bots, loadError, onStart }: Props) {
   }, [bots]);
 
   const seats = useMemo(() => chosen ?? (bots ? defaults(bots) : null), [chosen, bots]);
-  const ladder = useMemo(
-    () => (bots ?? []).filter((bot) => bot.elo !== null).sort((a, b) => (b.elo ?? 0) - (a.elo ?? 0)),
-    [bots],
-  );
+  const [allRatings, setAllRatings] = useState(false);
+  const rated = useMemo(() => (bots ?? []).filter((bot) => bot.elo !== null).sort(byElo), [bots]);
+  const leaders = rated.filter((bot) => groupOf(bot) === "Leaderboard");
+  const others = rated.filter((bot) => groupOf(bot) !== "Leaderboard");
 
   const setSeat = (seat: number, spec: string) => {
     if (!seats) return;
@@ -154,18 +161,38 @@ export function Setup({ bots, loadError, onStart }: Props) {
           Pull up a chair. Watch four bots play a whole Bola and step through every call, card and
           score, or take a seat yourself against three of them.
         </p>
-        {ladder.length > 0 && (
+        {rated.length > 0 && (
           <div className="ladder">
-            <h2 className="panel-title">Elo ladder</h2>
+            <h2 className="panel-title">Leaderboard</h2>
             <ol className="ladder__list">
-              {ladder.map((bot) => (
-                <li key={bot.spec} className={`ladder__row ladder__row--${bot.family}`}>
-                  <span>{bot.label}</span>
+              {leaders.map((bot) => (
+                <li key={bot.spec} className={`ladder__row ladder__row--lead ladder__row--${bot.family}`}>
+                  <span>
+                    <span className="ladder__name">{bot.label}</span>
+                    {bot.description && <span className="ladder__desc">{bot.description}</span>}
+                  </span>
                   <span className="mono">{formatElo(bot.elo)}</span>
                 </li>
               ))}
             </ol>
-            <p className="footnote">200 duplicate sets per neighbouring pair, RandomBot fixed at 400.</p>
+            {others.length > 0 && (
+              <button type="button" className="link small" onClick={() => setAllRatings(!allRatings)}>
+                {allRatings ? "hide the other ratings" : `show ${others.length} more: RL checkpoints and measuring rungs`}
+              </button>
+            )}
+            {allRatings && (
+              <ol className="ladder__list ladder__list--more">
+                {others.map((bot) => (
+                  <li key={bot.spec} className={`ladder__row ladder__row--${bot.family}`}>
+                    <span>{bot.label}</span>
+                    <span className="mono">{formatElo(bot.elo)}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <p className="footnote">
+              Elo under the current rules, from 200 duplicate sets per pair; RandomBot fixed at 400.
+            </p>
           </div>
         )}
       </section>

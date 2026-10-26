@@ -8,8 +8,28 @@ from estimation.arena.ladder import DEFAULT_LADDER
 from estimation.bots import HeuristicBot, NoisyBot
 from estimation.bots.rl import RLBot
 from estimation.engine.config import DEFAULT_CONFIG
-from server.catalog import Catalog, label_of
+from server.catalog import Catalog, label_of, runs_root
 from tests.server.conftest import FINAL, WARM
+
+
+def test_a_worktree_reads_the_main_checkouts_runs(tmp_path: Path):
+    """runs/ is git-ignored and ladders write to the main checkout, so a table started in a
+    worktree must read the ratings there."""
+    main = tmp_path / "Estimation Engine"
+    (main / ".git" / "worktrees" / "side").mkdir(parents=True)
+    worktree = main / ".claude" / "worktrees" / "side"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'side'}\n")
+    assert runs_root(worktree) == main
+    assert runs_root(main) == main  # the main checkout has a .git folder: it is its own root
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert runs_root(plain) == plain
+
+
+def test_estimation_root_overrides_the_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ESTIMATION_ROOT", str(tmp_path))
+    assert Catalog.from_env().root == tmp_path.resolve()
 
 
 @pytest.mark.parametrize(

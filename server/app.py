@@ -29,6 +29,7 @@ from typing import Annotated, Literal, TypedDict
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from estimation.arena.roster import entry_for
 from estimation.engine import IllegalActionError, RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
 
@@ -61,11 +62,16 @@ class Move(BaseModel):
 
 
 class BotView(TypedDict):
+    """A bot on offer. ``groups`` are the roster tables it sits in (Leaderboard, RL checkpoints,
+    Measuring rungs), best first, and ``description`` the roster's one line about it."""
+
     spec: str
     label: str
     family: str
     elo: float | None
     explains: bool
+    groups: list[str]
+    description: str
 
 
 class SeatView(TypedDict):
@@ -101,12 +107,15 @@ class SeekView(TypedDict):
 
 
 def _bot_view(entry: BotEntry) -> BotView:
+    roster = entry_for(entry.spec)
     return BotView(
         spec=entry.spec,
         label=entry.label,
         family=entry.family,
         elo=None if entry.elo is None else round(entry.elo),
         explains=entry.explains,
+        groups=list(roster.groups),
+        description=roster.description,
     )
 
 

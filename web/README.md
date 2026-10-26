@@ -27,11 +27,14 @@ Without portless, `npm run dev` serves it at `http://localhost:3000`.
 
 ## Bots and ratings
 
-The seat menus list the Elo ladder bots and the M4 checkpoints, labelled with their ladder Elo.
-They come from two git-ignored files under the project root: `runs/ladder-200/ladder.json` and
-`runs/m4/checkpoints/index.json` (plus the `.pt` checkpoints next to it). Without them the menus
-show the default ladder's bots, unrated. Set `ESTIMATION_ROOT` to read them from another
-checkout.
+The start page shows the leaderboard, and the seat menus list every bot in the roster's tables
+(Leaderboard, RL checkpoints, Measuring rungs), named and described by
+`estimation.arena.roster` and labelled with their ladder Elo. The ratings come from the newest
+ladder report under the project's `runs/` folder (`runs/ladder-v2/ladder.json`, else
+`runs/ladder-200/ladder.json`) and the checkpoints from `runs/m4/checkpoints/index.json`. `runs/` is
+git-ignored and lives in the main checkout, so a table started from a worktree reads the main
+checkout's. Without those files the menus show the default ladder's bots, unrated. Set
+`ESTIMATION_ROOT` to read another checkout.
 
 ## Modes
 

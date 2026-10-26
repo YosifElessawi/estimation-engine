@@ -320,6 +320,37 @@ select {
   color: var(--brass-hi);
 }
 
+.ladder__row--lead {
+  align-items: baseline;
+  padding: 6px 0;
+}
+
+.ladder__row--lead > span:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ladder__name {
+  font-family: var(--font-display), serif;
+  font-size: 16px;
+}
+
+.ladder__row--lead .ladder__desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ladder__row--lead .mono {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ladder__list--more {
+  margin-top: 8px;
+  opacity: 0.85;
+}
+
 .setup__card {
   display: flex;
   flex-direction: column;
