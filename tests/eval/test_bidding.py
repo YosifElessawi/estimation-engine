@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from estimation.arena.games import GameRecord
 from estimation.arena.match import play_bola
 from estimation.bots import make_bot
@@ -76,3 +78,15 @@ def test_calibration_bins_the_yosif_bots_calls():
     for b in bins:
         assert b.low <= b.predicted <= b.high
         assert 0.0 <= b.actual <= 1.0
+
+
+def test_progress_reports_each_game_and_decision(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    lineup = "heuristic,heuristic,heuristic,heuristic"
+    args = ["--bot", "heuristic", "--lineup", lineup, "--games", "2", "--decisions", "3"]
+    args += ["--deals", "1", "--card-play", "heuristic", "--progress", "--out", str(tmp_path)]
+    assert main(args) == 0
+    err = capsys.readouterr().err
+    assert "games 2/2" in err
+    assert "decisions 3/3" in err

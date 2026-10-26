@@ -18,7 +18,8 @@ import json
 import math
 import random
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +96,42 @@ def _evaluate_one(task: tuple[Decision, int, str, int, RulesConfig]) -> Evaluate
     return Evaluated(d, values, best, lost)
 
 
+Progress = Callable[[str, int, int, float], None]  # what, done, in all, seconds elapsed
+
+
+def print_progress(what: str, done: int, total: int, elapsed: float) -> None:
+    """A progress line on stderr: done so far, time spent and time left."""
+    left = elapsed / done * (total - done)
+    print(
+        f"[eval] {what} {done}/{total}, {elapsed / 60:.1f} min so far, "
+        f"about {left / 60:.1f} min left",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _run[T, R](
+    work: Callable[[T], R], tasks: Sequence[T], workers: int, what: str, progress: Progress | None
+) -> list[R]:
+    """``work`` over ``tasks`` in order, on ``workers`` processes, reporting each one done."""
+    start = time.perf_counter()
+    results: list[R] = []
+
+    def collect(result: R) -> None:
+        results.append(result)
+        if progress is not None:
+            progress(what, len(results), len(tasks), time.perf_counter() - start)
+
+    if workers == 1:
+        for task in tasks:
+            collect(work(task))
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            for result in pool.map(work, tasks):
+                collect(result)
+    return results
+
+
 def evaluate(
     decisions: Sequence[Decision],
     deals: int = DEFAULT_DEALS,
@@ -102,13 +139,11 @@ def evaluate(
     seed: int = 0,
     rules: RulesConfig | None = None,
     workers: int = 1,
+    progress: Progress | None = None,
 ) -> list[Evaluated]:
     rules = rules or RulesConfig()
     tasks = [(d, deals, card_play, seed + 7919 * i, rules) for i, d in enumerate(decisions)]
-    if workers == 1:
-        return [_evaluate_one(task) for task in tasks]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(_evaluate_one, tasks))
+    return _run(_evaluate_one, tasks, workers, "decisions", progress)
 
 
 def calibration(
@@ -233,26 +268,28 @@ def _to_json(
     }
 
 
-def _play_lineup(lineup: Sequence[str], games: int, seed: int) -> list[GameRecord]:
-    records = []
-    for i in range(games):
-        deal = seed + i
-        seeds = [deal * 4 + seat for seat in range(4)]
-        bots = [make_bot(spec, s) for spec, s in zip(lineup, seeds, strict=True)]
-        played = play_bola(deal, bots, keep_actions=True)
-        records.append(
-            GameRecord(
-                set_index=i,
-                rotation=0,
-                deal_seed=deal,
-                seats=(lineup[0], lineup[1], lineup[2], lineup[3]),
-                bot_seeds=(seeds[0], seeds[1], seeds[2], seeds[3]),
-                scores=played.scores,
-                rounds=played.rounds,
-                actions=played.actions,
-            )
-        )
-    return records
+def _play_game(task: tuple[tuple[str, ...], int, int]) -> GameRecord:
+    lineup, deal, index = task
+    seeds = [deal * 4 + seat for seat in range(4)]
+    bots = [make_bot(spec, s) for spec, s in zip(lineup, seeds, strict=True)]
+    played = play_bola(deal, bots, keep_actions=True)
+    return GameRecord(
+        set_index=index,
+        rotation=0,
+        deal_seed=deal,
+        seats=(lineup[0], lineup[1], lineup[2], lineup[3]),
+        bot_seeds=(seeds[0], seeds[1], seeds[2], seeds[3]),
+        scores=played.scores,
+        rounds=played.rounds,
+        actions=played.actions,
+    )
+
+
+def _play_lineup(
+    lineup: Sequence[str], games: int, seed: int, workers: int, progress: Progress | None
+) -> list[GameRecord]:
+    tasks = [(tuple(lineup), seed + i, i) for i in range(games)]
+    return _run(_play_game, tasks, workers, "games", progress)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0, help="seed (default 0)")
     parser.add_argument("--workers", type=int, default=1, help="worker processes (default 1)")
     parser.add_argument("--out", type=Path, help="write report.txt and evaluation.json here")
+    parser.add_argument("--progress", action="store_true", help="print progress to stderr")
     args = parser.parse_args(argv)
     if min(args.games, args.decisions, args.deals, args.workers) < 1 or args.seed < 0:
         parser.error("--games, --decisions, --deals and --workers must be at least 1")
@@ -283,7 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         lineup = [bot.strip() for bot in args.lineup.split(",")]
         if len(lineup) != 4:
             parser.error("--lineup needs 4 bots")
-        groups = [(None, _play_lineup(lineup, args.games, args.seed))]
+        progress = print_progress if args.progress else None
+        groups = [(None, _play_lineup(lineup, args.games, args.seed, args.workers, progress))]
     else:
         path: Path = args.source if args.source is not None else args.web
         files = games_files(path)
@@ -317,7 +356,15 @@ def main(argv: list[str] | None = None) -> int:
     if not decisions:
         parser.error(f"no decisions by {args.bot} in these games")
     sample = sample_decisions(decisions, args.decisions, args.seed)
-    evaluated = evaluate(sample, args.deals, args.card_play, args.seed, rules, args.workers)
+    evaluated = evaluate(
+        sample,
+        args.deals,
+        args.card_play,
+        args.seed,
+        rules,
+        args.workers,
+        print_progress if args.progress else None,
+    )
     bins = calibration(records, rules, args.bot)
     text = format_evaluation(args.bot, evaluated, bins, notes)
     print(text)
