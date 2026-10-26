@@ -29,6 +29,7 @@ A bot that plays **Estimation**, the 4-player trick-taking card game, by the rul
 ## 1. Rules at a Glance
 
 - Four players, each for themselves, 13 cards each; play goes counterclockwise. A game is 13 open rounds and then 5 fixed-trump rounds, and the most points wins.
+- Right after every deal, each player missing a whole suit is announced as **void**, without saying which suit.
 - Rounds 1-13 open with an optional **Dash Call**: a promise to take zero tricks. Starting with the first seat, each player decides in turn, and everyone sees each Dash Call as it is made.
 - Then an **auction** for trump. A bid is a number of tricks (4 to 13) plus a trump: Sans (no trump) > Spades > Hearts > Diamonds > Clubs. When everyone else is out, the top bidder gets a final turn to keep or raise. The winner is the **Caller**. Saying **With** at the top bid's number joins it and ends your bidding; if that player raises, you answer: join the new number, stay at yours, or outbid. A player outbid in their own trump who passes is held at their bid. When the auction ends, everyone held in its trump is **With**: scored like the Caller, with that number as their estimate.
 - The others **estimate** how many tricks they will take, never more than the Caller. Estimates can never total 13, so someone always fails. A total of 14 or more is an **Over** round, 12 or less an **Under** round. The last estimator takes a **Risk** for every 2 the total is off 13.
@@ -72,6 +73,7 @@ A bot that plays **Estimation**, the 4-player trick-taking card game, by the rul
 - **TBL-4** Card rank, high to low: A K Q J 10 9 8 7 6 5 4 3 2. `[Page]`
 - **TBL-5** Trumps, strongest first: Sans (no trump), Spades, Hearts, Diamonds, Clubs. `[Page]`
 - **TBL-6** One bid beats another if it has more tricks, or the same number of tricks and a stronger trump. `[Page]`
+- **TBL-7** **Void announcement.** Right after every deal, before the round's first decision, every player whose 13 cards miss at least one suit is announced to everyone as void. It is automatic, and it says neither which suit nor how many. A player not announced holds all four suits. `[Play]` (confirmed by Yosif 2026-10-26)
 
 ### 2.3 Game Structure
 
@@ -391,7 +393,7 @@ Python package `estimation`, engine code in `estimation.engine`.
   - `clone()`, and `Round.replay(round_no, hands, fixed_trump, carry, scores, config, actions)` to rebuild a round from its action log. Two rounds are in the same state when `phase`, `current_player`, `observation(seat)` for all four seats and (once `DONE`) `result()` are all equal.
   - `result() -> RoundResult`, once `phase == DONE`.
 - `Bola(seed, config=RulesConfig())`: a full game. It has the same `phase`, `current_player`, `legal_actions`, `step` and `observation`, plus `round_no`, `scores`, `history` (one `RoundResult` per round, skipped and replayed rounds included), `is_over` and `winners()` (every seat tied for the top score, GAM-5). It deals, picks each round's fixed trump, applies the carry, replays fixed-trump rounds whose trump changed (FIX-5) and moves to the next round by itself. Once `is_over`, it behaves like a round in `DONE`.
-- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, Dash callers, Caller and bid, With players with their `w` and trump (during the auction: the players out of it who hold a call in the top bid's trump), estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. Dash Calls are public as soon as they are made (DSH-2).
+- `Observation`: everything one seat may see, and nothing else. That is: round number, phase, current player, carry, game scores, the fixed trump (if any), the fixed trumps still to play, replays so far, whether a super call was made, the trump (once known), own remaining hand, the public action log, the players announced void (TBL-7), Dash callers, Caller and bid, With players with their `w` and trump (during the auction: the players out of it who hold a call in the top bid's trump), estimates so far, the last estimator, Over/Under and Risks (once known), the current trick, past tricks (leader, cards, winner) and tricks won per seat. It MUST NOT expose another seat's cards. Dash Calls are public as soon as they are made (DSH-2).
 - `RoundResult`: per seat: estimate, tricks, won, role flags (Dash caller, Caller, With, super call, last estimator), Risks, the points from each of SCR-1 to SCR-6, the multiplier and the final score. Per round: skipped, trump changed by a super call (so `Bola` replays it), estimate total, Over/Under, special-call count, all-lose and the carry for the next round. Under SCR-9 an all-lose round has multiplier 0, so components times multiplier always equals the final score.
 
 ### 5.5 Performance
@@ -463,8 +465,8 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 **Goal:** strong card play from search, with no training. Target: clearly above HeuristicBot on the Elo ladder.
 
 **Build:**
-- Track voids (a player who did not follow suit has none of that suit) and played cards.
-- At each card decision, sample N = 30 deals of the unseen cards. Samples MUST be consistent with hand sizes, voids and played cards, and SHOULD be weighted by how well they fit each player's estimate.
+- Track voids (a player who did not follow suit has none of that suit), the void announcements (TBL-7) and played cards.
+- At each card decision, sample N = 30 deals of the unseen cards. Samples MUST be consistent with hand sizes, voids, played cards and the void announcements (a player announced void misses a suit in its dealt hand, any other player holds all four), and SHOULD be weighted by how well they fit each player's estimate.
 - For each legal card and each sample, play out the rest of the round with HeuristicBot's card play for every seat, and score it with §3. Choose the card with the best mean of (own round score minus the mean of the other three).
 - Dash Call, bidding and estimation reuse HeuristicBot.
 - Budget: at most 250 ms per card decision at N = 30, configurable.
