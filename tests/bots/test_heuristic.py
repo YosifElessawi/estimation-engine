@@ -109,12 +109,28 @@ def test_raises_when_keeping_its_bid_would_leave_13():
 
 @pytest.mark.parametrize(
     ("expected", "target"),
-    [(3.4, 3), (4.4, 4), (4.5, 5), (7.4, 7), (7.6, 7), (8.4, 7), (8.5, 9), (12.6, 13), (13.4, 13)],
+    [(3.4, 3), (4.4, 4), (4.5, 5), (7.4, 7), (7.6, 8), (8.4, 8), (8.5, 9), (12.6, 13), (13.4, 13)],
 )
-def test_targets_round_expected_tricks_and_super_call_only_when_very_strong(
-    expected: float, target: int
-):
+def test_targets_round_expected_tricks_and_super_call_from_8(expected: float, target: int):
     assert target_tricks(expected, HeuristicConfig()) == target
+
+
+def test_super_calls_8_with_a_hand_worth_8():
+    """Yosif's hand (2026-10-25): 7.8 expected tricks in Spades. It used to be held at 7; a
+    simulation over 500 deals scored 8 Spades +17 a round against +4 for 7 Spades."""
+    hand = "AS KS QS JS 9S 7S QH TH 3H AD QD 7D 4D"
+    rnd = round_with(0, hand, *NO_DASH)
+    assert act(rnd) == bid_action(4, SPADES)  # opens low
+    for action in (bid_action(4, SPADES), PASS, PASS, PASS):
+        rnd.step(action)
+    assert rnd.current_player == 0  # its final turn
+    assert act(rnd) == bid_action(8, SPADES)
+
+
+def test_never_bids_8_from_a_hand_below_7_and_a_half():
+    assert target_tricks(7.49, HeuristicConfig()) == 7
+    held = HeuristicConfig(super_call_tricks=8.5)  # the old threshold, still a setting
+    assert target_tricks(7.8, held) == 7
 
 
 def test_super_calls_in_a_fixed_round_with_a_much_better_trump():

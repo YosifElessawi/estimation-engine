@@ -3,7 +3,8 @@
 - Dash Call: only with a hopeless hand (no honours worth a trick, no long suit).
 - Auction: aims for ``target_tricks`` in its best trump, opening or overcalling with the lowest
   bid in that trump and raising to the target on its final turn. Says With when its hand fits
-  the top bid. Bids 8 or more (a super call) only with a very strong hand.
+  the top bid. Bids 8 or more (a super call) once its expected tricks round to 8 (from 7.5;
+  until 2026-10-26 it needed 8.5, which rounds to 9, so it never bid exactly 8).
 - Estimation: the legal value nearest its expected tricks; the last estimator also weighs Risks.
   In a fixed-trump round it super-calls only when another trump is much stronger.
 - Card play: ``card_play.choose_card``: win tricks until the estimate is reached, then duck.
@@ -43,7 +44,7 @@ class HeuristicConfig:
     dash_max_suit: int = 4  # ...and no suit is longer than this
     bid_rounding: float = 0.5  # aim for int(expected tricks + bid_rounding)
     super_call_min: int = 8  # the rules' super call size (RulesConfig.super_call_min)
-    super_call_tricks: float = 8.5  # aim for a super call only with this many expected tricks
+    super_call_tricks: float = 7.5  # aim for a super call only with this many expected tricks
     super_call_gain: float = 2.0  # fixed-trump rounds: super-call only if it adds this many
     risk_aversion: float = 0.25  # tricks of error the last estimator accepts to avoid one Risk
 
