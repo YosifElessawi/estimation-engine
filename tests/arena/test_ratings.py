@@ -165,3 +165,39 @@ def test_a_clean_sweep_bounds_the_elo_gap_from_below():
     assert sweep_gap(1000) == pytest.approx(400 * math.log10(p / (1 - p)))
     assert sweep_gap(1000) == pytest.approx(1009.2, abs=0.1)
     assert sweep_gap(20) < sweep_gap(200) < sweep_gap(2000)
+
+
+def _set_won_by(lineup: list[str], winner: str, index: int) -> SetResult:
+    """A duplicate set where every seat ``winner`` plays scores 10 and every other seat 0."""
+    scores = []
+    for rotation in range(4):
+        row = [10 if lineup[(seat + rotation) % 4] == winner else 0 for seat in range(4)]
+        scores.append((row[0], row[1], row[2], row[3]))
+    return SetResult(index, index, tuple(scores), (18, 18, 18, 18))
+
+
+def _chain(n: int) -> dict[tuple[str, str], tuple[list[SetResult], list[str]]]:
+    """random < x < y: x wins 80% of its sets against random, y 70% against x."""
+    out: dict[tuple[str, str], tuple[list[SetResult], list[str]]] = {}
+    for lower, upper, share in (("random", "x", 0.8), ("x", "y", 0.7)):
+        lineup = [lower, upper, lower, upper]
+        wins = round(n * share)
+        sets = [_set_won_by(lineup, upper if i < wins else lower, i) for i in range(n)]
+        out[(lower, upper)] = (sets, lineup)
+    return out
+
+
+def test_bootstrap_range_contains_the_fit_and_narrows_with_more_sets():
+    from estimation.arena.ratings import DEFAULT_PRIOR, bootstrap_ranges
+
+    def fit(pairs: dict[tuple[str, str], tuple[list[SetResult], list[str]]]) -> dict[str, float]:
+        records = [r for sets, lineup in pairs.values() for r in pair_records(sets, lineup)]
+        return bradley_terry(records, prior=DEFAULT_PRIOR)
+
+    few, many = _chain(10), _chain(80)
+    ranges_few, ranges_many = bootstrap_ranges(few), bootstrap_ranges(many)
+    for bot in ("x", "y"):
+        low, high = ranges_few[bot]
+        assert low <= fit(few)[bot] <= high
+        assert ranges_many[bot][1] - ranges_many[bot][0] < high - low
+    assert ranges_few["random"] == (400.0, 400.0)

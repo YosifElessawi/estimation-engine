@@ -9,6 +9,7 @@
 """
 
 import math
+import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -263,3 +264,40 @@ def _component(neighbours: Mapping[str, Mapping[str, float]], start: str) -> lis
                 seen.add(other)
                 stack.append(other)
     return sorted(seen)
+
+
+def bootstrap_ranges(
+    pairs: Mapping[tuple[str, str], tuple[Sequence[SetResult], Sequence[str]]],
+    resamples: int = 200,
+    seed: int = 0,
+    level: float = 0.95,
+) -> dict[str, tuple[float, float]]:
+    """Each bot's Elo range: every pair's sets resampled with replacement and the ladder refitted
+    ``resamples`` times; the range holds the middle ``level`` of the refitted ratings.
+
+    ``pairs`` maps each pair to its set results and lineup, as the ladder played them.
+    """
+    rng = random.Random(seed)
+    outcomes = {
+        key: [pair_records([result], lineup) for result in sets]
+        for key, (sets, lineup) in pairs.items()
+    }
+    fits: dict[str, list[float]] = {}
+    for _ in range(resamples):
+        records: list[PairRecord] = []
+        for per_set in outcomes.values():
+            for records_of_set in rng.choices(per_set, k=len(per_set)):
+                records += records_of_set
+        try:
+            ratings = bradley_terry(records, prior=DEFAULT_PRIOR)
+        except ValueError:
+            continue
+        for bot, rating in ratings.items():
+            fits.setdefault(bot, []).append(rating)
+    tail = (1 - level) / 2
+    ranges: dict[str, tuple[float, float]] = {}
+    for bot, values in fits.items():
+        values.sort()
+        last = len(values) - 1
+        ranges[bot] = (values[math.floor(tail * last)], values[math.ceil((1 - tail) * last)])
+    return ranges

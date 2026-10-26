@@ -46,8 +46,8 @@ def test_rates_every_bot_from_one_run_per_pair(tmp_path: Path, capsys: pytest.Ca
     assert len(files) == 2
     lineups = {tuple(json.loads(f.read_text())["report"]["lineup"]) for f in files}
     assert ("random", "heuristic:noise=0.5", "random", "heuristic:noise=0.5") in lineups
-    for bot in TINY.split(","):
-        assert bot in out
+    for name in ("RandomBot", "HeuristicBot, 50% random moves", "HeuristicBot"):
+        assert name in out
     assert "400 (anchor)" in out
     summary = json.loads((tmp_path / "ladder.json").read_text())
     assert set(summary["ratings"]) == set(TINY.split(","))
@@ -146,3 +146,19 @@ def test_the_v2_preset_lists_26_bots_and_10_extras():
     assert ("heuristic", "yosif") in preset.extras
     assert preset.dir == Path("runs/ladder-v2")
     assert (preset.sets, preset.seed) == (200, 0)
+
+
+def test_the_report_shows_named_tables_with_elo_ranges(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    out = run_cli(capsys, "--bots", TINY, "--sets", "4", "--dir", str(tmp_path))
+    leaderboard, rungs = out.index("Leaderboard"), out.index("Measuring rungs")
+    assert leaderboard < rungs
+    assert "RL checkpoints" not in out  # no checkpoint was rated, so no empty table
+    assert out.index("HeuristicBot, 50% random moves") > rungs
+    assert "95% range" in out
+    summary = json.loads((tmp_path / "ladder.json").read_text())
+    assert summary["names"]["heuristic:noise=0.5"] == "HeuristicBot, 50% random moves"
+    assert summary["groups"]["random"] == ["Leaderboard"]
+    low, high = summary["ranges"]["heuristic"]
+    assert low <= summary["ratings"]["heuristic"] <= high

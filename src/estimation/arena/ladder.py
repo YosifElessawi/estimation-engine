@@ -33,11 +33,13 @@ from .ratings import (
     ANCHOR_RATING,
     DEFAULT_PRIOR,
     PairRecord,
+    bootstrap_ranges,
     bradley_terry,
     set_first_places,
     sweep_gap,
 )
 from .report import build_report, write_json
+from .roster import GROUPS, entry_for, name_of
 from .status import STATUS_FILE, StatusWriter
 
 DEFAULT_LADDER = (
@@ -125,6 +127,7 @@ class PairResult:
     upper_rsa_high: float | None
     upper_first: float  # share of games one of the stronger bot's two seats finished first
     seconds: float  # 0 when reused
+    sets: tuple[SetResult, ...] = ()  # the pair's set results, for the Elo ranges
 
 
 def ladder_pairs(
@@ -156,15 +159,15 @@ def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float)
     record = PairRecord(pair["a"], pair["b"], pair["a_wins"], pair["draws"], pair["b_wins"])
     rsa = next(bot["rsa"] for bot in report["bots"] if bot["name"] == upper)
     lineup = report["lineup"]
-    shares = [
-        set_first_places(
-            SetResult(r["index"], r["deal_seed"], tuple(tuple(s) for s in r["scores"]), ()),
-            lineup,
-        )[upper]
+    sets = tuple(
+        SetResult(r["index"], r["deal_seed"], tuple(tuple(s) for s in r["scores"]), ())
         for r in report["set_results"]
-    ]
+    )
+    shares = [set_first_places(result, lineup)[upper] for result in sets]
     first = 2 * sum(shares) / len(shares)  # the stronger bot holds two of the four seats
-    return PairResult(lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], first, seconds)
+    return PairResult(
+        lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], first, seconds, sets
+    )
 
 
 def _saved(
@@ -230,6 +233,19 @@ def _signed(value: float) -> str:
     return f"{value:+,.1f}"
 
 
+def _elo(bot: str, ratings: dict[str, float]) -> str:
+    if bot not in ratings:
+        return "n/a"
+    return f"{ratings[bot]:,.0f}" + (" (anchor)" if bot == ANCHOR else "")
+
+
+def _range(bot: str, ranges: dict[str, tuple[float, float]]) -> str:
+    if bot not in ranges or bot == ANCHOR:
+        return ""
+    low, high = ranges[bot]
+    return f"{low:,.0f} to {high:,.0f}"
+
+
 def format_ladder(
     bots: Sequence[str],
     results: Sequence[PairResult],
@@ -237,29 +253,35 @@ def format_ladder(
     sets: int,
     seed: int,
     error: str | None,
+    ranges: dict[str, tuple[float, float]] | None = None,
 ) -> str:
+    """The ladder as three named tables (see ``roster``), then every pair's results."""
+    ranges = ranges or {}
     lines = [
         f"Elo ladder: {len(bots)} bots, {len(results)} pairs, {sets:,} sets per pair, seed {seed}",
-        "",
     ]
-    width = max(len("Bot"), *(len(bot) for bot in bots))
-    lines.append(f"Rung  {'Bot':<{width}}  Elo")
-    lines.append("-" * (width + 16))
-    for rung, bot in enumerate(bots, 1):
-        if bot in ratings:
-            elo = f"{ratings[bot]:,.0f}" + (" (anchor)" if bot == ANCHOR else "")
-        else:
-            elo = "n/a"
-        lines.append(f"{rung:>4}  {bot:<{width}}  {elo}")
+    names = {bot: name_of(bot) for bot in bots}
+    width = max(len("Bot"), *(len(name) for name in names.values()))
+    for group in GROUPS:
+        members = [bot for bot in bots if group in entry_for(bot).groups]
+        if not members:
+            continue
+        members.sort(key=lambda bot: (bot not in ratings, -ratings.get(bot, 0.0)))
+        lines += ["", group, f"  {'Bot':<{width}}  {'Elo':>14}  {'95% range':>16}  About"]
+        for bot in members:
+            lines.append(
+                f"  {names[bot]:<{width}}  {_elo(bot, ratings):>14}  {_range(bot, ranges):>16}  "
+                f"{entry_for(bot).description}"
+            )
     lines.append("")
-    pair_width = max(
-        len("Pair (weaker vs stronger)"), *(len(f"{r.lower} vs {r.upper}") for r in results)
-    )
+    label = "Pair (weaker vs stronger)"
+    pair_names = [f"{names[r.lower]} vs {names[r.upper]}" for r in results]
+    pair_width = max(len(label), *(len(name) for name in pair_names))
     lines.append(
-        f"{'Pair (weaker vs stronger)':<{pair_width}}  {'Stronger won':>12}  {'Drew':>4}  "
+        f"{label:<{pair_width}}  {'Stronger won':>12}  {'Drew':>4}  "
         f"{'Weaker won':>10}  {'Stronger 1st':>12}  Stronger RSA per game (95% CI)"
     )
-    for r in results:
+    for r, pair_name in zip(results, pair_names, strict=True):
         upper_wins, draws, lower_wins = r.record.b_wins, r.record.draws, r.record.a_wins
         if r.record.a != r.lower:
             upper_wins, lower_wins = r.record.a_wins, r.record.b_wins
@@ -269,13 +291,14 @@ def format_ladder(
             else "n/a"
         )
         lines.append(
-            f"{f'{r.lower} vs {r.upper}':<{pair_width}}  {upper_wins:>12,}  {draws:>4,}  "
+            f"{pair_name:<{pair_width}}  {upper_wins:>12,}  {draws:>4,}  "
             f"{lower_wins:>10,}  {f'{100 * r.upper_first:.0f}%':>12}  {_signed(r.upper_rsa)} {ci}"
         )
     lines.append("")
     lines.append(
         f"Elo: one Bradley-Terry fit over every pair's sets, {ANCHOR} fixed at "
-        f"{ANCHOR_RATING:.0f}, with 1 virtual draw per pair."
+        f"{ANCHOR_RATING:.0f}, with 1 virtual draw per pair. 95% range: the middle 95% of 200 "
+        "refits on resampled sets."
     )
     if error:
         lines.append(f"Elo not fitted: {error}")
@@ -284,8 +307,8 @@ def format_ladder(
         gap = sweep_gap(sets)
         bound = f"at least {gap:,.0f} Elo" if gap > 0 else "too few sets to bound the gap"
         lines.append(
-            f"Sweep: one side won all {sets:,} sets in {r.lower} vs {r.upper} ({bound}); that "
-            "step's size comes from the virtual draw, not the data."
+            f"Sweep: one side won all {sets:,} sets in {names[r.lower]} vs {names[r.upper]} "
+            f"({bound}); that step's size comes from the virtual draw, not the data."
         )
     return "\n".join(lines)
 
@@ -383,7 +406,14 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         ratings, error = {}, str(exc)
     status.finish(ratings=ratings or None)
-    print(format_ladder(bots, results, ratings, args.sets, args.seed, error))
+    ranges = (
+        bootstrap_ranges(
+            {(r.lower, r.upper): (r.sets, [r.lower, r.upper, r.lower, r.upper]) for r in results}
+        )
+        if ratings
+        else {}
+    )
+    print(format_ladder(bots, results, ratings, args.sets, args.seed, error, ranges))
     print()
     wall = time.perf_counter() - start
     print(
@@ -395,6 +425,9 @@ def main(argv: list[str] | None = None) -> int:
         "sets": args.sets,
         "seed": args.seed,
         "ratings": ratings,
+        "ranges": {bot: list(span) for bot, span in ranges.items()},
+        "names": {bot: name_of(bot) for bot in bots},
+        "groups": {bot: list(entry_for(bot).groups) for bot in bots},
         "error": error,
         "pairs": [
             {
