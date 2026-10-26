@@ -183,3 +183,23 @@ def test_a_pair_whose_games_file_is_from_other_code_is_played_again(
     monkeypatch.setattr(ladder, "run_arena", played)
     with pytest.raises(AssertionError, match="played again"):
         run_cli(capsys, "--bots", "random,heuristic", "--sets", "1", "--dir", str(tmp_path))
+
+
+def test_fresh_replays_only_the_named_bots_pairs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    run_cli(capsys, "--bots", TINY, "--sets", "1", "--dir", str(tmp_path))
+    monkeypatch.setattr(ladder, "code_version", lambda: "newer-code")
+    played: list[tuple[str, ...]] = []
+    real = ladder.run_arena
+
+    def spy(lineup: tuple[str, ...], *args: object, **kwargs: object):
+        played.append(lineup)
+        return real(lineup, *args, **kwargs)  # type: ignore[arg-type]  # the spy passes through
+
+    monkeypatch.setattr(ladder, "run_arena", spy)
+    out = run_cli(
+        capsys, "--bots", TINY, "--sets", "1", "--dir", str(tmp_path), "--fresh", "heuristic"
+    )
+    assert played == [("heuristic:noise=0.5", "heuristic") * 2]
+    assert "reused from older code" in out

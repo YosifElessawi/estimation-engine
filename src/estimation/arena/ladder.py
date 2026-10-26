@@ -128,6 +128,7 @@ class PairResult:
     upper_first: float  # share of games one of the stronger bot's two seats finished first
     seconds: float  # 0 when reused
     sets: tuple[SetResult, ...] = ()  # the pair's set results, for the Elo ranges
+    code_version: str = ""  # the code that played the pair
 
 
 def ladder_pairs(
@@ -166,15 +167,30 @@ def _from_report(lower: str, upper: str, report: dict[str, Any], seconds: float)
     shares = [set_first_places(result, lineup)[upper] for result in sets]
     first = 2 * sum(shares) / len(shares)  # the stronger bot holds two of the four seats
     return PairResult(
-        lower, upper, record, rsa["mean"], rsa["low"], rsa["high"], first, seconds, sets
+        lower,
+        upper,
+        record,
+        rsa["mean"],
+        rsa["low"],
+        rsa["high"],
+        first,
+        seconds,
+        sets,
+        str(report.get("code_version", "")),
     )
 
 
 def _saved(
-    path: Path, games: Path, lineup: list[str], sets: int, seed: int, version: str
+    path: Path,
+    games: Path,
+    lineup: list[str],
+    sets: int,
+    seed: int,
+    version: str,
+    any_version: bool = False,
 ) -> dict[str, Any] | None:
     """The saved report of this pair, if it and its games file were played with the same lineup,
-    sets, seed and code version."""
+    sets, seed and code version (any code version with ``any_version``)."""
     if not path.exists() or not games.exists():
         return None
     try:
@@ -183,8 +199,9 @@ def _saved(
         return None
     header = read_header(games)
     same = report["lineup"] == lineup and report["sets"] == sets and report["seed"] == seed
-    same = same and report.get("code_version") == version
-    same = same and header is not None and header.code_version == version
+    if not any_version:
+        same = same and report.get("code_version") == version
+        same = same and header is not None and header.code_version == version
     same = same and header is not None and list(header.lineup) == lineup
     same = same and header is not None and (header.sets, header.seed) == (sets, seed)
     return report if same and not report["rules"] else None
@@ -198,6 +215,7 @@ def play_pair(
     workers: int,
     folder: Path,
     on_set: Callable[[SetResult], None] | None = None,
+    any_version: bool = False,
 ) -> tuple[PairResult, bool]:
     """Rate one pair, reusing its saved report when it matches. Returns the result and whether
     it was reused; ``on_set`` sees each set as it is played."""
@@ -205,7 +223,7 @@ def play_pair(
     path = _pair_file(folder, lower, upper)
     games = _games_file(folder, lower, upper)
     version = code_version()
-    saved = _saved(path, games, lineup, sets, seed, version)
+    saved = _saved(path, games, lineup, sets, seed, version, any_version)
     if saved is not None:
         return _from_report(lower, upper, saved, 0.0), True
     run = run_arena(tuple(lineup), sets, seed, workers=workers, on_set=on_set, keep_games=True)
@@ -347,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="an extra pair to rate, as weaker,stronger (repeatable)",
     )
+    parser.add_argument(
+        "--fresh",
+        help="re-rate only these bots, comma-separated: their pairs are played again and every "
+        "other saved pair is reused even if older code played it",
+    )
     args = parser.parse_args(argv)
     preset = PRESETS[args.preset] if args.preset else None
     if args.bots is None:
@@ -379,6 +402,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.sets < 1 or args.workers < 1 or args.seed < 0:
         parser.error("--sets and --workers must be at least 1, --seed 0 or more")
 
+    fresh = {bot.strip() for bot in (args.fresh or "").split(",") if bot.strip()}
+    if not fresh <= set(bots):
+        parser.error(f"--fresh {args.fresh!r} must name bots from --bots")
     pairs = ladder_pairs(bots, extras)
     start = time.perf_counter()
     status = StatusWriter(
@@ -396,7 +422,14 @@ def main(argv: list[str] | None = None) -> int:
         for n, (lower, upper) in enumerate(pairs, 1):
             status.start(n - 1)
             result, reused = play_pair(
-                lower, upper, args.sets, args.seed, args.workers, args.dir, status.set_done
+                lower,
+                upper,
+                args.sets,
+                args.seed,
+                args.workers,
+                args.dir,
+                status.set_done,
+                any_version=bool(fresh) and not {lower, upper} & fresh,
             )
             results.append(result)
             played += not reused
@@ -429,6 +462,13 @@ def main(argv: list[str] | None = None) -> int:
         f"Run: {wall:,.1f} s wall time on {args.workers} worker"
         f"{'s' if args.workers != 1 else ''}; {played} pairs played, {len(pairs) - played} reused."
     )
+    current = code_version()
+    older = sum(1 for r in results if r.seconds == 0 and r.code_version != current)
+    if older:
+        print(
+            f"{older} pairs reused from older code ({', '.join(sorted(fresh))} re-rated with "
+            f"{current}); the rest of the ladder is as it was rated."
+        )
     summary = {
         "bots": bots,
         "sets": args.sets,
