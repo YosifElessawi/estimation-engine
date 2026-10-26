@@ -67,6 +67,92 @@ def test_lone_bidder_never_bids_13_L3():
     assert top is None or bid_of(top)[0] <= 12
 
 
+def test_a_with_player_who_can_make_the_raise_joins_it_L1():
+    # L1: seat 0 bids 4 Hearts, seat 1 bids 5 Hearts, seat 2 says With (w = 5), seat 3 passes,
+    # seat 0 passes, and seat 1 raises to 6 Hearts on its final turn. Seat 2 holds six top
+    # Hearts and nothing else, so it takes 6 and joins the raise.
+    bot = YosifBot(0, FAST)
+    rnd = round_with(
+        2,
+        "AH KH QH JH TH 9H 2C 3C 4C 2D 3D 4D 2S",
+        *[NO_DASH_CALL] * 4,
+        bid_action(4, HEARTS),
+        bid_action(5, HEARTS),
+        WITH,
+        PASS,
+        PASS,
+        bid_action(6, HEARTS),
+    )
+    assert rnd.current_player == 2
+    assert act(bot, rnd) == WITH
+
+
+def test_a_with_player_who_cannot_make_the_raise_stays_L1():
+    # Same auction, but seat 2's five top Hearts take 5: it stays, held at 5.
+    bot = YosifBot(0, FAST)
+    rnd = round_with(
+        2,
+        "AH KH QH JH TH 2C 3C 4C 5C 2D 3D 4D 2S",
+        *[NO_DASH_CALL] * 4,
+        bid_action(4, HEARTS),
+        bid_action(5, HEARTS),
+        WITH,
+        PASS,
+        PASS,
+        bid_action(6, HEARTS),
+    )
+    assert rnd.current_player == 2
+    assert act(bot, rnd) == PASS
+
+
+def test_outbid_in_its_own_trump_it_passes_to_hold_its_bid():
+    # Seat 0 bid 4 Hearts and seat 1 outbid it with 5 Hearts. Seat 0's four top Hearts take 4,
+    # so passing (held at 4: With at 4 if Hearts wins, AUC-4) beats With at 5 or a raise.
+    bot = YosifBot(0, FAST)
+    rnd = round_with(
+        0,
+        "AH KH QH JH 2C 3C 4C 5C 2D 3D 4D 5D 2S",
+        *[NO_DASH_CALL] * 4,
+        bid_action(4, HEARTS),
+        bid_action(5, HEARTS),
+        PASS,
+        PASS,
+    )
+    assert rnd.current_player == 0
+    assert act(bot, rnd) == PASS
+
+
+def test_final_turn_raises_when_keeping_is_not_allowed_AUC_6():
+    # L5: seat 3 Dash Calls, seat 0 bids 4 Hearts, seat 1 says With, seat 2 bids 5 Hearts and
+    # seat 0 passes holding 4 Hearts. Keeping 5 Hearts would total 13 with nobody to estimate.
+    bot = YosifBot(0, FAST)
+    rnd = round_with(
+        2,
+        "5H 4H 3H 2H 2C 3C 4C 5C 2D 3D 4D 5D 2S",
+        NO_DASH_CALL,
+        NO_DASH_CALL,
+        NO_DASH_CALL,
+        DASH_CALL,
+        bid_action(4, HEARTS),
+        WITH,
+        bid_action(5, HEARTS),
+        PASS,
+    )
+    assert rnd.current_player == 2
+    legal = rnd.legal_actions()
+    assert PASS not in legal
+    assert bot.act(rnd.observation(2), legal) in legal
+
+
+def test_with_is_priced_at_exactly_the_top_number():
+    planner = Planner(FAST)
+    o = Outlook((0.0,) * 6 + (1.0,), (0.0,) * 6 + (1.0,))
+    expected = stake(4, caller=True, dash=False, last_risks=0, over=None, rules=RULES)
+    from estimation.bots.yosif.odds import expected_points
+
+    assert planner.with_value(o, 4) == expected_points(o, 4, expected, 0.5, RULES)
+
+
 def test_last_estimator_banned_number_picks_the_best_legal_value_L4():
     planner = Planner(FAST)
     rnd = round_with(

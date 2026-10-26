@@ -42,7 +42,8 @@ class YosifConfig:
     others_make: float = 0.5  # chance each other player makes their estimate (SCR-5) [Claude]
     dash_break: float = 0.6  # share of each dodge left when opponents try to break a Dash
     # Call [Yosif]; the size [Claude]
-    control: float = 0.5  # how reliably dodging tricks lands exactly on a number [Claude]
+    control: float = 0.25  # how reliably dodging lands on a lower number; low because Yosif bids
+    # what his hand takes and makes most of his calls [Yosif]; the size [Claude]
     risk_mode: bool = True  # go for the bigger call when he needs a jump to win [Yosif]
     jump_points: float = 25.0  # about one good normal round, per round left [Claude]
     risk_min_make: float = 0.25  # a bigger call must still be makeable [Claude]
@@ -116,9 +117,11 @@ class Planner:
         reads: Reads,
         over: bool | None = None,
         dodge_scale: float = 1.0,
+        control: float | None = None,
     ) -> Outlook:
         c = self.config
-        return outlook(count_hand(hand, trump, reads, over, c.count), dodge_scale, c.control)
+        steer = c.control if control is None else control
+        return outlook(count_hand(hand, trump, reads, over, c.count), dodge_scale, steer)
 
     def _risk(self, obs: Observation) -> bool:
         return self.config.risk_mode and needs_jump(obs, self.config.jump_points)
@@ -164,11 +167,12 @@ class Planner:
         outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
         best = max(TRUMPS, key=lambda t: sum(k * p for k, p in enumerate(outlooks[t].most)))
         # A Dash caller's own best suit rarely becomes trump; the opponents press every dodge.
+        # Dodging is the whole of a Dash Call, so it is not discounted by ``control``.
         s = stake(0, caller=False, dash=True, last_risks=0, over=None, rules=c.rules)
         faced = [t for t in TRUMPS if t != best]
         dash_value = sum(
             expected_points(
-                self._outlook(obs.hand, t, reads, dodge_scale=c.dash_break),
+                self._outlook(obs.hand, t, reads, dodge_scale=c.dash_break, control=1.0),
                 0,
                 s,
                 c.others_make,
@@ -183,45 +187,85 @@ class Planner:
         alternative = max(caller, self._plain_value(obs.hand, reads))
         return DASH_CALL if dash_value > alternative else NO_DASH_CALL
 
+    def _points(self, o: Outlook, k: int, caller: bool) -> float:
+        c = self.config
+        s = stake(k, caller=caller, dash=False, last_risks=0, over=None, rules=c.rules)
+        return expected_points(o, k, s, c.others_make, c.rules)
+
+    def with_value(self, o: Outlook, tricks: int) -> float:
+        """With fixes the estimate at the top bid's number, scored like the Caller (AUC-2,
+        EST-2), so it is worth exactly that number's Caller points."""
+        return self._points(o, tricks, caller=True)
+
     def bid(self, obs: Observation, legal: list[int]) -> int:
-        """Start low, raise to the target on the final turn, else With or Pass (design 5.4)."""
+        """Every legal auction choice priced in expected points, the best one taken (design 5.4).
+
+        On a normal turn a bid starts low, in a trump worth being Caller in, and is valued at the
+        number it will be raised to on the final turn [Yosif]. With fixes the estimate at the top
+        bid's number. Passing holds the bot's last bid: if that bid's trump wins, it is With at
+        that number (AUC-4). On the final turn it keeps or raises; answering a raise it joins the
+        new number, stays at its own, or outbids (AUC-3).
+        """
         me = obs.seat
         reads = read_bids(obs)
         risk = self._risk(obs)
         lone = sum(1 for s in range(4) if s not in obs.dash_callers) == 1
         options = range(MIN_BID, (MAX_TRICKS - 1 if lone else MAX_TRICKS) + 1)
-        targets: dict[int, tuple[int, float]] = {
-            t: self._caller_value(self._outlook(obs.hand, t, reads), options, risk) for t in TRUMPS
-        }
+        outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
+
+        def caller(action: int) -> float:
+            tricks, trump = bid_of(action)
+            return self._points(outlooks[trump], tricks, caller=True)
+
+        def holding(held: tuple[int, int] | None, trump: int) -> float:
+            """Passing: With at the held number if its trump wins, else an ordinary estimator."""
+            if held is not None and held[1] == trump:
+                return self._points(outlooks[trump], held[0], caller=True)
+            return self._plain_trump_value(outlooks[trump])
+
+        values: dict[int, float] = {}
         top = obs.top_bid
+        bids = [action for action in legal if is_bid(action)]
         if top is not None and obs.top_bidder == me:  # AUC-3: the final turn
-            tricks, trump = bid_of(top)
-            raised_to = targets[trump][0]
-            if raised_to > tricks and bid_action(raised_to, trump) in legal:
-                return bid_action(raised_to, trump)
-            return PASS
-        if top is not None and any(
-            w.seat == me and bid_action(w.w, w.trump) == top for w in obs.with_players
-        ):
-            return PASS  # already With on the top bid: passing keeps it (AUC-2)
-        plain = self._plain_value(obs.hand, reads)
-        best, best_value = -1, plain
-        for trump in STRONGEST_FIRST:
-            target, value = targets[trump]
-            tricks = lowest_bid(top, trump)
-            if tricks <= target and value > best_value and bid_action(tricks, trump) in legal:
-                best, best_value = bid_action(tricks, trump), value
-        if best >= 0:
-            return best
-        if top is not None and WITH in legal:
-            # With means estimating at least the top bid's number, scored like the Caller
-            # (AUC-2, EST-3): say it only when that beats estimating normally in its trump.
-            tricks, trump = bid_of(top)
-            o = self._outlook(obs.hand, trump, reads)
-            with_value = self._caller_value(o, range(tricks, MAX_TRICKS + 1), risk)[1]
-            if with_value > self._plain_trump_value(o):
-                return WITH
-        return PASS
+            values[PASS] = caller(top)
+            values.update((action, caller(action)) for action in bids)
+        elif top is not None and self._out(obs):  # AUC-3: answering the top bidder's raise
+            trump = bid_of(top)[1]
+            values[WITH] = caller(top)
+            mine = next(((w.w, w.trump) for w in obs.with_players if w.seat == me), None)
+            values[PASS] = holding(mine, trump)
+            values.update((action, caller(action)) for action in bids)
+        else:
+            for trump in STRONGEST_FIRST:
+                target = self._caller_value(outlooks[trump], options, risk)[0]
+                tricks = lowest_bid(top, trump)
+                if tricks <= target:
+                    values[bid_action(tricks, trump)] = self._points(
+                        outlooks[trump], target, caller=True
+                    )
+            if top is None:
+                values[PASS] = self._plain_value(obs.hand, reads)
+            else:
+                values[WITH] = caller(top)
+                values[PASS] = holding(self._last_bid(obs), bid_of(top)[1])
+        choices = {action: value for action, value in values.items() if action in legal}
+        if not choices:  # nothing priced is allowed (AUC-6): price every legal bid
+            choices = {action: caller(action) for action in bids}
+        return max(choices.items(), key=lambda item: (item[1], item[0] == PASS))[0]
+
+    @staticmethod
+    def _out(obs: Observation) -> bool:
+        """Out of the auction (passed or With): such a player acts only to answer a raise."""
+        me = obs.seat
+        return me in obs.passed or any(w.seat == me for w in obs.with_players)
+
+    @staticmethod
+    def _last_bid(obs: Observation) -> tuple[int, int] | None:
+        """The bot's latest bid this round, as (tricks, trump): what passing holds (AUC-2)."""
+        for seat, action in reversed(obs.log):
+            if seat == obs.seat and is_bid(action):
+                return bid_of(action)
+        return None
 
     def estimate_values(self, obs: Observation, legal: list[int]) -> dict[int, float]:
         """The value of each legal estimate (design 5.6-5.8)."""
