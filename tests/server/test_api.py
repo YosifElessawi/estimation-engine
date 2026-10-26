@@ -95,6 +95,24 @@ def test_a_watched_game_shows_every_hand(client: TestClient):
             assert hands == [cards_of(hand) for hand in dealt]
 
 
+def missing_a_suit(seed: int, round_no: int) -> list[int]:
+    dealt = deal(seed, round_no)
+    return [s for s in range(4) if any(not (dealt[s] >> (13 * suit)) & 0x1FFF for suit in range(4))]
+
+
+def test_both_modes_show_who_was_announced_void_at_the_deal(client: TestClient):
+    """TBL-7: the announcement is public, so a player sees it too; it names seats, not suits."""
+    watched = whole_game(client, new_game(client, BOTS, seed=31)["id"])
+    for frame in watched:
+        if frame["kind"] != "game_end":
+            assert frame["table"]["void_announced"] == missing_a_suit(31, frame["round_no"])
+    assert any(frame["table"]["void_announced"] for frame in watched)
+    _, played, _ = play_whole_game(client, ["random", "human", "heuristic", "random"], seed=32)
+    for frame in played:
+        if frame["kind"] != "game_end":
+            assert frame["table"]["void_announced"] == missing_a_suit(32, frame["round_no"])
+
+
 def test_the_same_seats_and_seed_replay_the_same_game(client: TestClient):
     first = whole_game(client, new_game(client, BOTS, seed=5)["id"])
     again = whole_game(client, new_game(client, BOTS, seed=5)["id"])

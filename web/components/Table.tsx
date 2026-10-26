@@ -53,6 +53,8 @@ function badgesOf(table: TableView, seat: number): { text: string; tone: string 
   if (withInfo && table.phase === "auction") badges.push({ text: `With ${withInfo.w}`, tone: "silver" });
   else if (withInfo) badges.push({ text: "With", tone: "silver" });
   if (table.dash_callers.includes(seat)) badges.push({ text: "Dash", tone: "teal" });
+  // TBL-7: announced at the deal; it says a suit is missing, never which one
+  if (table.void_announced.includes(seat)) badges.push({ text: "Void", tone: "muted" });
   if (table.last_estimator === seat) {
     const risks = table.risks ?? 0;
     badges.push({ text: risks > 0 ? `Last · ${risks} Risk${risks > 1 ? "s" : ""}` : "Last", tone: "rose" });

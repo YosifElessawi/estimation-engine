@@ -46,6 +46,7 @@ export interface TableView {
   super_call: boolean;
   trump: number | null;
   dash_callers: number[];
+  void_announced: number[];
   top_bid: { tricks: number; trump: number } | null;
   top_bidder: number | null;
   passed: number[];

@@ -74,7 +74,8 @@ class TableView(TypedDict):
     viewer may see them, ``None`` elsewhere; ``hand_sizes`` is public. ``events`` are the
     round's Dash Calls, auction calls and estimates so far, and ``calls`` each seat's latest
     call in the current stretch of the phase being played (a super call starts a new auction,
-    and estimates after it start again). ``scores`` are the game scores before this round."""
+    and estimates after it start again). ``scores`` are the game scores before this round.
+    ``void_announced`` are the seats announced void at the deal, which is public (TBL-7)."""
 
     round_no: int
     phase: str
@@ -87,6 +88,7 @@ class TableView(TypedDict):
     super_call: bool
     trump: int | None
     dash_callers: list[int]
+    void_announced: list[int]
     top_bid: BidView | None
     top_bidder: int | None
     passed: list[int]
@@ -252,6 +254,7 @@ def table_view(
         super_call=obs.super_call,
         trump=obs.trump,
         dash_callers=list(obs.dash_callers),
+        void_announced=list(obs.void_announced),
         top_bid=None if obs.top_bid is None else _bid(obs.top_bid),
         top_bidder=obs.top_bidder,
         passed=list(obs.passed),
