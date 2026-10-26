@@ -17,10 +17,12 @@ class BotError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class BolaRecord:
-    """A finished Bola: the game scores by seat, and how many rounds it took."""
+    """A finished Bola: the game scores by seat, how many rounds it took, and (when kept) every
+    action in order."""
 
     scores: tuple[int, int, int, int]
     rounds: int
+    actions: tuple[int, ...] = ()
 
 
 def play_bola(
@@ -28,17 +30,20 @@ def play_bola(
     bots: Sequence[Bot],
     config: RulesConfig = DEFAULT_CONFIG,
     timers: Sequence[Timing] | None = None,
+    keep_actions: bool = False,
 ) -> BolaRecord:
     """Play a whole Bola dealt from ``seed``, ``bots[seat]`` deciding for each seat.
 
     Each bot is shown only its own seat's Observation and the legal actions. With ``timers``,
-    the time of each card decision goes to ``timers[seat]``.
+    the time of each card decision goes to ``timers[seat]``. With ``keep_actions``, the record
+    holds every action, so the game can be saved and replayed.
     """
     if len(bots) != 4:
         raise ValueError("a Bola needs exactly four bots")
     bola = Bola(seed, config)
     play = Phase.PLAY
     clock = time.perf_counter
+    actions: list[int] = []
     while not bola.is_over:
         seat = bola.current_player
         if seat is None:
@@ -56,4 +61,6 @@ def play_bola(
             bola.step(action)
         except IllegalActionError as error:
             raise BotError(f"seat {seat} ({bot!r}) chose an illegal action: {error}") from error
-    return BolaRecord(bola.scores, len(bola.history))
+        if keep_actions:
+            actions.append(action)
+    return BolaRecord(bola.scores, len(bola.history), tuple(actions))

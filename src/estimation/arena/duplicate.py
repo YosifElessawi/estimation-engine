@@ -18,6 +18,7 @@ from estimation.bots import Bot, make_bot
 from estimation.engine import RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
 
+from .games import GameRecord
 from .match import play_bola
 from .timing import DEFAULT_BUDGET, Timing
 
@@ -44,12 +45,14 @@ def bot_seed(seed: int, index: int, rotation: int, seat: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class SetResult:
-    """One duplicate set: its deal seed, and each rotation's game scores by seat and rounds."""
+    """One duplicate set: its deal seed, and each rotation's game scores by seat and rounds.
+    ``games`` holds each rotation's full game when the run keeps them."""
 
     index: int
     deal_seed: int
     scores: tuple[tuple[int, int, int, int], ...]
     rounds: tuple[int, ...]
+    games: tuple[GameRecord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +75,7 @@ def play_set(
     config: RulesConfig = DEFAULT_CONFIG,
     make: BotMaker = make_bot,
     budget: float = DEFAULT_BUDGET,
+    keep_games: bool = False,
 ) -> tuple[SetResult, dict[str, Timing]]:
     """Play duplicate set ``index``: its deals once per rotation of the lineup."""
     if len(lineup) != 4:
@@ -80,15 +84,31 @@ def play_set(
     timings = {name: Timing(budget) for name in dict.fromkeys(lineup)}
     scores: list[tuple[int, int, int, int]] = []
     rounds: list[int] = []
+    games: list[GameRecord] = []
     for rotation in range(ROTATIONS):
         names = [lineup[slot_at(seat, rotation)] for seat in range(4)]
-        bots = [
-            make(names[seat], bot_seed(seed, index, rotation, seat), config) for seat in range(4)
-        ]
-        record = play_bola(seed_of_deals, bots, config, [timings[name] for name in names])
+        seeds = [bot_seed(seed, index, rotation, seat) for seat in range(4)]
+        bots = [make(names[seat], seeds[seat], config) for seat in range(4)]
+        record = play_bola(
+            seed_of_deals, bots, config, [timings[name] for name in names], keep_games
+        )
         scores.append(record.scores)
         rounds.append(record.rounds)
-    return SetResult(index, seed_of_deals, tuple(scores), tuple(rounds)), timings
+        if keep_games:
+            games.append(
+                GameRecord(
+                    set_index=index,
+                    rotation=rotation,
+                    deal_seed=seed_of_deals,
+                    seats=(names[0], names[1], names[2], names[3]),
+                    bot_seeds=(seeds[0], seeds[1], seeds[2], seeds[3]),
+                    scores=record.scores,
+                    rounds=record.rounds,
+                    actions=record.actions,
+                )
+            )
+    result = SetResult(index, seed_of_deals, tuple(scores), tuple(rounds), tuple(games))
+    return result, timings
 
 
 def run_arena(
@@ -100,6 +120,7 @@ def run_arena(
     budget: float = DEFAULT_BUDGET,
     progress: Progress | None = None,
     on_set: Callable[[SetResult], None] | None = None,
+    keep_games: bool = False,
 ) -> ArenaRun:
     """Play ``sets`` duplicate sets, on ``workers`` processes. Results come back in set order;
     ``on_set`` sees each one as it arrives."""
@@ -110,7 +131,7 @@ def run_arena(
         raise ValueError("a run needs at least one set and one worker")
     for name in dict.fromkeys(names):
         make_bot(name, 0, config)  # fail fast on an unknown bot or a bad option
-    task = partial(_play_set_task, names, seed, config, budget)
+    task = partial(_play_set_task, names, seed, config, budget, keep_games)
     timings = {name: Timing(budget) for name in dict.fromkeys(names)}
     results: list[SetResult] = []
     start = time.perf_counter()
@@ -144,6 +165,11 @@ def run_arena(
 
 
 def _play_set_task(
-    lineup: tuple[str, ...], seed: int, config: RulesConfig, budget: float, index: int
+    lineup: tuple[str, ...],
+    seed: int,
+    config: RulesConfig,
+    budget: float,
+    keep_games: bool,
+    index: int,
 ) -> tuple[SetResult, dict[str, Timing]]:
-    return play_set(lineup, seed, index, config, budget=budget)
+    return play_set(lineup, seed, index, config, budget=budget, keep_games=keep_games)

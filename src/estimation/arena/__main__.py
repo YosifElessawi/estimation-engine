@@ -11,6 +11,7 @@ from pathlib import Path
 from estimation.bots import make_bot
 
 from .duplicate import run_arena
+from .games import make_header, write_games
 from .ratings import DEFAULT_PRIOR, PairRecord
 from .report import build_report, format_report, format_run, load_pairs, write_json
 from .status import StatusWriter, status_path
@@ -61,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
         help="virtual draws added to each compared pair in the Elo fit (default 1)",
     )
     parser.add_argument("--progress", action="store_true", help="print progress to stderr")
+    parser.add_argument(
+        "--save-games",
+        type=Path,
+        help="save every game (seeds, seats and moves) to this .jsonl.gz file for stats later",
+    )
     parser.add_argument(
         "--status",
         type=Path,
@@ -114,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             budget=args.budget_ms / 1000,
             progress=_progress if args.progress else None,
             on_set=status.set_done if status is not None else None,
+            keep_games=args.save_games is not None,
         )
     except BaseException as exc:  # Ctrl-C included: the watch screen shows why the run stopped
         if status is not None:
@@ -128,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     print(format_run(run))
     if args.out:
         write_json(args.out, report, run)
+    if args.save_games:
+        header = make_header(lineup, args.sets, args.seed, run.config)
+        write_games(args.save_games, header, (g for r in run.results for g in r.games))
     return 0
 
 

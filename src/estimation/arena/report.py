@@ -13,9 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from estimation.engine import RulesConfig
-
 from .duplicate import ROTATIONS, ArenaRun, SetResult
+from .games import changed_rules
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -91,12 +90,7 @@ def build_report(
         )
         for name in dict.fromkeys(lineup)
     )
-    defaults = RulesConfig()
-    rules = {
-        field.name: getattr(run.config, field.name)
-        for field in dataclasses.fields(run.config)
-        if getattr(run.config, field.name) != getattr(defaults, field.name)
-    }
+    rules = changed_rules(run.config)
     return Report(
         lineup=lineup,
         sets=len(results),
