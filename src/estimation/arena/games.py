@@ -196,3 +196,12 @@ def replay_all(
         else:
             kept.append((record, bola))
     return kept, ReplayStats(len(kept), skipped)
+
+
+def games_files(path: Path) -> list[Path]:
+    """The games files at ``path``: the file itself, or a run folder's ``games/*.jsonl.gz``
+    (or the folder's own ``*.jsonl.gz`` when it has no ``games`` folder)."""
+    if path.is_file():
+        return [path]
+    folder = path / "games" if (path / "games").is_dir() else path
+    return sorted(folder.glob("*.jsonl.gz"))

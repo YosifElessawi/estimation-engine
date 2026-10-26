@@ -25,7 +25,15 @@ from pathlib import Path
 from estimation.bots import make_bot
 from estimation.engine import RoundResult, RulesConfig, SeatResult
 
-from .games import GameRecord, GamesHeader, ReplayStats, read_games, replay_all, rules_of
+from .games import (
+    GameRecord,
+    GamesHeader,
+    ReplayStats,
+    games_files,
+    read_games,
+    replay_all,
+    rules_of,
+)
 from .match import play_bola
 from .roster import name_of
 
@@ -223,13 +231,6 @@ def play_games(spec: str, games: int, seed: int, workers: int) -> list[GameRecor
         return pool.map(_play, tasks)
 
 
-def _games_files(path: Path) -> list[Path]:
-    if path.is_file():
-        return [path]
-    folder = path / "games" if (path / "games").is_dir() else path
-    return sorted(folder.glob("*.jsonl.gz"))
-
-
 def _pct(x: float) -> str:
     return f"{100 * x:.1f}%"
 
@@ -291,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.workers < 1 or args.seed < 0 or (args.games is not None and args.games < 1):
         parser.error("--games and --workers must be at least 1, --seed 0 or more")
     if args.source is not None:
-        files = _games_files(args.source)
+        files = games_files(args.source)
         if not files:
             parser.error(f"no saved games under {args.source}")
         groups = [read_games(path) for path in files]
