@@ -11,7 +11,7 @@ When asked to execute a milestone (for example "Execute Milestone 1 from SPEC.md
 1. Branch from `main`: `git checkout -b m<N>-<short-name>`, for example `m1-rules-engine`.
 2. Read SPEC.md: §2-§3 (rules and scoring), §5 (engine contract), the milestone in §6, and §8 (conventions). For M1, also scaffold the project as described in §8 if `pyproject.toml` does not exist yet.
 3. Build only that milestone. Do not start work from a later one.
-4. Test as you go. Every rule ID (`AUC-3`, `SCR-6`, ...) and every worked example (`G1`-`G10`, `L1`-`L9`, `T1`-`T4`) gets a test whose name contains the ID, for example `test_EST_5_last_estimator_cannot_make_13`. Worked examples are acceptance tests: match their numbers exactly.
+4. Test as you go. Every rule ID (`AUC-3`, `SCR-6`, ...) and every worked example (`G1`-`G10`, `L1`-`L11`, `T1`-`T4`) gets a test whose name contains the ID, for example `test_EST_5_last_estimator_cannot_make_13`. Worked examples are acceptance tests: match their numbers exactly.
 5. Run the full gate (below) until it is clean.
 6. Run the `spec-checker` subagent on the work and fix everything it reports.
 7. Stop and report: the milestone's **Done when** list with pass or fail for each item, the benchmark number (M1), and anything blocked. Do not start the next milestone unprompted.

@@ -107,6 +107,19 @@ def test_FIX_4_with_answers_and_final_turn_work_in_the_super_call_auction():
     assert legal_estimates(rnd) == list(range(10))
 
 
+@pytest.mark.parametrize("may_bid_fixed", [True, False])
+def test_FIX_4_super_caller_answering_a_raise_follows_the_fixed_trump_switch(may_bid_fixed: bool):
+    config = RulesConfig(super_caller_may_bid_fixed=may_bid_fixed)
+    rnd = Round.new(16, deal(0, 16), HEARTS, config=config)
+    run(rnd, est(2), bid(8, SPADES), bid(9, SPADES), PASS, PASS, WITH)  # seat 0 joins seat 1
+    assert rnd.current_player == 1  # seat 1's final turn
+    rnd.step(bid(10, SPADES))
+    assert rnd.current_player == 0  # the super caller answers
+    hearts = [a for a in legal_bids(rnd) if (a - bid(4, CLUBS)) % 5 == HEARTS]
+    assert bool(hearts) == may_bid_fixed
+    assert WITH in rnd.legal_actions()
+
+
 def test_FIX_4_super_caller_may_raise_into_the_fixed_trump_on_its_final_turn():
     """AUC-3 allows any higher bid on the final turn, so a raise into the fixed trump keeps it
     and the fixed trump is not replayed."""

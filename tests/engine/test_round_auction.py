@@ -169,6 +169,29 @@ def test_AUC_3_an_answer_that_outbids_reopens_the_auction():
     assert held(rnd) == ()  # seat 0 holds 5 Spades
 
 
+def test_AUC_3_a_raise_into_another_trump_is_answered_too():
+    rnd = auction()
+    run(rnd, bid(4, SPADES), WITH, PASS, PASS, bid(5, HEARTS))
+    assert rnd.current_player == 1
+    rnd.step(WITH)  # joins the new trump
+    assert held(rnd) == ((1, 5, HEARTS),)
+    stayed = run(auction(), bid(4, SPADES), WITH, PASS, PASS, bid(5, HEARTS), PASS)
+    assert held(stayed) == ()  # staying keeps 4 Spades, which is not the trump
+    assert legal_estimates(stayed) == [0, 1, 2, 3, 4, 5]
+
+
+def test_AUC_3_after_an_outbidding_answer_the_others_no_longer_answer():
+    rnd = auction()
+    run(rnd, bid(4, SPADES), WITH, WITH, PASS, bid(5, SPADES))
+    assert rnd.current_player == 1  # seat 2 would answer next
+    rnd.step(bid(6, HEARTS))
+    assert rnd.current_player == 0  # the old top bidder's turn, not seat 2's answer
+    rnd.step(PASS)
+    assert rnd.current_player == 1  # seat 1's final turn: seat 2 is out
+    rnd.step(PASS)
+    assert held(rnd) == ()  # seat 0 holds 5 Spades, seat 2 4 Spades
+
+
 def test_AUC_3_nobody_bids_skips_the_round():
     rnd = auction(2)
     run(rnd, PASS, PASS, PASS, PASS)
@@ -333,6 +356,7 @@ def test_L5_nobody_left_to_estimate_blocks_keeping_a_bid_that_leaves_13():
     assert bid(6, HEARTS) in rnd.legal_actions()
     rnd.step(bid(5, SPADES))
     assert held(rnd) == ()
+    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5]  # seat 0, no longer held
     assert finish_estimates(rnd) == [0, 1]
     assert rnd.observation(0).estimates[0] is not None
 
@@ -353,6 +377,7 @@ def test_L10_with_lost_to_another_trump():
     assert rnd.current_player == 2  # seat 1 never answers seat 2's bid
     rnd.step(PASS)
     assert held(rnd) == ()
+    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5]
     assert finish_estimates(rnd) == [3, 0, 1]
 
 
@@ -365,4 +390,5 @@ def test_L11_outbid_in_another_trump_but_own_trump_wins():
     assert (obs.caller, obs.trump) == (2, HEARTS)
     assert obs.with_players == (WithInfo(0, 4, HEARTS),)
     assert obs.estimates[0] == 4
+    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5, 6]
     assert finish_estimates(rnd) == [3, 1]
