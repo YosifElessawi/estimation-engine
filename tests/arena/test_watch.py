@@ -39,7 +39,7 @@ def test_a_ladder_keeps_a_status_the_view_reads(tmp_path: Path, capsys: pytest.C
     shown = text_of(tmp_path)
     assert "Elo ladder" in shown
     assert "finished" in shown
-    assert "random vs heuristic:noise=0.5" in shown
+    assert "RandomBot vs HeuristicBot, 50% random moves" in shown
     assert "Elo (RandomBot 400)" in shown
 
 
@@ -91,7 +91,7 @@ def test_a_running_view_shows_the_pair_in_play_and_the_time_left(tmp_path: Path)
     run_arena(PAIR, 2, 0, on_set=writer.set_done)  # 2 of the pair's 4 sets
     shown = text_of(tmp_path)
     assert "running" in shown
-    assert "Now playing: random, heuristic   set 2 of 4" in shown
+    assert "Now playing: RandomBot, HeuristicBot   set 2 of 4" in shown
     assert "stronger won" in shown
     assert "left" in shown
 
@@ -126,3 +126,11 @@ def test_once_prints_one_frame(tmp_path: Path, capsys: pytest.CaptureFixture[str
     StatusWriter(tmp_path / STATUS_FILE, "ladder", [("a vs b", PAIR)], 2, 0, 1, ["test"])
     assert main([str(tmp_path), "--once"]) == 0
     assert "Elo ladder" in capsys.readouterr().out
+
+
+def test_the_watch_view_names_bots_by_the_roster():
+    from estimation.arena.watch import short
+
+    assert short("rl:checkpoint=runs/m4/checkpoints/final.pt") == "RL M4 final"
+    assert short("heuristic:noise=0.1") == "HeuristicBot, 10% random moves"
+    assert short("rl:checkpoint=runs/x/net.pt") == "rl:net"

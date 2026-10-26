@@ -34,7 +34,7 @@ def test_a_finished_played_game_is_saved_with_its_seed_and_scores(client: TestCl
         "HeuristicBot",
         "You",
         "RandomBot",
-        "RL final (iteration 150)",
+        "RL M4 final",
     ]
     assert [seat["spec"] for seat in saved["seats"]] == PLAY
     assert saved["scores"] == every[-1]["scores"]

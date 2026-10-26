@@ -23,6 +23,7 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
+from .roster import name_of
 from .status import status_path
 
 STALLED_AFTER = 300.0  # seconds without an update before a running run is called stalled
@@ -69,7 +70,11 @@ def duration(seconds: float) -> str:
 
 
 def short(bot: str) -> str:
-    """A bot spec with a checkpoint path cut to the file's name."""
+    """The roster's name for a bot, or for a bot the roster does not know, its spec with a
+    checkpoint path cut to the file's name."""
+    known = name_of(bot)
+    if known != bot:
+        return known
     name, *options = bot.split(":")
     parts = [name]
     for option in options:

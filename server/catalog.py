@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from estimation.arena.ladder import DEFAULT_LADDER
+from estimation.arena.roster import name_of
 from estimation.bots import Bot, make_bot
 from estimation.engine import RulesConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 LADDER_FILE = Path("runs/ladder-200/ladder.json")
+V2_LADDER_FILE = Path("runs/ladder-v2/ladder.json")  # read instead of LADDER_FILE once it exists
 CHECKPOINT_INDEX = Path("runs/m4/checkpoints/index.json")
 RUNS = "runs"
 
@@ -54,8 +56,12 @@ def _percent(text: str) -> str:
 
 
 def label_of(spec: str, checkpoints: dict[str, dict[str, Any]] | None = None) -> str:
-    """A readable name for ``spec``, for example "PIMC, 8 deals" or "RL iteration 20".
+    """A readable name for ``spec``, for example "PIMC, 8 deals" or "RL iteration 20": the
+    ladder roster's name when the roster knows the spec, else built from its options.
     ``checkpoints`` maps a checkpoint file name to its index entry."""
+    known = name_of(spec)
+    if known != spec:
+        return known
     try:
         name, options = parse_spec(spec)
     except ValueError:
@@ -115,11 +121,14 @@ class Catalog:
     def load(
         cls,
         root: Path = ROOT,
-        ladder_file: Path = LADDER_FILE,
+        ladder_file: Path | None = None,
         checkpoint_index: Path = CHECKPOINT_INDEX,
     ) -> "Catalog":
-        """Read the ladder report and the checkpoint index under ``root``, when present."""
+        """Read the ladder report and the checkpoint index under ``root``, when present. The
+        ladder report is the v2 ladder's once it exists, else the older one."""
         root = root.resolve()
+        if ladder_file is None:
+            ladder_file = V2_LADDER_FILE if (root / V2_LADDER_FILE).is_file() else LADDER_FILE
         ratings: dict[str, float] = {}
         specs: list[str] = list(DEFAULT_LADDER)
         ladder = _read_json(root / ladder_file)

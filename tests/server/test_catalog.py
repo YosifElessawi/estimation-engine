@@ -18,7 +18,8 @@ from tests.server.conftest import FINAL, WARM
         ("random", "RandomBot"),
         ("heuristic", "HeuristicBot"),
         ("heuristic:noise=0.75", "HeuristicBot, 75% random moves"),
-        ("pimc", "PIMC, 30 deals"),
+        ("pimc", "PIMC"),
+        ("yosif", "Yosif bot"),
         ("pimc:samples=1", "PIMC, 1 deal"),
         ("pimc:samples=1:play_noise=0.3", "PIMC, 1 deal, 30% random cards"),
         ("pimc:samples=4:bid_search=true", "PIMC, 4 deals, bid_search=true"),
@@ -33,8 +34,8 @@ def test_labels_name_each_bot_family(spec: str, label: str):
 
 def test_checkpoint_labels_use_the_index(catalog: Catalog):
     labels = {entry.spec: entry.label for entry in catalog.entries}
-    assert labels[FINAL] == "RL final (iteration 150)"
-    assert labels[WARM] == "RL warm start, HeuristicBot bidding"
+    assert labels[FINAL] == "RL M4 final"  # the roster's name wins for a known checkpoint
+    assert labels[WARM] == "RL warm start (HeuristicBot bidding)"
     assert labels["rl:checkpoint=runs/m4/checkpoints/iter-0010.pt"] == "RL iteration 10"
 
 
@@ -92,3 +93,16 @@ def test_checkpoints_must_be_files_under_runs(catalog: Catalog, spec: str):
 def test_bad_specs_are_refused(catalog: Catalog, spec: str, message: str):
     with pytest.raises(ValueError, match=message):
         catalog.make(spec, 0, DEFAULT_CONFIG)
+
+
+def test_the_catalog_reads_the_v2_ladder_when_it_exists(tmp_path: Path):
+    import json
+
+    folder = tmp_path / "runs" / "ladder-v2"
+    folder.mkdir(parents=True)
+    ladder = {"bots": ["random", "heuristic", "yosif"], "ratings": {"random": 400, "yosif": 4900}}
+    (folder / "ladder.json").write_text(json.dumps(ladder))
+    catalog = Catalog.load(tmp_path)
+    elos = {entry.spec: entry.elo for entry in catalog.entries}
+    assert elos["yosif"] == 4900
+    assert {entry.spec: entry.label for entry in catalog.entries}["yosif"] == "Yosif bot"
