@@ -106,6 +106,7 @@ class Round:
     """
 
     __slots__ = (
+        "_announced",
         "_answers",
         "_c",
         "_caller",
@@ -162,6 +163,7 @@ class Round:
 
     _cur: int  # seat to act
     _hands: list[int]  # remaining hands
+    _announced: tuple[int, ...]  # seats announced void at the deal (TBL-7)
     _log: list[tuple[int, int]]  # every (seat, action), all public
     _dash: list[bool]
     _chosen: int  # Dash choices made so far
@@ -251,6 +253,11 @@ class Round:
         rnd.hands = deal
         rnd._cur = first
         rnd._hands = list(deal)
+        rnd._announced = tuple(  # TBL-7: every seat missing a suit, announced at the deal
+            seat
+            for seat in range(4)
+            if any(not (deal[seat] >> (13 * suit)) & 0x1FFF for suit in range(4))
+        )
         rnd._log = []
         rnd._dash = [False, False, False, False]
         rnd._chosen = 0
@@ -828,6 +835,7 @@ class Round:
             trump=self._trump if self._trump >= 0 else None,
             hand=self._hands[seat],
             log=tuple(self._log),
+            void_announced=self._announced,
             dash_callers=tuple(s for s in range(4) if dash[s]),
             top_bid=self._top if self._top_seat >= 0 else None,
             top_bidder=self._top_seat if self._top_seat >= 0 else None,
@@ -869,6 +877,7 @@ class Round:
         rnd.phase = self.phase
         rnd._cur = self._cur
         rnd._hands = self._hands.copy()
+        rnd._announced = self._announced
         rnd._log = self._log.copy()
         rnd._dash = self._dash.copy()
         rnd._chosen = self._chosen

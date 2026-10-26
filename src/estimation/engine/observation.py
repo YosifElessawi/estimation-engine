@@ -38,6 +38,8 @@ class Observation:
 
     ``hand`` is the seat's own remaining hand as a bitmask; no field holds another seat's
     unplayed cards. Every Dash Call is public as soon as it is made (DSH-2).
+    ``void_announced`` are the seats whose dealt hand misses at least one suit, announced to
+    everyone at the deal without saying which suit (TBL-7).
 
     ``scores`` are the game scores before this round. ``fixed_left`` lists the fixed trumps not
     yet played, the current round's included. ``super_call`` is true once a super call (FIX-4)
@@ -63,6 +65,7 @@ class Observation:
     trump: int | None
     hand: int
     log: tuple[tuple[int, int], ...]
+    void_announced: tuple[int, ...]
     dash_callers: tuple[int, ...]
     top_bid: int | None
     top_bidder: int | None

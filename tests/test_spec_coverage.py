@@ -30,7 +30,7 @@ def collect_test_names() -> list[str]:
 
 def test_spec_lists_every_rule_family_and_example():
     ids = spec_ids()
-    assert len([i for i in ids if "-" in i]) == 6 + 5 + 5 + 6 + 7 + 5 + 5 + 10
+    assert len([i for i in ids if "-" in i]) == 7 + 5 + 5 + 6 + 7 + 5 + 5 + 10
     assert {f"G{n}" for n in range(1, 11)} <= ids
     assert {f"L{n}" for n in range(1, 12)} <= ids
     assert {f"T{n}" for n in range(1, 5)} <= ids
