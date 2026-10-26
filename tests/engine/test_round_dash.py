@@ -5,7 +5,7 @@ import itertools
 import pytest
 
 from estimation.engine.actions import PASS, is_bid, is_estimate
-from estimation.engine.cards import CLUBS, SANS, SPADES, deal
+from estimation.engine.cards import CLUBS, DIAMONDS, SANS, SPADES, deal
 from estimation.engine.round import IllegalActionError, Phase, Round
 
 from .helpers import DASH, NO, bid, new_round, run
@@ -97,7 +97,7 @@ def test_DSH_4_dash_caller_sits_out_the_auction_and_estimates_zero():
     assert rnd.observation(2).estimates == (None, 0, None, None)
     rnd.step(bid(4, CLUBS))
     assert rnd.current_player == 2  # seat 1 is skipped
-    run(rnd, bid(5, CLUBS), PASS, PASS)  # seat 2 bids, seats 3 and 0 pass
+    run(rnd, bid(5, DIAMONDS), PASS, PASS)  # seat 2 bids, seats 3 and 0 pass
     assert rnd.current_player == 2  # the top bidder's final turn; seat 1 is never asked
     rnd.step(PASS)
     assert rnd.phase is Phase.ESTIMATION

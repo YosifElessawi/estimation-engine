@@ -93,15 +93,18 @@ def test_FIX_4_answers_may_be_in_any_trump_including_the_fixed_one():
     assert WITH in rnd.legal_actions()
 
 
-def test_FIX_4_with_and_final_turn_work_in_the_super_call_auction():
-    rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), WITH, PASS, PASS, PASS)
+def test_FIX_4_with_answers_and_final_turn_work_in_the_super_call_auction():
+    rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), WITH, PASS, PASS)
     assert rnd.current_player == 0  # the super caller's final turn
     rnd.step(bid(9, SPADES))
+    assert rnd.current_player == 1  # seat 1 answers the raise (AUC-3)
+    rnd.step(PASS)
     obs = rnd.observation(0)
     assert (obs.caller, obs.trump, obs.estimates[0]) == (0, SPADES, 9)
     assert obs.with_players == (WithInfo(1, 8, SPADES),)
-    assert rnd.current_player == 1
-    assert legal_estimates(rnd) == [8, 9]
+    assert obs.estimates[1] == 8  # EST-2: a With player's estimate is its w
+    assert rnd.current_player == 2
+    assert legal_estimates(rnd) == list(range(10))
 
 
 def test_FIX_4_super_caller_may_raise_into_the_fixed_trump_on_its_final_turn():

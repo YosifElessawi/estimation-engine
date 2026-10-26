@@ -44,9 +44,10 @@ class Observation:
     has opened bidding in this fixed-trump round; a Caller or With player at 8 or more is
     scored as a super call either way (SCR-6). ``top_bid`` and ``top_bidder`` describe the
     highest bid so far and, once the auction ends, the winning bid; both are ``None`` when
-    nobody bid. ``with_players`` are the current With declarations during an auction and the
-    players scored like the Caller after it. ``total``, ``over`` and ``risks`` are known once
-    estimation is complete.
+    nobody bid. During an auction ``with_players`` are the players out of it who hold a call in
+    the top bid's trump (they are With if it ends there, AUC-4); after it, the players scored
+    like the Caller. ``passed`` are the other players out of the auction, Dash callers aside.
+    ``total``, ``over`` and ``risks`` are known once estimation is complete.
     """
 
     seat: int

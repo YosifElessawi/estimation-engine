@@ -13,7 +13,7 @@ def rounds_left(bola: Bola) -> int:
     return rounds_remaining(obs.round_no, len(obs.fixed_left), obs.fixed_trump is not None)
 
 
-@pytest.mark.parametrize("bot", [HeuristicBot(), RandomBot(3)], ids=["heuristic", "random"])
+@pytest.mark.parametrize("bot", [HeuristicBot(), RandomBot(5)], ids=["heuristic", "random"])
 def test_each_round_reports_the_reward_of_every_seat_divided_by_its_carry(bot: HeuristicBot):
     config = RewardConfig()
     game = RewardedBola(12, RulesConfig(), config)

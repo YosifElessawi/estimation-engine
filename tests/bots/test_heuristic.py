@@ -90,10 +90,21 @@ def test_passes_with_a_weak_hand():
     assert act(rnd) == PASS
 
 
-def test_keeps_its_with_when_its_turn_comes_back():
+def test_answers_a_raise_by_the_player_it_joined_with_a_legal_move():
     rnd = round_with(1, HEART_FIT, *NO_DASH, bid_action(5, HEARTS), WITH, PASS, PASS)
-    assert rnd.current_player == 1
-    assert act(rnd) == PASS
+    rnd.step(bid_action(6, HEARTS))  # seat 0 raises on its final turn
+    assert rnd.current_player == 1  # seat 1 answers (AUC-3)
+    assert act(rnd) in rnd.legal_actions()
+
+
+def test_raises_when_keeping_its_bid_would_leave_13():
+    """AUC-6: with nobody left to estimate, keeping 5 Hearts would total 13."""
+    rnd = round_with(2, HEART_FIT, NO, NO, NO, DASH_CALL, bid_action(4, HEARTS), WITH)
+    rnd.step(bid_action(5, HEARTS))  # seat 2 outbids seat 0; seat 1 joined seat 0
+    rnd.step(PASS)  # seat 0 passes, holding 4 Hearts
+    assert rnd.current_player == 2
+    assert PASS not in rnd.legal_actions()
+    assert act(rnd) in rnd.legal_actions()
 
 
 @pytest.mark.parametrize(

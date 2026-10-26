@@ -136,11 +136,7 @@ class HeuristicBot:
                 raised = bid_action(targets[trump], trump)
                 if raised in legal:
                     return raised
-            return PASS
-        if top is not None and any(
-            w.seat == me and bid_action(w.w, w.trump) == top for w in obs.with_players
-        ):
-            return PASS  # already With on the top bid: passing keeps it (AUC-2)
+            return _pass_or_cheapest(legal)
         best = -1
         best_value = -1.0
         for trump in STRONGEST_FIRST:
@@ -155,7 +151,7 @@ class HeuristicBot:
             tricks, trump = bid_of(top)
             if targets[trump] >= tricks:
                 return WITH
-        return PASS
+        return _pass_or_cheapest(legal)
 
     def estimate(self, obs: Observation, legal: list[int]) -> int:
         config = self.config
@@ -211,3 +207,13 @@ class HeuristicBot:
             raise ValueError("estimates and trump are known before play")
         want = estimate > obs.tricks_won[me]
         return play_action(choose_card(hand, trick, trump, want, FULL_DECK & ~played & ~hand))
+
+
+def _pass_or_cheapest(legal: list[int]) -> int:
+    """Pass, or when AUC-6 forbids it (passing would leave 13 with nobody to estimate), With,
+    else the cheapest legal bid."""
+    if PASS in legal:
+        return PASS
+    if WITH in legal:
+        return WITH
+    return min(legal)

@@ -149,9 +149,9 @@ def test_G2_under_round_with_with_and_risk_full_round(
 ):
     hands, cards = build_play(HEARTS, leader=1, targets=(3, 4, 4, 2))
     rnd = run(Round.new(2, hands, config=config), *NO_DASH_ROUND)
-    run(rnd, bid(4, HEARTS), WITH, PASS, PASS, PASS, PASS)
-    assert rnd.legal_actions() == [est(4)]
-    run(rnd, est(4), est(1))
+    run(rnd, bid(4, HEARTS), WITH, PASS, PASS, PASS)
+    assert rnd.observation(0).estimates[2] == 4  # seat 2 is With at 4 (EST-2)
+    rnd.step(est(1))
     assert est(4) not in rnd.legal_actions()
     rnd.step(est(0))
     play_cards(rnd, cards)
@@ -224,9 +224,9 @@ def test_G6_everyone_loses_full_round(
 ):
     hands, cards = build_play(CLUBS, leader=0, targets=(5, 3, 2, 3))
     rnd = run(Round.new(1, hands, config=config), *NO_DASH_ROUND)
-    run(rnd, bid(4, CLUBS), WITH, PASS, PASS, PASS, PASS)
-    assert rnd.legal_actions() == [est(4)]
-    run(rnd, est(4), est(4))
+    run(rnd, bid(4, CLUBS), WITH, PASS, PASS, PASS)
+    assert rnd.observation(0).estimates[1] == 4  # seat 1 is With at 4 (EST-2)
+    rnd.step(est(4))
     assert est(1) not in rnd.legal_actions()
     rnd.step(est(0))
     play_cards(rnd, cards)
