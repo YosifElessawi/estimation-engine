@@ -17,6 +17,7 @@ from estimation.engine import (
     SANS,
     WITH,
     Observation,
+    Phase,
     RulesConfig,
     bid_action,
     bid_of,
@@ -158,6 +159,58 @@ class Planner:
         total = sum(self._plain_trump_value(self._outlook(hand, t, reads)) for t in TRUMPS)
         return total / len(TRUMPS)
 
+    def _dash_outlooks(
+        self, hand: int, reads: Reads, outlooks: dict[int, Outlook]
+    ) -> list[Outlook]:
+        """The hand's outlooks under the trumps a Dash caller is likely to face: every trump but
+        its own best suit, which rarely becomes trump. The opponents press every dodge, and
+        dodging is the whole of a Dash Call, so it is not discounted by ``control``."""
+        c = self.config
+        best = max(TRUMPS, key=lambda t: sum(k * p for k, p in enumerate(outlooks[t].most)))
+        return [
+            self._outlook(hand, t, reads, dodge_scale=c.dash_break, control=1.0)
+            for t in TRUMPS
+            if t != best
+        ]
+
+    def predicted_make(self, obs: Observation, action: int) -> float | None:
+        """The chance of taking exactly the number ``action`` commits to: the contract when
+        keeping or raising on the final turn, the top bid's number for With, an estimate's
+        number, a super call's number, and 0 for a Dash Call. None for other moves."""
+        reads = read_bids(obs)
+        top = obs.top_bid
+        if obs.phase is Phase.DASH:
+            if action != DASH_CALL:
+                return None
+            outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
+            pressed = self._dash_outlooks(obs.hand, reads, outlooks)
+            return sum(o.least[0] for o in pressed) / len(pressed)
+        if obs.phase is Phase.AUCTION:
+            if (action == WITH and top is not None) or (
+                obs.top_bidder == obs.seat and top is not None and action == PASS
+            ):
+                committed = top
+            elif obs.top_bidder == obs.seat and is_bid(action):
+                committed = action
+            else:
+                return None
+            tricks, trump = bid_of(committed)
+            return make_chance(self._outlook(obs.hand, trump, reads), tricks)
+        if obs.phase is not Phase.ESTIMATION:
+            return None
+        if is_bid(action):  # a super call (FIX-4)
+            tricks, trump = bid_of(action)
+            return make_chance(self._outlook(obs.hand, trump, reads), tricks)
+        if not is_estimate(action):
+            return None
+        k = action - ESTIMATE_BASE
+        trump = obs.trump if obs.trump is not None else obs.fixed_trump
+        if trump is None:
+            return None
+        before = sum(e for e in obs.estimates if e is not None)
+        over = before + k > 13 if obs.last_estimator == obs.seat else None
+        return make_chance(self._outlook(obs.hand, trump, reads, over), k)
+
     def dash(self, obs: Observation, legal: list[int]) -> int:
         """Dash Call when it is worth more than the hand's best alternative (design 5.5)."""
         if DASH_CALL not in legal:
@@ -165,21 +218,11 @@ class Planner:
         c = self.config
         reads = read_bids(obs)
         outlooks = {t: self._outlook(obs.hand, t, reads) for t in TRUMPS}
-        best = max(TRUMPS, key=lambda t: sum(k * p for k, p in enumerate(outlooks[t].most)))
-        # A Dash caller's own best suit rarely becomes trump; the opponents press every dodge.
-        # Dodging is the whole of a Dash Call, so it is not discounted by ``control``.
         s = stake(0, caller=False, dash=True, last_risks=0, over=None, rules=c.rules)
-        faced = [t for t in TRUMPS if t != best]
-        dash_value = sum(
-            expected_points(
-                self._outlook(obs.hand, t, reads, dodge_scale=c.dash_break, control=1.0),
-                0,
-                s,
-                c.others_make,
-                c.rules,
-            )
-            for t in faced
-        ) / len(faced)
+        pressed = self._dash_outlooks(obs.hand, reads, outlooks)
+        dash_value = sum(expected_points(o, 0, s, c.others_make, c.rules) for o in pressed) / len(
+            pressed
+        )
         caller = max(
             self._caller_value(outlooks[t], range(MIN_BID, MAX_TRICKS + 1), False)[1]
             for t in TRUMPS

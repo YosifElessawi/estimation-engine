@@ -223,3 +223,15 @@ def test_a_hand_with_aces_does_not_dash_call():
     bot = YosifBot(0, FAST)
     rnd = round_with(0, "AC 3C 4C 5C AD 3D 4D 5D AH 3H 4H 5H 2S")
     assert act(bot, rnd) == NO_DASH_CALL
+
+
+def test_yosif_predicts_its_estimate_and_returns_none_for_an_opening():
+    bot = YosifBot(0, FAST)
+    opening = round_with(0, EXAMPLE, *[NO_DASH_CALL] * 4)
+    assert bot.predicted_make(opening.observation(0), bid_action(4, SPADES)) is None
+    estimating = round_with(
+        1, EXAMPLE, *[NO_DASH_CALL] * 4, bid_action(5, 0), PASS, PASS, PASS, PASS
+    )
+    chance = bot.predicted_make(estimating.observation(1), estimating.legal_actions()[3])
+    assert chance is not None
+    assert 0.0 <= chance <= 1.0

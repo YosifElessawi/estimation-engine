@@ -23,6 +23,11 @@ class YosifBot:
     def __repr__(self) -> str:
         return f"YosifBot(seed={self.seed}, {self.config})"
 
+    def predicted_make(self, obs: Observation, action: int) -> float | None:
+        """The chance of making the number ``action`` commits to (see ``Planner``), used by the
+        bidding evaluator's calibration check."""
+        return self._planner.predicted_make(obs, action)
+
     def act(self, obs: Observation, legal: list[int]) -> int:
         if len(legal) == 1:
             return legal[0]
