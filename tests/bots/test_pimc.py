@@ -3,10 +3,12 @@
 import dataclasses
 import random
 import time
+from collections.abc import Sequence
 
 import pytest
 
 from estimation.bots import make_bot
+from estimation.bots.card_play import choose_card
 from estimation.bots.hand_eval import expected_tricks
 from estimation.bots.heuristic import HeuristicBot
 from estimation.bots.knowledge import read_knowledge
@@ -36,6 +38,7 @@ from estimation.engine import (
     parse_hand,
     play_action,
 )
+from estimation.engine.actions import PLAY_BASE
 from estimation.engine.cards import SUIT_MASKS
 from tests.engine.test_void_announcement import HANDS as VOID_HANDS
 
@@ -78,6 +81,43 @@ def test_dash_bids_and_estimates_are_heuristic_bots():
             action = heuristic.act(obs, legal)
             assert pimc.act(obs, legal) == action
             bola.step(action)
+
+
+def highest_legal(hand: int, trick: Sequence[int], trump: int, want: bool, out: int) -> int:
+    """A card rule unlike HeuristicBot's: the highest legal card, whatever the estimate."""
+    follow = hand & SUIT_MASKS[trick[0] // 13] if trick else 0
+    return (follow or hand).bit_length() - 1
+
+
+def test_its_own_card_rule_plays_every_seat_of_every_rollout():
+    calls: list[int] = []
+
+    def spy(hand: int, trick: Sequence[int], trump: int, want: bool, out: int) -> int:
+        calls.append(hand)
+        return choose_card(hand, trick, trump, want, out)
+
+    positions = [play_position(seed, plays=4 + seed % 30) for seed in range(8)]
+    counted = 0
+    for rnd in positions:
+        calls.clear()
+        assert decide(PIMCBot(2, FAST, spy), rnd) == decide(PIMCBot(2, FAST), rnd)
+        cards_left = sum(rnd.observation(seat).hand.bit_count() for seat in range(4))
+        searched = len(rnd.legal_actions())
+        if searched > 1:  # the first-card hint, then every other card left, in every rollout
+            assert len(calls) == 1 + FAST.samples * searched * (cards_left - 1)
+            counted += 1
+    assert counted >= 4
+    changed = 0
+    for rnd in positions:
+        seat = rnd.current_player
+        assert seat is not None
+        obs = rnd.observation(seat)
+        cards = [action - PLAY_BASE for action in rnd.legal_actions()]
+        if len(cards) > 1:
+            plain = PIMCBot(2, FAST).search(obs, cards)
+            other = PIMCBot(2, FAST, highest_legal).search(obs, cards)
+            changed += plain != other
+    assert changed > 0
 
 
 def test_plays_its_only_legal_card_at_once():
