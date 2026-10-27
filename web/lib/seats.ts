@@ -16,12 +16,6 @@ export function seatName(game: GameView, seat: number): string {
   return info.human && game.mode === "play" ? "You" : info.label;
 }
 
-export function shortName(game: GameView, seat: number): string {
-  const info = game.seats[seat];
-  if (info?.human) return "You";
-  return `Seat ${seat}`;
-}
-
 export const formatElo = (elo: number | null): string =>
   elo === null ? "unrated" : elo.toLocaleString("en-US");
 

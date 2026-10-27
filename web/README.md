@@ -38,12 +38,17 @@ checkout's. Without those files the menus show the default ladder's bots, unrate
 
 ## Modes
 
+- **Play:** you take one seat against three bots. The Dash call, your bid and your estimate pop
+  up just above your hand; bids show as bubbles at each player and cards land in front of whoever
+  played them. You only ever receive your own hand and your own legal moves; the seed (which
+  fixes the deal) stays hidden until the game ends. Once it is over, **Review with every hand**
+  replays it in watch mode.
 - **Watch:** four bots, every hand shown. Step one decision at a time (arrow keys), jump by
   trick (Shift + arrows), to a round's result, to the next deal or to the end, or press Space to
   let it play. RL bots get a **Why** panel: what their nets predicted for each legal option.
-- **Play:** you take one seat against three bots. You only ever receive your own hand and your
-  own legal moves; the seed (which fixes the deal) stays hidden until the game ends. Once it is
-  over, **Review with every hand** replays it in watch mode.
+
+**Scores**, the round's **Log** and **Why** open as a drawer from the top bar. The table fits a
+laptop or a phone held upright.
 
 ## Past games
 

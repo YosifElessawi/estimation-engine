@@ -2,13 +2,322 @@
 
 import { useState } from "react";
 
-import { suitOf, suitSymbol } from "@/lib/cards";
-import type { ActionView, Frame, SeekTarget } from "@/lib/types";
+import { SANS, suitOf } from "@/lib/cards";
+import type { ActionView, Frame, SeekTarget, TableView } from "@/lib/types";
 
-import { ActionText, TrumpGlyph } from "./ActionText";
+import { TrumpGlyph } from "./ActionText";
 
 export type Speed = "slow" | "normal" | "fast" | "turbo";
 export const SPEED_FACTORS: Record<Speed, number> = { slow: 1.7, normal: 1, fast: 0.45, turbo: 0.12 };
+
+const TRUMPS = [0, 1, 2, 3, SANS];
+const SIMPLE = ["no_dash", "dash", "keep", "stay", "with", "pass"];
+
+function simpleLabel(action: ActionView) {
+  switch (action.kind) {
+    case "no_dash":
+      return "No dash";
+    case "dash":
+      return "Dash call";
+    case "keep":
+      return "Keep my bid";
+    case "stay":
+      return `Stay at ${action.tricks ?? ""}`;
+    case "with":
+      return action.tricks !== null && action.trump !== null ? (
+        <>
+          With {action.tricks} <TrumpGlyph trump={action.trump} />
+        </>
+      ) : (
+        "With"
+      );
+    default:
+      return action.label;
+  }
+}
+
+function hintOf(legal: ActionView[], table: TableView): string {
+  const kinds = new Set(legal.map((action) => action.kind));
+  if (kinds.has("dash") || kinds.has("no_dash")) return "A Dash call promises to take no tricks at all.";
+  if (kinds.has("estimate")) {
+    // EST-5: the last estimator may not bring the total to exactly 13
+    const me = table.current_player;
+    if (me !== null && table.last_estimator === me) {
+      const others = table.estimates.reduce<number>((total, e, seat) => (seat === me ? total : total + (e ?? 0)), 0);
+      const banned = 13 - others;
+      if (banned >= 0 && banned <= 13) return `You estimate last: ${banned} would make the total 13, so it's out.`;
+    }
+    return "How many tricks will you take?";
+  }
+  const stay = legal.find((action) => action.kind === "stay");
+  if (stay) return `The bid you went With was raised. Join it, stay at ${stay.tricks ?? ""}, or outbid.`;
+  if (kinds.has("keep")) return "Last word on your bid: keep it or raise it.";
+  const top = table.top_bid;
+  if (top) return `Beat ${top.tricks} ${top.trump === SANS ? "NT" : ["♣", "♦", "♥", "♠"][top.trump] ?? ""}${kinds.has("with") ? ", go With it," : ""} or pass.`;
+  return "Pick how many tricks and a trump, or pass.";
+}
+
+function titleOf(legal: ActionView[]): string {
+  const kinds = new Set(legal.map((action) => action.kind));
+  if (kinds.has("dash") || kinds.has("no_dash")) return "Dash call?";
+  if (kinds.has("estimate")) return "Your estimate";
+  return "Your bid";
+}
+
+/** The viewer's non-card decisions, docked above their hand: Dash Call, bids, With, Pass,
+ * estimates and super calls. Bids are picked in two short rows, tricks then trump. */
+export function DecisionPanel({
+  legal,
+  table,
+  busy,
+  onAct,
+}: {
+  legal: ActionView[];
+  table: TableView;
+  busy: boolean;
+  onAct: (action: number) => void;
+}) {
+  const [superMode, setSuperMode] = useState(false);
+  const [tricks, setTricks] = useState<number | null>(null);
+  const [trump, setTrump] = useState<number | null>(null);
+
+  const bids = legal.filter((action) => action.kind === "bid");
+  const supers = legal.filter((action) => action.kind === "super_call");
+  const estimates = legal.filter((action) => action.kind === "estimate");
+  const simple = SIMPLE.flatMap((kind) => legal.filter((action) => action.kind === kind));
+  const pickable = superMode || bids.length === 0 ? supers : bids;
+  const picking = pickable.length > 0 && (estimates.length === 0 || superMode);
+
+  const counts = [...new Set(pickable.map((action) => action.tricks ?? 0))].sort((a, b) => a - b);
+  const find = (k: number | null, t: number | null) =>
+    pickable.find((action) => action.tricks === k && action.trump === t) ?? null;
+  const trickOk = (k: number) => pickable.some((action) => action.tricks === k && (trump === null || action.trump === trump));
+  const trumpOk = (t: number) => pickable.some((action) => action.trump === t && (tricks === null || action.tricks === tricks));
+  const chosen = find(tricks, trump);
+
+  const pickTricks = (k: number) => {
+    setTricks(k);
+    if (trump !== null && !find(k, trump)) setTrump(null);
+  };
+  const pickTrump = (t: number) => {
+    setTrump(t);
+    if (tricks !== null && !find(tricks, t)) setTricks(null);
+  };
+
+  return (
+    <section className="decide" aria-label={titleOf(legal)}>
+      <header className="decide__head">
+        <h2>{superMode ? "Super call" : titleOf(legal)}</h2>
+        <p>{superMode ? "A super call names more tricks in a trump of your choice." : hintOf(legal, table)}</p>
+      </header>
+
+      {estimates.length > 0 && !superMode && (
+        <div className="decide__row" role="group" aria-label="Estimate">
+          <div className="chips chips--wrap">
+            {Array.from({ length: 14 }, (_, k) => {
+              const action = estimates.find((a) => a.tricks === k);
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  className="chip-btn"
+                  disabled={!action || busy}
+                  onClick={() => action && onAct(action.id)}
+                  aria-label={action ? `Estimate ${k}` : `${k} is not allowed`}
+                >
+                  {k}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {picking && (
+        <>
+          <div className="decide__row" role="group" aria-label="Tricks">
+            <span className="decide__label">Tricks</span>
+            <div className="chips">
+              {counts.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`chip-btn ${tricks === k ? "is-on" : ""}`}
+                  aria-pressed={tricks === k}
+                  disabled={busy || !trickOk(k)}
+                  onClick={() => pickTricks(k)}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="decide__row" role="group" aria-label="Trump">
+            <span className="decide__label">Trump</span>
+            <div className="chips">
+              {TRUMPS.filter((t) => pickable.some((action) => action.trump === t)).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`chip-btn chip-btn--suit ${trump === t ? "is-on" : ""}`}
+                  aria-pressed={trump === t}
+                  disabled={busy || !trumpOk(t)}
+                  onClick={() => pickTrump(t)}
+                >
+                  <TrumpGlyph trump={t} />
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="decide__actions">
+        {simple.map((action) => (
+          <button
+            key={action.id}
+            type="button"
+            className={`btn ${action.kind === "no_dash" || action.kind === "keep" ? "btn--primary" : "btn--ghost"}`}
+            disabled={busy}
+            onClick={() => onAct(action.id)}
+          >
+            {simpleLabel(action)}
+          </button>
+        ))}
+        {supers.length > 0 && (bids.length > 0 || estimates.length > 0) && (
+          <button
+            type="button"
+            className="btn btn--quiet"
+            onClick={() => {
+              setSuperMode(!superMode);
+              setTricks(null);
+              setTrump(null);
+            }}
+          >
+            {superMode ? "Back" : "Super call…"}
+          </button>
+        )}
+        {picking && (
+          <button
+            type="button"
+            className="btn btn--primary btn--push"
+            disabled={busy || !chosen}
+            onClick={() => chosen && onAct(chosen.id)}
+          >
+            {chosen && chosen.trump !== null ? (
+              <>
+                {superMode ? "Super call" : "Bid"} {chosen.tricks} <TrumpGlyph trump={chosen.trump} />
+              </>
+            ) : (
+              "Pick tricks and trump"
+            )}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** One line above the viewer's hand when there is nothing to decide: whose turn it is, what the
+ * viewer may play, or that they are looking back at an earlier move. */
+export function StatusPill({
+  frame,
+  live,
+  animating,
+  busy,
+  turnName,
+  onLive,
+}: {
+  frame: Frame;
+  live: boolean;
+  animating: boolean;
+  busy: boolean;
+  turnName: string | null;
+  onLive: () => void;
+}) {
+  if (!live) {
+    return (
+      <div className="pill pill--back">
+        Looking back at an earlier move
+        <button type="button" className="pill__action" onClick={onLive}>
+          Back to the table
+        </button>
+      </div>
+    );
+  }
+  if (frame.kind === "round_end" || frame.kind === "game_end") return null;
+  const legal = frame.legal;
+  if (legal?.some((action) => action.kind === "play")) {
+    const led = frame.table.trick[0];
+    const ledSuit = led ? suitOf(led.card) : null;
+    const following =
+      ledSuit !== null && legal.every((action) => action.card !== null && suitOf(action.card) === ledSuit);
+    return (
+      <div className="pill pill--turn">
+        <b>Your turn</b>
+        <span className="pill__dot" aria-hidden />
+        {ledSuit === null ? (
+          "you lead, any card"
+        ) : following ? (
+          <>
+            follow <TrumpGlyph trump={ledSuit} />
+          </>
+        ) : (
+          <>
+            no <TrumpGlyph trump={ledSuit} /> left, any card
+          </>
+        )}
+      </div>
+    );
+  }
+  if (busy) return <div className="pill">Sending…</div>;
+  if (animating && turnName) {
+    return (
+      <div className="pill pill--wait">
+        {turnName} {turnName === "You" ? "are" : "is"} thinking
+        <span className="dots" aria-hidden />
+        <button type="button" className="pill__action" onClick={onLive}>
+          Skip to my turn
+        </button>
+      </div>
+    );
+  }
+  return null;
+}
+
+function Icon({ name }: { name: "first" | "prev-trick" | "back" | "play" | "pause" | "forward" | "next-trick" | "result" | "next" | "end" }) {
+  const paths: Record<typeof name, string> = {
+    first: "M6 5v14M18 6l-9 6 9 6V6z",
+    "prev-trick": "M12 6l-7 6 7 6M20 6l-7 6 7 6",
+    back: "M15 6l-6 6 6 6",
+    play: "M8 5l11 7-11 7V5z",
+    pause: "M8 5v14M16 5v14",
+    forward: "M9 6l6 6-6 6",
+    "next-trick": "M4 6l7 6-7 6M12 6l7 6-7 6",
+    result: "M5 6l9 6-9 6V6zM19 5v14",
+    next: "M4 12h13M13 6l6 6-6 6",
+    end: "M5 6l7 6-7 6M12 6l7 6-7 6M20 5v14",
+  };
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={paths[name]} />
+    </svg>
+  );
+}
+
+export function SpeedSelect({ speed, onSpeed }: { speed: Speed; onSpeed: (speed: Speed) => void }) {
+  return (
+    <label className="speed">
+      <span>Pace</span>
+      <select value={speed} onChange={(e) => onSpeed(e.target.value as Speed)}>
+        <option value="slow">Slow</option>
+        <option value="normal">Normal</option>
+        <option value="fast">Fast</option>
+        <option value="turbo">Turbo</option>
+      </select>
+    </label>
+  );
+}
 
 interface WatchProps {
   index: number;
@@ -24,47 +333,49 @@ interface WatchProps {
   onSpeed: (speed: Speed) => void;
 }
 
-export function WatchControls(props: WatchProps) {
+/** Playback for a watched or reviewed game: step, jump by trick or round, play, scrub. */
+export function WatchBar(props: WatchProps) {
   const { index, known, finished, autoplay, speed, busy } = props;
+  const atStart = index === 0;
   const atEnd = finished && index >= known - 1;
   return (
-    <div className="transport">
-      <div className="transport__row">
-        <button type="button" className="tbtn" title="Start of this round, or the round before" onClick={() => props.onSeek("prev", "deal")} disabled={index === 0}>
-          ⏮ <span>Deal</span>
+    <div className="watchbar">
+      <div className="watchbar__buttons">
+        <button type="button" className="tbtn" title="Start of this round, or the round before" onClick={() => props.onSeek("prev", "deal")} disabled={atStart}>
+          <Icon name="first" />
         </button>
-        <button type="button" className="tbtn" title="Previous finished trick (Shift + ←)" onClick={() => props.onSeek("prev", "trick")} disabled={index === 0}>
-          « <span>Trick</span>
+        <button type="button" className="tbtn" title="Previous trick (Shift + ←)" onClick={() => props.onSeek("prev", "trick")} disabled={atStart}>
+          <Icon name="prev-trick" />
         </button>
-        <button type="button" className="tbtn tbtn--step" title="Step back (←)" onClick={() => props.onStep(-1)} disabled={index === 0}>
-          ‹
+        <button type="button" className="tbtn" title="Step back (←)" onClick={() => props.onStep(-1)} disabled={atStart}>
+          <Icon name="back" />
         </button>
         <button
           type="button"
           className={`tbtn tbtn--play ${autoplay ? "is-on" : ""}`}
-          title="Play / pause (Space)"
+          title="Play or pause (Space)"
           onClick={() => props.onAutoplay(!autoplay)}
           disabled={atEnd}
         >
-          {autoplay ? "❚❚" : "▶"}
+          <Icon name={autoplay ? "pause" : "play"} />
         </button>
-        <button type="button" className="tbtn tbtn--step" title="Step forward (→)" onClick={() => props.onStep(1)} disabled={atEnd}>
-          ›
+        <button type="button" className="tbtn" title="Step forward (→)" onClick={() => props.onStep(1)} disabled={atEnd}>
+          <Icon name="forward" />
         </button>
-        <button type="button" className="tbtn" title="Next finished trick (Shift + →)" onClick={() => props.onSeek("next", "trick")} disabled={atEnd}>
-          <span>Trick</span> »
+        <button type="button" className="tbtn" title="Next trick (Shift + →)" onClick={() => props.onSeek("next", "trick")} disabled={atEnd}>
+          <Icon name="next-trick" />
         </button>
-        <button type="button" className="tbtn" title="This round's result" onClick={() => props.onSeek("next", "round_end")} disabled={atEnd}>
-          <span>Result</span> ⏭
+        <button type="button" className="tbtn tbtn--text" title="This round's result" onClick={() => props.onSeek("next", "round_end")} disabled={atEnd}>
+          Result
         </button>
-        <button type="button" className="tbtn" title="Next deal" onClick={() => props.onSeek("next", "deal")} disabled={atEnd}>
-          <span>Next round</span>
+        <button type="button" className="tbtn tbtn--text" title="Next deal" onClick={() => props.onSeek("next", "deal")} disabled={atEnd}>
+          Next round
         </button>
-        <button type="button" className="tbtn" title="Play the game to its end" onClick={() => props.onSeek("next", "end")} disabled={atEnd}>
-          <span>End</span> ⇥
+        <button type="button" className="tbtn tbtn--text" title="Play the game to its end" onClick={() => props.onSeek("next", "end")} disabled={atEnd}>
+          End
         </button>
       </div>
-      <div className="transport__row transport__row--meta">
+      <div className="watchbar__track">
         <input
           type="range"
           className="scrub"
@@ -72,235 +383,14 @@ export function WatchControls(props: WatchProps) {
           max={Math.max(known - 1, 0)}
           value={Math.min(index, Math.max(known - 1, 0))}
           onChange={(e) => props.onGoTo(Number(e.target.value))}
-          aria-label="Step"
+          aria-label="Move"
         />
-        <span className="transport__count mono">
+        <span className="watchbar__count">
           {index + 1} / {finished ? known : `${known}…`}
         </span>
         <SpeedSelect speed={speed} onSpeed={props.onSpeed} />
         {busy && <span className="spinner" aria-label="Thinking" />}
       </div>
     </div>
-  );
-}
-
-const TRUMP_COLUMNS = [0, 1, 2, 3, 4];
-
-function BidGrid({ bids, onAct }: { bids: ActionView[]; onAct: (action: number) => void }) {
-  const rows = [...new Set(bids.map((bid) => bid.tricks ?? 0))].sort((a, b) => a - b);
-  const byKey = new Map(bids.map((bid) => [`${bid.tricks}-${bid.trump}`, bid]));
-  return (
-    <div className="bidgrid" role="grid">
-      <div className="bidgrid__head" role="row">
-        <span />
-        {TRUMP_COLUMNS.map((trump) => (
-          <span key={trump} className="bidgrid__col">
-            <TrumpGlyph trump={trump} />
-          </span>
-        ))}
-      </div>
-      {rows.map((tricks) => (
-        <div key={tricks} className="bidgrid__row" role="row">
-          <span className="bidgrid__tricks mono">{tricks}</span>
-          {TRUMP_COLUMNS.map((trump) => {
-            const bid = byKey.get(`${tricks}-${trump}`);
-            return (
-              <button
-                key={trump}
-                type="button"
-                className="bidgrid__cell"
-                disabled={!bid}
-                onClick={() => bid && onAct(bid.id)}
-                title={bid?.label}
-              >
-                {tricks}
-                <TrumpGlyph trump={trump} />
-              </button>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-interface PlayProps {
-  frame: Frame;
-  live: boolean;
-  animating: boolean;
-  busy: boolean;
-  turnName: string | null;
-  speed: Speed;
-  onSpeed: (speed: Speed) => void;
-  onLive: () => void;
-  onStep: (delta: number) => void;
-  canStepBack: boolean;
-  canStepForward: boolean;
-}
-
-function SpeedSelect({ speed, onSpeed }: { speed: Speed; onSpeed: (speed: Speed) => void }) {
-  return (
-    <label className="transport__speed">
-      Speed
-      <select className="select select--small" value={speed} onChange={(e) => onSpeed(e.target.value as Speed)}>
-        <option value="slow">Slow</option>
-        <option value="normal">Normal</option>
-        <option value="fast">Fast</option>
-        <option value="turbo">Turbo</option>
-      </select>
-    </label>
-  );
-}
-
-/** The status line under the table in play mode: whose turn it is, what to do, and stepping
- * back through what already happened. */
-export function PlayBar({ frame, live, animating, busy, turnName, speed, onSpeed, onLive, onStep, canStepBack, canStepForward }: PlayProps) {
-  const legal = live ? frame.legal : null;
-  const browse = (
-    <span className="playbar__browse">
-      <SpeedSelect speed={speed} onSpeed={onSpeed} />
-      <button type="button" className="tbtn tbtn--step" onClick={() => onStep(-1)} disabled={!canStepBack} title="Look back (←)">
-        ‹
-      </button>
-      <button type="button" className="tbtn tbtn--step" onClick={() => onStep(1)} disabled={!canStepForward} title="Forward (→)">
-        ›
-      </button>
-    </span>
-  );
-
-  if (!live) {
-    return (
-      <div className="playbar">
-        {browse}
-        <span className="playbar__status">Looking back at step {frame.index + 1}.</span>
-        <button type="button" className="button button--primary" onClick={onLive}>
-          Back to the table
-        </button>
-      </div>
-    );
-  }
-  if (!legal || legal.length === 0) {
-    return (
-      <div className="playbar">
-        {browse}
-        <span className="playbar__status">
-          {frame.kind === "game_end" ? (
-            "Game over."
-          ) : animating ? (
-            <>
-              {turnName ? `${turnName} to act` : "Bots playing"}
-              <span className="dots" aria-hidden />
-            </>
-          ) : busy ? (
-            "Sending your move…"
-          ) : (
-            "Waiting"
-          )}
-        </span>
-        {animating && frame.kind !== "round_end" && (
-          <button type="button" className="link" onClick={onLive}>
-            skip to my turn
-          </button>
-        )}
-      </div>
-    );
-  }
-  if (legal.some((action) => action.kind === "play")) {
-    const led = frame.table.trick[0];
-    const ledSuit = led ? suitOf(led.card) : null;
-    const following = ledSuit !== null && legal.every((action) => action.card !== null && suitOf(action.card) === ledSuit);
-    return (
-      <div className="playbar playbar--turn">
-        {browse}
-        <span className="playbar__status">
-          <b>Your turn.</b>{" "}
-          {led
-            ? following
-              ? `Follow suit: ${suitSymbol(ledSuit ?? 0)}.`
-              : `You have no ${suitSymbol(ledSuit ?? 0)}: play any card.`
-            : "You lead: play any card."}{" "}
-          Click a card in your hand.
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div className="playbar playbar--turn">
-      {browse}
-      <span className="playbar__status">
-        <b>Your call.</b> Choose it in the panel on the right.
-      </span>
-    </div>
-  );
-}
-
-/** The human's non-card decisions: Dash Call, bids, With, Pass, estimates and super calls. */
-export function DecisionPanel({ legal, busy, onAct }: { legal: ActionView[]; busy: boolean; onAct: (action: number) => void }) {
-  const [superOpen, setSuperOpen] = useState(false);
-  const kinds = new Set(legal.map((action) => action.kind));
-  const bids = legal.filter((action) => action.kind === "bid");
-  const supers = legal.filter((action) => action.kind === "super_call");
-  const estimates = legal.filter((action) => action.kind === "estimate");
-  const others = legal.filter((action) => ["no_dash", "dash", "with", "pass", "keep", "stay"].includes(action.kind));
-  const stay = legal.find((action) => action.kind === "stay");
-  const legalEstimates = new Map(estimates.map((action) => [action.tricks, action]));
-  return (
-    <section className="panel panel--decide" aria-label="Your call">
-      <h2 className="panel-title">Your call</h2>
-      <p className="small muted decide__hint">
-        {kinds.has("dash") || kinds.has("no_dash")
-          ? "A Dash Call promises to take zero tricks."
-          : estimates.length > 0
-            ? "How many tricks will you take? Crossed-out numbers are not allowed here."
-            : stay
-              ? `The player you said With to raised. Join the new bid, stay at ${stay.tricks ?? ""}, or outbid.`
-              : "Bid a number of tricks and a trump, say With, or pass."}
-      </p>
-      {others.length > 0 && (
-        <div className="decide__row">
-          {others.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              className={`button ${action.kind === "dash" ? "button--accent" : ""} ${["no_dash", "pass", "keep", "stay"].includes(action.kind) ? "button--primary" : ""}`}
-              onClick={() => onAct(action.id)}
-              disabled={busy}
-            >
-              <ActionText action={action} />
-            </button>
-          ))}
-        </div>
-      )}
-      {estimates.length > 0 && (
-        <div className="estimates" role="group" aria-label="Estimate">
-          {Array.from({ length: 14 }, (_, k) => {
-            const action = legalEstimates.get(k);
-            return (
-              <button
-                key={k}
-                type="button"
-                className="estimates__chip mono"
-                disabled={!action || busy}
-                onClick={() => action && onAct(action.id)}
-                title={action ? `Estimate ${k}` : `${k} is not allowed here`}
-              >
-                {k}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {bids.length > 0 && <BidGrid bids={bids} onAct={onAct} />}
-      {supers.length > 0 && (
-        <div className="supers">
-          <button type="button" className="link small" onClick={() => setSuperOpen(!superOpen)}>
-            {superOpen
-              ? "hide super calls"
-              : `or make a super call (${Math.min(...supers.map((action) => action.tricks ?? 13))}+ tricks in another trump)`}
-          </button>
-          {superOpen && <BidGrid bids={supers} onAct={onAct} />}
-        </div>
-      )}
-    </section>
   );
 }

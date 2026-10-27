@@ -36,7 +36,7 @@ export function PastGames({ games, onSameDeals, onReview }: Props) {
   const [all, setAll] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   if (games.length === 0) return null;
-  const shown = all ? games : games.slice(0, 6);
+  const shown = all ? games : games.slice(0, 5);
 
   const copy = async (game: SavedGame) => {
     try {
@@ -48,49 +48,47 @@ export function PastGames({ games, onSameDeals, onReview }: Props) {
   };
 
   return (
-    <section className="past" aria-label="Past games">
-      <h2 className="panel-title">Past games</h2>
-      <ol className="past__list">
-        {shown.map((game) => (
-          <li key={game.id} className="past__row">
-            <div className="past__head">
-              <span className={`badge ${game.mode === "play" ? "badge--teal" : "badge--muted"}`}>
-                {game.mode === "play" ? "Played" : "Watched"}
-              </span>
-              <span className="past__when">{when(game.finished_at)}</span>
-              <span className="past__outcome">{outcome(game)}</span>
-            </div>
-            <p className="past__seats small">
-              {game.seats.map((seat, i) => (
-                <span key={i}>
-                  {i === game.human_seat ? "You" : seat.label} <b className="mono">{game.scores[i]}</b>
+    <section className="panel" aria-label="Past games">
+      <h2 className="panel__title">Past games</h2>
+      <ol className="past">
+        {shown.map((game) => {
+          const won = game.human_seat !== null && game.winners.includes(game.human_seat);
+          return (
+            <li key={game.id} className="past__row">
+              <div className="past__top">
+                <span className={`tag ${game.mode === "play" ? (won ? "tag--accent" : "tag--soft") : "tag--muted"}`}>
+                  {game.mode === "play" ? "Played" : "Watched"}
                 </span>
-              ))}
-            </p>
-            <div className="past__foot">
-              <button
-                type="button"
-                className="past__seed mono"
-                title="Copy the seed"
-                onClick={() => void copy(game)}
-              >
-                seed {game.seed}
-                <span className="past__copied">{copied === game.id ? "copied" : "copy"}</span>
-              </button>
-              <span className="topbar__spacer" />
-              <button type="button" className="button button--ghost" onClick={() => onSameDeals(game)}>
-                Same deals
-              </button>
-              <button type="button" className="button button--ghost" onClick={() => onReview(game)}>
-                Review
-              </button>
-            </div>
-          </li>
-        ))}
+                <span className="past__outcome">{outcome(game)}</span>
+                <span className="past__when">{when(game.finished_at)}</span>
+              </div>
+              <p className="past__seats">
+                {game.seats.map((seat, i) => (
+                  <span key={i}>
+                    {i === game.human_seat ? "You" : seat.label} <b>{game.scores[i]}</b>
+                  </span>
+                ))}
+              </p>
+              <div className="past__actions">
+                <button type="button" className="past__seed" title="Copy the seed" onClick={() => void copy(game)}>
+                  seed <span className="mono">{game.seed}</span>
+                  <span className="past__copied">{copied === game.id ? "copied" : "copy"}</span>
+                </button>
+                <span className="spacer" />
+                <button type="button" className="btn btn--ghost btn--small" onClick={() => onSameDeals(game)}>
+                  Same deals
+                </button>
+                <button type="button" className="btn btn--ghost btn--small" onClick={() => onReview(game)}>
+                  Review
+                </button>
+              </div>
+            </li>
+          );
+        })}
       </ol>
-      {games.length > 6 && (
-        <button type="button" className="link small" onClick={() => setAll(!all)}>
-          {all ? "show fewer" : `show all ${games.length}`}
+      {games.length > 5 && (
+        <button type="button" className="link" onClick={() => setAll(!all)}>
+          {all ? "Show fewer" : `Show all ${games.length}`}
         </button>
       )}
     </section>

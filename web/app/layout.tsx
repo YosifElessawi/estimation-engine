@@ -1,16 +1,22 @@
-import type { Metadata } from "next";
-import { Fraunces, JetBrains_Mono, Karla } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { Instrument_Sans, JetBrains_Mono, Reem_Kufi } from "next/font/google";
 import type { ReactNode } from "react";
 
 import "./globals.css";
 
-const display = Fraunces({ subsets: ["latin"], variable: "--font-display", axes: ["opsz"] });
-const body = Karla({ subsets: ["latin"], variable: "--font-body" });
+const display = Reem_Kufi({ subsets: ["latin"], variable: "--font-display" });
+const body = Instrument_Sans({ subsets: ["latin"], variable: "--font-body" });
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Estimation table",
-  description: "Watch the Estimation bots play, or play a Bola against them.",
+  title: "Estimation",
+  description: "Play Estimation against the bots, or watch them play a Bola.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#0a1020",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

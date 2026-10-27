@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
-import { formatElo } from "@/lib/seats";
+import { type Position, formatElo, positionOf } from "@/lib/seats";
 import type { BotView, GameView, SavedGame } from "@/lib/types";
 
 import { PastGames } from "./PastGames";
+import { Avatar } from "./Table";
 
 type Mode = "watch" | "play";
 
@@ -14,8 +15,6 @@ type Mode = "watch" | "play";
 // under its first table; one the roster has no table for goes under "Other".
 const GROUPS = ["Leaderboard", "RL checkpoints", "Measuring rungs"];
 const OTHER = "Other";
-
-const SEAT_TITLES = ["Seat 0", "Seat 1", "Seat 2", "Seat 3"];
 
 const groupOf = (bot: BotView): string => {
   const first = bot.groups[0];
@@ -80,15 +79,17 @@ interface Props {
   onStart: (game: GameView) => void;
 }
 
+const SEATS = [0, 1, 2, 3];
+
 export function Setup({ bots, loadError, onStart }: Props) {
-  const [mode, setMode] = useState<Mode>("watch");
+  const [mode, setMode] = useState<Mode>("play");
   const [chosen, setChosen] = useState<string[] | null>(null);
   const [humanSeat, setHumanSeat] = useState(0);
   const [seed, setSeed] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [past, setPast] = useState<SavedGame[]>([]);
+  const [allRatings, setAllRatings] = useState(false);
 
   useEffect(() => {
     if (!bots) return;
@@ -99,10 +100,11 @@ export function Setup({ bots, loadError, onStart }: Props) {
   }, [bots]);
 
   const seats = useMemo(() => chosen ?? (bots ? defaults(bots) : null), [chosen, bots]);
-  const [allRatings, setAllRatings] = useState(false);
   const rated = useMemo(() => (bots ?? []).filter((bot) => bot.elo !== null).sort(byElo), [bots]);
   const leaders = rated.filter((bot) => groupOf(bot) === "Leaderboard");
   const others = rated.filter((bot) => groupOf(bot) !== "Leaderboard");
+  const top = Math.max(...rated.map((bot) => bot.elo ?? 0), 1);
+  const viewer = mode === "play" ? humanSeat : 0;
 
   const setSeat = (seat: number, spec: string) => {
     if (!seats) return;
@@ -150,134 +152,129 @@ export function Setup({ bots, loadError, onStart }: Props) {
     }
   };
 
-  return (
-    <main className="setup">
-      <section className="setup__intro">
-        <p className="eyebrow">Pocket Estimation rules · 4 players · 18 rounds plus replays</p>
-        <h1 className="setup__title">
-          Estimation<span className="setup__title-dot">.</span>
-        </h1>
-        <p className="setup__lede">
-          Pull up a chair. Watch four bots play a whole Bola and step through every call, card and
-          score, or take a seat yourself against three of them.
-        </p>
-        {rated.length > 0 && (
-          <div className="ladder">
-            <h2 className="panel-title">Leaderboard</h2>
-            <ol className="ladder__list">
-              {leaders.map((bot) => (
-                <li key={bot.spec} className={`ladder__row ladder__row--lead ladder__row--${bot.family}`}>
-                  <span>
-                    <span className="ladder__name">{bot.label}</span>
-                    {bot.description && <span className="ladder__desc">{bot.description}</span>}
-                  </span>
-                  <span className="mono">{formatElo(bot.elo)}</span>
-                </li>
-              ))}
-            </ol>
-            {others.length > 0 && (
-              <button type="button" className="link small" onClick={() => setAllRatings(!allRatings)}>
-                {allRatings ? "hide the other ratings" : `show ${others.length} more: RL checkpoints and measuring rungs`}
+  const seatCell = (seat: number) => {
+    const position: Position = positionOf(seat, viewer);
+    const isHuman = mode === "play" && seat === humanSeat;
+    const bot = bots?.find((b) => b.spec === seats?.[seat]);
+    return (
+      <div key={seat} className={`pick pick--${position} ${isHuman ? "is-human" : ""}`}>
+        <Avatar seat={seat} human={isHuman} name={isHuman ? "You" : (bot?.label ?? "Bot")} />
+        <div className="pick__body">
+          {isHuman ? (
+            <span className="pick__you">You</span>
+          ) : (
+            bots &&
+            seats && (
+              <BotSelect id={`seat-${seat}`} bots={bots} value={seats[seat] ?? "heuristic"} onChange={(spec) => setSeat(seat, spec)} />
+            )
+          )}
+          <span className="pick__meta">
+            {seat === 0 && <span>First to act</span>}
+            {mode === "play" && !isHuman && (
+              <button type="button" className="link" onClick={() => setHumanSeat(seat)}>
+                Sit here
               </button>
             )}
-            {allRatings && (
-              <ol className="ladder__list ladder__list--more">
-                {others.map((bot) => (
-                  <li key={bot.spec} className={`ladder__row ladder__row--${bot.family}`}>
-                    <span>{bot.label}</span>
-                    <span className="mono">{formatElo(bot.elo)}</span>
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <main className="lobby">
+      <header className="lobby__head">
+        <h1 className="wordmark wordmark--big">
+          Estimation<span className="wordmark__dot">.</span>
+        </h1>
+        <p className="lobby__lede">Pocket Estimation rules, four players, 18 rounds. Take a seat against three bots, or watch four of them play.</p>
+      </header>
+
+      <div className="lobby__grid">
+        <section className="panel deal" aria-label="New game">
+          <div className="seg seg--big" role="tablist" aria-label="Mode">
+            {(["play", "watch"] as const).map((m) => (
+              <button key={m} type="button" role="tab" aria-selected={mode === m} className={mode === m ? "is-on" : ""} onClick={() => setMode(m)}>
+                <b>{m === "play" ? "Play" : "Watch"}</b>
+                <span>{m === "play" ? "you and three bots" : "four bots, every hand shown"}</span>
+              </button>
+            ))}
+          </div>
+
+          {!bots ? (
+            <p className="notice">{loadError ? `Waiting for the game server… (${loadError})` : "Loading the bots…"}</p>
+          ) : (
+            <div className="minitable">
+              <div className="minitable__felt" aria-hidden />
+              {SEATS.map(seatCell)}
+            </div>
+          )}
+
+          <div className="deal__seed">
+            <label htmlFor="seed">Seed</label>
+            <input
+              id="seed"
+              className="input"
+              inputMode="numeric"
+              placeholder="random"
+              value={seed}
+              onChange={(e) => setSeed(e.target.value)}
+            />
+            <span className="deal__help">
+              {mode === "play"
+                ? "Fixes the deal. A random seed stays hidden until the game ends."
+                : "The same seats and seed replay the same game."}
+            </span>
+          </div>
+
+          {error && <p className="error">{error}</p>}
+
+          <button type="button" className="btn btn--primary btn--wide" disabled={!seats || busy} onClick={start}>
+            {busy ? "Dealing…" : mode === "watch" ? "Deal and watch" : "Deal me in"}
+          </button>
+        </section>
+
+        <aside className="lobby__side">
+          {rated.length > 0 && (
+            <section className="panel" aria-label="Leaderboard">
+              <h2 className="panel__title">Leaderboard</h2>
+              <ol className="ladder">
+                {leaders.map((bot, i) => (
+                  <li key={bot.spec} className="ladder__row" title={bot.description}>
+                    <span className="ladder__place">{i + 1}</span>
+                    <span className="ladder__who">
+                      <span className="ladder__name">{bot.label}</span>
+                      {bot.description && <span className="ladder__desc">{bot.description}</span>}
+                      <span className="ladder__bar" aria-hidden>
+                        <span style={{ width: `${Math.max(4, ((bot.elo ?? 0) / top) * 100)}%` }} />
+                      </span>
+                    </span>
+                    <span className="ladder__elo">{formatElo(bot.elo)}</span>
                   </li>
                 ))}
               </ol>
-            )}
-            <p className="footnote">
-              Elo under the current rules, from 200 duplicate sets per pair; RandomBot fixed at 400.
-            </p>
-          </div>
-        )}
-      </section>
-
-      <div className="setup__side">
-      <section className="setup__card">
-        <div className="mode-switch" role="tablist" aria-label="Mode">
-          {(["watch", "play"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="tab"
-              aria-selected={mode === m}
-              className={`mode-switch__tab ${mode === m ? "is-active" : ""}`}
-              onClick={() => setMode(m)}
-            >
-              <span className="mode-switch__name">{m === "watch" ? "Watch" : "Play"}</span>
-              <span className="mode-switch__hint">
-                {m === "watch" ? "four bots, every hand shown" : "you against three bots"}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        {!bots && (
-          <p className="notice">
-            {loadError ? `Waiting for the game server… (${loadError})` : "Loading the bots…"}
-          </p>
-        )}
-
-        {seats && bots && (
-          <div className="seat-picker">
-            {SEAT_TITLES.map((title, seat) => {
-              const isHuman = mode === "play" && seat === humanSeat;
-              return (
-                <div key={title} className={`seat-picker__row ${isHuman ? "is-human" : ""}`}>
-                  <label className="seat-picker__label" htmlFor={`seat-${seat}`}>
-                    {title}
-                    {seat === 0 && <span className="seat-picker__first">acts first in round 1</span>}
-                  </label>
-                  {isHuman ? (
-                    <div className="seat-picker__you">You</div>
-                  ) : (
-                    <BotSelect
-                      id={`seat-${seat}`}
-                      bots={bots}
-                      value={seats[seat] ?? "heuristic"}
-                      onChange={(spec) => setSeat(seat, spec)}
-                    />
-                  )}
-                  {mode === "play" && !isHuman && (
-                    <button type="button" className="link" onClick={() => setHumanSeat(seat)}>
-                      sit here
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="setup__seed">
-          <label htmlFor="seed">Seed</label>
-          <input
-            id="seed"
-            className="input mono"
-            inputMode="numeric"
-            placeholder="random"
-            value={seed}
-            onChange={(e) => setSeed(e.target.value)}
-          />
-          <span className="footnote">
-            {mode === "play"
-              ? "Fixes the deal. A random seed stays hidden until the game ends."
-              : "Same seats and seed replay the same game."}
-          </span>
-        </div>
-
-        {error && <p className="error">{error}</p>}
-
-        <button type="button" className="button button--primary" disabled={!seats || busy} onClick={start}>
-          {busy ? "Dealing…" : mode === "watch" ? "Deal and watch" : "Deal me in"}
-        </button>
-      </section>
-      <PastGames games={past} onSameDeals={sameDeals} onReview={(game) => void review(game)} />
+              {others.length > 0 && (
+                <button type="button" className="link" onClick={() => setAllRatings(!allRatings)}>
+                  {allRatings ? "Hide the other ratings" : `Show ${others.length} more: RL checkpoints and measuring rungs`}
+                </button>
+              )}
+              {allRatings && (
+                <ol className="ladder ladder--more">
+                  {others.map((bot) => (
+                    <li key={bot.spec} className="ladder__row" title={bot.description}>
+                      <span className="ladder__who">
+                        <span className="ladder__name">{bot.label}</span>
+                      </span>
+                      <span className="ladder__elo">{formatElo(bot.elo)}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <p className="panel__note">Elo under the current rules, from 200 duplicate sets per pair. RandomBot is fixed at 400.</p>
+            </section>
+          )}
+          <PastGames games={past} onSameDeals={sameDeals} onReview={(game) => void review(game)} />
+        </aside>
       </div>
     </main>
   );

@@ -1,274 +1,323 @@
 "use client";
 
-import { bySuit, isRed, rankLabel, sortHand, suitSymbol, trumpName } from "@/lib/cards";
-import { type Position, formatElo, positionOf, seatName, shortName, signed } from "@/lib/seats";
-import type { Frame, GameView, RoundResultView, TableView } from "@/lib/types";
+import type { CSSProperties, ReactNode } from "react";
 
-import { ActionText, TrumpGlyph } from "./ActionText";
-import { CardBack, PlayingCard } from "./PlayingCard";
+import { SANS, bySuit, sortHand, suitOf, trickLeader } from "@/lib/cards";
+import { type Position, formatElo, positionOf, seatName } from "@/lib/seats";
+import type { Frame, GameView, TableView } from "@/lib/types";
+
+import { CallText, TrumpGlyph } from "./ActionText";
+import { Backs, PlayingCard } from "./PlayingCard";
 
 interface TableProps {
   frame: Frame;
   game: GameView;
   bottom: number;
+  /** Cards the viewer may play now; empty when it is not their turn to play. */
   playableCards: Set<number>;
+  /** Show an empty spot in the trick where the viewer's card will land. */
+  awaitingMyCard: boolean;
   onPlayCard: (card: number) => void;
-  overlay: React.ReactNode;
+  /** The viewer's decision panel or a status line, docked above the hand. */
+  dock: ReactNode;
+  overlay: ReactNode;
 }
 
-const SEAT_ORDER = [0, 1, 2, 3];
+const SEATS = [0, 1, 2, 3];
+const SLOT: Record<Position, string> = { bottom: "s", right: "e", top: "n", left: "w" };
 
-export function Table({ frame, game, bottom, playableCards, onPlayCard, overlay }: TableProps) {
+const trumpSuitOf = (table: TableView): number | null =>
+  table.trump !== null && table.trump !== SANS ? table.trump : null;
+
+export function Table({ frame, game, bottom, playableCards, awaitingMyCard, onPlayCard, dock, overlay }: TableProps) {
   const spectator = game.mode !== "play";
+  const table = frame.table;
+  const hand = table.hands[bottom] ?? null;
   return (
-    <div className="table">
-      {SEAT_ORDER.map((seat) => {
-        const position = positionOf(seat, bottom);
-        return (
-          <SeatPanel
-            key={seat}
-            seat={seat}
-            position={position}
-            frame={frame}
-            game={game}
-            ownHand={!spectator && seat === game.human_seat}
-            playableCards={playableCards}
-            onPlayCard={onPlayCard}
-          />
-        );
-      })}
-      <RoundPlate table={frame.table} game={game} frame={frame} />
-      <div className="felt">
-        <TrickArea frame={frame} bottom={bottom} />
-      </div>
+    <div className={`stage stage--${table.phase} ${spectator ? "stage--watch" : "stage--play"}`}>
+      {SEATS.map((seat) => (
+        <Seat key={seat} seat={seat} position={positionOf(seat, bottom)} frame={frame} game={game} spectator={spectator} />
+      ))}
+      <Center frame={frame} game={game} bottom={bottom} awaitingMyCard={awaitingMyCard} />
+      {hand && (
+        <Hand
+          cards={hand}
+          playable={playableCards}
+          interactive={!spectator}
+          trumpSuit={trumpSuitOf(table)}
+          onPlay={onPlayCard}
+        />
+      )}
+      <div className="dock">{dock}</div>
       {overlay}
     </div>
   );
 }
 
-function badgesOf(table: TableView, seat: number): { text: string; tone: string }[] {
-  const badges: { text: string; tone: string }[] = [];
-  if (table.caller === seat) badges.push({ text: "Caller", tone: "gold" });
-  const withInfo = table.with_players.find((w) => w.seat === seat);
-  if (withInfo && table.phase === "auction") badges.push({ text: `With ${withInfo.w}`, tone: "silver" });
-  else if (withInfo) badges.push({ text: "With", tone: "silver" });
-  if (table.dash_callers.includes(seat)) badges.push({ text: "Dash", tone: "teal" });
-  // TBL-7: announced at the deal; it says a suit is missing, never which one
-  if (table.void_announced.includes(seat)) badges.push({ text: "Void", tone: "muted" });
-  if (table.last_estimator === seat) {
-    const risks = table.risks ?? 0;
-    badges.push({ text: risks > 0 ? `Last · ${risks} Risk${risks > 1 ? "s" : ""}` : "Last", tone: "rose" });
-  }
-  if (table.phase === "auction" && table.passed.includes(seat)) badges.push({ text: "Out", tone: "muted" });
-  return badges;
+interface Tag {
+  text: string;
+  tone: "accent" | "soft" | "teal" | "rose" | "muted";
 }
 
-function SeatPanel({
+function tagsOf(table: TableView, seat: number): Tag[] {
+  const tags: Tag[] = [];
+  if (table.caller === seat) tags.push({ text: table.super_call ? "Super call" : "Caller", tone: "accent" });
+  const held = table.with_players.find((w) => w.seat === seat);
+  if (held) tags.push({ text: table.phase === "auction" ? `With ${held.w}` : "With", tone: "soft" });
+  if (table.dash_callers.includes(seat)) tags.push({ text: "Dash", tone: "teal" });
+  if (table.last_estimator === seat) {
+    const risks = table.risks ?? 0;
+    if (risks > 0) tags.push({ text: risks > 1 ? `${risks} Risks` : "Risk", tone: "rose" });
+    else if (table.phase === "estimation") tags.push({ text: "Last", tone: "muted" });
+  }
+  // TBL-7: announced at the deal; it says a suit is missing, never which one
+  if (table.void_announced.includes(seat)) tags.push({ text: "Void", tone: "muted" });
+  return tags;
+}
+
+function BotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden>
+      <rect x="5" y="8" width="14" height="11" rx="3.5" />
+      <path d="M12 8V5" />
+      <circle cx="12" cy="4" r="1.1" fill="currentColor" />
+      <circle cx="9.6" cy="13.4" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="14.4" cy="13.4" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function Avatar({ seat, human, name, turn }: { seat: number; human: boolean; name: string; turn?: boolean }) {
+  return (
+    <span className={`avatar avatar--s${seat} ${human ? "avatar--human" : ""}`} aria-hidden>
+      {turn && <span className="avatar__ring" />}
+      {human ? name.slice(0, 1).toUpperCase() : <BotIcon />}
+    </span>
+  );
+}
+
+function Tally({ estimate, won }: { estimate: number | null | undefined; won: number }) {
+  if (estimate === null || estimate === undefined) return null;
+  const dots = Math.max(estimate, won);
+  return (
+    <span className={`tally ${dots > 8 ? "tally--many" : ""}`} aria-label={`${won} of ${estimate} tricks`}>
+      {dots > 0 && (
+        <span className="tally__dots" aria-hidden>
+          {Array.from({ length: dots }, (_, i) => (
+            <i key={i} className={i < won ? (i < estimate ? "is-won" : "is-over") : ""} />
+          ))}
+        </span>
+      )}
+      <span className="tally__text">
+        {won}/{estimate}
+      </span>
+    </span>
+  );
+}
+
+function Seat({
   seat,
   position,
   frame,
   game,
-  ownHand,
-  playableCards,
-  onPlayCard,
+  spectator,
 }: {
   seat: number;
   position: Position;
   frame: Frame;
   game: GameView;
-  ownHand: boolean;
-  playableCards: Set<number>;
-  onPlayCard: (card: number) => void;
+  spectator: boolean;
 }) {
   const table = frame.table;
   const info = game.seats[seat];
   const over = frame.kind === "round_end" || frame.kind === "game_end";
-  const isTurn = !over && table.current_player === seat;
-  const acted = frame.event?.seat === seat;
+  const turn = !over && table.current_player === seat;
+  const out = table.phase === "auction" && table.passed.includes(seat);
+  const call = table.calls[seat] ?? null;
+  const showCall = call !== null && ["dash", "auction", "estimation"].includes(table.phase);
+  const fresh = frame.event?.seat === seat && frame.event.action.kind !== "play";
+  const high = table.phase === "auction" && table.top_bidder === seat && call?.kind === "bid";
   const hand = table.hands[seat] ?? null;
+  const name = seatName(game, seat);
+  const human = info?.human ?? false;
+  const isBottom = position === "bottom";
+  const tags = tagsOf(table, seat);
+  const won = table.tricks_won[seat] ?? 0;
   const estimate = table.estimates[seat];
-  const call = table.calls[seat];
-  const showCall = call && (table.phase === "dash" || table.phase === "auction" || table.phase === "estimation");
-  const trumpSuit = table.trump !== null && table.trump < 4 ? table.trump : null;
-  const vertical = position === "left" || position === "right";
-
+  const showWon = estimate === null || estimate === undefined ? table.phase === "play" || table.phase === "done" : false;
   return (
     <section
-      className={[
-        "seat",
-        `seat--${position}`,
-        isTurn ? "is-turn" : "",
-        info?.human ? "is-human" : "",
-        acted ? "has-acted" : "",
-      ].join(" ")}
-      aria-label={`Seat ${seat}`}
+      className={`seat seat--${position} ${turn ? "is-turn" : ""} ${out ? "is-out" : ""}`}
+      aria-label={name}
     >
-      <header className="seat__plate">
-        <div className="seat__who">
-          <span className="seat__name">{seatName(game, seat)}</span>
-          {info && !info.human && <span className="seat__elo mono">{formatElo(info.elo)}</span>}
-          {info?.explains && <span className="seat__rl" title="The Why panel explains this bot">why</span>}
-        </div>
-        <div className="seat__line">
-          <span className="seat__tag">Seat {seat}</span>
-          <span className="seat__score mono">{frame.scores[seat] ?? 0}</span>
-        </div>
-        <div className="seat__line">
-          <span className="seat__tally">
-            {estimate !== null && estimate !== undefined ? (
-              <>
-                Est <b className="mono">{estimate}</b> · Won <b className="mono">{table.tricks_won[seat]}</b>
-              </>
-            ) : table.phase === "play" || table.phase === "done" ? (
-              <>
-                Won <b className="mono">{table.tricks_won[seat]}</b>
-              </>
-            ) : (
-              <span className="muted">no estimate yet</span>
-            )}
-          </span>
-          <span className="seat__badges">
-            {badgesOf(table, seat).map((badge) => (
-              <span key={badge.text} className={`badge badge--${badge.tone}`}>
-                {badge.text}
+      <div className="plate" title={info && !human ? `${info.label} · Elo ${formatElo(info.elo)}` : undefined}>
+        <Avatar seat={seat} human={human} name={name} turn={turn} />
+        <div className="plate__info">
+          <div className="plate__name">
+            <span className="plate__label">{name}</span>
+            {tags.map((tag) => (
+              <span key={tag.text} className={`tag tag--${tag.tone}`}>
+                {tag.text}
               </span>
             ))}
-          </span>
-        </div>
-      </header>
-
-      {showCall && call && (
-        <div className={`bubble ${acted ? "bubble--fresh" : ""}`}>
-          <ActionText action={call} />
-        </div>
-      )}
-      {isTurn && !showCall && <div className="bubble bubble--turn">to act</div>}
-
-      <div className="seat__hand">
-        {hand && ownHand ? (
-          <div className="fan">
-            {sortHand(hand).map((card) => (
-              <PlayingCard
-                key={card}
-                card={card}
-                size="lg"
-                playable={playableCards.has(card)}
-                dimmed={playableCards.size > 0 && !playableCards.has(card)}
-                onPlay={onPlayCard}
-              />
-            ))}
           </div>
-        ) : hand ? (
-          <SuitRows cards={hand} trumpSuit={trumpSuit} compact={vertical} />
-        ) : (
-          <div className="backs" aria-label={`${table.hand_sizes[seat]} cards`}>
-            {Array.from({ length: table.hand_sizes[seat] ?? 0 }, (_, i) => (
-              <CardBack key={i} size="sm" />
-            ))}
+          <div className="plate__sub">
+            <span className="plate__points">{frame.scores[seat] ?? 0} pts</span>
+            <Tally estimate={estimate} won={won} />
+            {showWon && <span className="tally__text">won {won}</span>}
+          </div>
+        </div>
+        {!spectator && !isBottom && <Backs count={table.hand_sizes[seat] ?? 0} />}
+        {showCall && call && (
+          <div key={fresh ? `call-${frame.index}` : "call"} className={`bubble ${fresh ? "is-fresh" : ""} ${high ? "is-high" : ""} ${call.kind === "pass" ? "is-pass" : ""}`}>
+            <CallText action={call} />
           </div>
         )}
       </div>
+      {spectator && !isBottom && hand && <MiniHand cards={hand} trumpSuit={trumpSuitOf(table)} />}
     </section>
   );
 }
 
-function SuitRows({ cards, trumpSuit, compact }: { cards: number[]; trumpSuit: number | null; compact: boolean }) {
+function MiniHand({ cards, trumpSuit }: { cards: number[]; trumpSuit: number | null }) {
   return (
-    <div className={`suits ${compact ? "suits--compact" : ""}`}>
-      {bySuit(cards).map(({ suit, cards: inSuit }) => (
-        <div key={suit} className={`suits__row ${suit === trumpSuit ? "is-trump" : ""}`}>
-          <span className={`suits__symbol ${isRed(suit) ? "glyph--red" : "glyph--black"}`}>{suitSymbol(suit)}</span>
-          <span className="suits__ranks">
-            {inSuit.length === 0 ? <span className="muted">–</span> : inSuit.map((card) => <span key={card}>{rankLabel(card)}</span>)}
+    <div className="minihand" aria-label={`${cards.length} cards`}>
+      {bySuit(cards)
+        .filter((group) => group.cards.length > 0)
+        .map((group) => (
+          <span key={group.suit} className="minihand__suit">
+            {group.cards.map((card) => (
+              <PlayingCard key={card} card={card} size="mini" trump={group.suit === trumpSuit} />
+            ))}
           </span>
-        </div>
-      ))}
+        ))}
     </div>
   );
 }
 
-const PHASE_NAMES: Record<TableView["phase"], string> = {
-  dash: "Dash Calls",
-  auction: "Auction",
-  estimation: "Estimation",
-  play: "Play",
-  done: "Round over",
-};
-
-function RoundPlate({ table, game, frame }: { table: TableView; game: GameView; frame: Frame }) {
-  const fixed = table.fixed_trump;
-  const caller = table.caller;
-  const contract = caller !== null ? table.estimates[caller] : null;
+function Hand({
+  cards,
+  playable,
+  interactive,
+  trumpSuit,
+  onPlay,
+}: {
+  cards: number[];
+  playable: Set<number>;
+  interactive: boolean;
+  trumpSuit: number | null;
+  onPlay: (card: number) => void;
+}) {
+  const sorted = sortHand(cards);
+  const n = sorted.length;
+  const choosing = interactive && playable.size > 0;
   return (
-    <div className="plate">
-      <div className="plate__round">
-        <span className="plate__label">Round</span>
-        <span className="plate__number">{table.round_no}</span>
-      </div>
-      <dl className="plate__facts">
-        <div>
-          <dt>Type</dt>
-          <dd>
-            {fixed === null ? (
-              "Open"
-            ) : (
-              <>
-                Fixed <TrumpGlyph trump={fixed} />
-                {table.super_call && " · super call"}
-              </>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Phase</dt>
-          <dd>
-            {PHASE_NAMES[table.phase]}
-            {table.phase === "play" &&
-              ` · trick ${frame.event?.trick_winner != null ? table.tricks_played : Math.min(table.tricks_played + 1, 13)}/13`}
-          </dd>
-        </div>
-        <div>
-          <dt>Trump</dt>
-          <dd>{table.trump === null ? <span className="muted">not set</span> : <><TrumpGlyph trump={table.trump} /> {trumpName(table.trump)}</>}</dd>
-        </div>
-        {caller !== null && contract !== null && contract !== undefined ? (
-          <div>
-            <dt>Contract</dt>
-            <dd>
-              {contract} by {shortName(game, caller)}
-            </dd>
-          </div>
-        ) : table.top_bid && table.top_bidder !== null ? (
-          <div>
-            <dt>Top bid</dt>
-            <dd>
-              {table.top_bid.tricks} <TrumpGlyph trump={table.top_bid.trump} /> by {shortName(game, table.top_bidder)}
-            </dd>
-          </div>
-        ) : null}
-        {table.total !== null && table.over !== null && (
-          <div>
-            <dt>Estimates</dt>
-            <dd>
-              {table.total} · {table.over ? `Over by ${table.total - 13}` : `Under by ${13 - table.total}`}
-            </dd>
-          </div>
-        )}
-        {table.carry > 1 && (
-          <div>
-            <dt>Carry</dt>
-            <dd className="plate__carry">x{table.carry}</dd>
-          </div>
-        )}
-      </dl>
-      {frame.kind === "deal" && <div className="plate__flash">New deal</div>}
+    <div className={`hand ${choosing ? "is-choosing" : ""}`} style={{ "--n": n } as CSSProperties} aria-label="Your hand">
+      {sorted.map((card, i) => {
+        const t = n > 1 ? i / (n - 1) - 0.5 : 0;
+        const canPlay = choosing && playable.has(card);
+        return (
+          <PlayingCard
+            key={card}
+            card={card}
+            size="lg"
+            playable={canPlay}
+            dimmed={choosing && !canPlay}
+            trump={suitOf(card) === trumpSuit}
+            style={{ "--t": t.toFixed(3) } as CSSProperties}
+            onPlay={onPlay}
+          />
+        );
+      })}
     </div>
   );
 }
 
-const SLOT: Record<Position, string> = { bottom: "s", right: "e", top: "n", left: "w" };
+function Center({
+  frame,
+  game,
+  bottom,
+  awaitingMyCard,
+}: {
+  frame: Frame;
+  game: GameView;
+  bottom: number;
+  awaitingMyCard: boolean;
+}) {
+  const table = frame.table;
+  if (frame.kind === "deal") {
+    return (
+      <div className="center center--deal" key={`deal-${frame.index}`}>
+        <span className="center__eyebrow">New deal</span>
+        <span className="center__big">Round {table.round_no}</span>
+        {table.fixed_trump !== null && (
+          <span className="center__sub">
+            Fixed trump <TrumpGlyph trump={table.fixed_trump} />
+          </span>
+        )}
+      </div>
+    );
+  }
+  if (table.phase === "play" || table.phase === "done") {
+    return <Trick frame={frame} game={game} bottom={bottom} awaitingMyCard={awaitingMyCard} />;
+  }
+  if (table.phase === "auction") {
+    if (table.top_bid && table.top_bidder !== null) {
+      return (
+        <div className="center">
+          <span className="center__eyebrow">Highest bid</span>
+          <span className="center__big">
+            {table.top_bid.tricks} <TrumpGlyph trump={table.top_bid.trump} />
+          </span>
+          <span className="center__sub">{seatName(game, table.top_bidder)}</span>
+        </div>
+      );
+    }
+    return (
+      <div className="center">
+        <span className="center__eyebrow">Bidding</span>
+        <span className="center__sub">No bids yet</span>
+      </div>
+    );
+  }
+  if (table.phase === "estimation") {
+    const sum = table.estimates.reduce<number>((total, e) => total + (e ?? 0), 0);
+    const caller = table.caller;
+    return (
+      <div className="center">
+        <span className="center__eyebrow">Estimates so far</span>
+        <span className="center__big">
+          {sum}
+          <small> of 13</small>
+        </span>
+        {caller !== null && table.trump !== null && (
+          <span className="center__sub">
+            {seatName(game, caller)} called {table.estimates[caller] ?? table.top_bid?.tricks}{" "}
+            <TrumpGlyph trump={table.trump} />
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="center">
+      <span className="center__eyebrow">Dash calls</span>
+      <span className="center__sub">Who promises to take no tricks?</span>
+    </div>
+  );
+}
 
-function TrickArea({ frame, bottom }: { frame: Frame; bottom: number }) {
+function Trick({
+  frame,
+  game,
+  bottom,
+  awaitingMyCard,
+}: {
+  frame: Frame;
+  game: GameView;
+  bottom: number;
+  awaitingMyCard: boolean;
+}) {
   const table = frame.table;
   const event = frame.event;
   let cards = table.trick;
@@ -277,133 +326,31 @@ function TrickArea({ frame, bottom }: { frame: Frame; bottom: number }) {
     cards = table.last_trick.cards;
     winner = table.last_trick.winner;
   }
-  const freshCard = event?.action.kind === "play" ? event.action.card : null;
+  const done = winner !== null;
+  const leading = done ? winner : trickLeader(cards, table.trump);
+  const fresh = event?.action.kind === "play" ? event.action.card : null;
+  const winnerName = winner !== null ? seatName(game, winner) : null;
   return (
     <div className="trick" aria-label="Cards on the table">
+      {awaitingMyCard && !done && <div className="trick__slot trick__slot--s trick__slot--empty" aria-hidden />}
       {cards.map(({ seat, card }, order) => {
         const slot = SLOT[positionOf(seat, bottom)];
+        const state = seat === leading && cards.length > 1 ? (done ? "is-winner" : "is-leading") : "";
         return (
-          <div key={card} className={`trick__slot trick__slot--${slot}`} style={{ zIndex: order + 1 }}>
-            <PlayingCard card={card} size="md" winner={winner === seat} fresh={card === freshCard} />
+          <div
+            key={card}
+            className={`trick__slot trick__slot--${slot} ${card === fresh ? "is-fresh" : ""} ${state}`}
+            style={{ zIndex: order + 1 }}
+          >
+            <PlayingCard card={card} size="md" />
           </div>
         );
       })}
-      {winner !== null && <div className={`trick__winner trick__winner--${SLOT[positionOf(winner, bottom)]}`}>wins the trick</div>}
-    </div>
-  );
-}
-
-function breakdown(seat: RoundResultView["seats"][number]): { label: string; points: number }[] {
-  const parts = [
-    { label: seat.won ? "Base" : "Missed", points: seat.base_points },
-    { label: "Dash Call", points: seat.dash_points },
-    { label: seat.caller ? "Caller" : "With", points: seat.call_points },
-    { label: "Risk", points: seat.risk_points },
-    { label: seat.won ? "Only winner" : "Only loser", points: seat.only_points },
-    { label: "Super call", points: seat.super_points },
-  ];
-  return parts.filter((part) => part.points !== 0);
-}
-
-function roleOf(seat: RoundResultView["seats"][number]): string {
-  const roles = [];
-  if (seat.caller) roles.push("Caller");
-  if (seat.with_player) roles.push("With");
-  if (seat.dash) roles.push("Dash");
-  if (seat.super_call) roles.push("Super");
-  if (seat.last) roles.push(seat.risks ? `Last, ${seat.risks} Risk${seat.risks > 1 ? "s" : ""}` : "Last");
-  return roles.join(" · ");
-}
-
-export function RoundResult({
-  frame,
-  game,
-  bottom,
-  actions,
-}: {
-  frame: Frame;
-  game: GameView;
-  bottom: number;
-  actions: React.ReactNode;
-}) {
-  const result = frame.result;
-  if (!result) return null;
-  const order = [0, 1, 2, 3].map((i) => (bottom + i) % 4);
-  const final = frame.kind === "game_end";
-  const winners = frame.winners ?? [];
-  return (
-    <div className={`result ${final ? "result--final" : ""}`} role="dialog" aria-label="Round result">
-      {final && (
-        <div className="result__winners">
-          <span className="eyebrow">Game over</span>
-          <h2>
-            {winners.map((seat) => seatName(game, seat)).join(" and ")} {winners.length > 1 ? "share the win" : winners[0] === game.human_seat && game.mode === "play" ? "win!" : "wins"}
-          </h2>
-          <p className="mono">{order.map((seat) => `${seatName(game, seat)} ${frame.scores[seat]}`).join("  ·  ")}</p>
+      {done && winner !== null && (
+        <div className={`trick__label trick__label--${SLOT[positionOf(winner, bottom)]}`}>
+          {winnerName} {winnerName === "You" ? "take" : "takes"} it
         </div>
       )}
-      <header className="result__head">
-        <h3>
-          Round {result.round_no}
-          {result.trump !== null && (
-            <>
-              {" "}
-              · <TrumpGlyph trump={result.trump} />
-            </>
-          )}
-        </h3>
-        <span className="result__facts">
-          {result.skipped
-            ? "Skipped: no Caller, everyone scores 0"
-            : `${result.total} estimated · ${result.over ? `Over by ${(result.total ?? 13) - 13}` : `Under by ${13 - (result.total ?? 13)}`}`}
-          {!result.skipped && result.multiplier !== 1 && ` · scored x${result.multiplier}`}
-          {result.all_lose && " · everyone lost"}
-          {result.trump_changed &&
-            (result.replayed ? " · trump changed, replayed next" : " · trump changed (replay limit reached)")}
-        </span>
-      </header>
-      {!result.skipped && (
-        <table className="result__table">
-          <thead>
-            <tr>
-              <th>Player</th>
-              <th>Est</th>
-              <th>Won</th>
-              <th>Points</th>
-              <th className="num">Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {order.map((seat) => {
-              const row = result.seats[seat];
-              if (!row) return null;
-              return (
-                <tr key={seat} className={row.won ? "is-win" : "is-loss"}>
-                  <td>
-                    <span className="result__name">{seatName(game, seat)}</span>
-                    <span className="result__role">{roleOf(row)}</span>
-                  </td>
-                  <td className="mono">{row.estimate}</td>
-                  <td className="mono">
-                    {row.tricks} <span className="result__mark">{row.won ? "✓" : "✗"}</span>
-                  </td>
-                  <td>
-                    {breakdown(row).map((part) => (
-                      <span key={part.label} className={`chip ${part.points > 0 ? "chip--plus" : "chip--minus"}`}>
-                        {part.label} {signed(part.points)}
-                      </span>
-                    ))}
-                    {row.multiplier !== 1 && <span className="chip chip--mult">x{row.multiplier}</span>}
-                  </td>
-                  <td className={`num mono ${row.score > 0 ? "plus" : row.score < 0 ? "minus" : ""}`}>{signed(row.score)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      {result.next_carry > 1 && <p className="result__carry">Next round counts x{result.next_carry}</p>}
-      <div className="result__actions">{actions}</div>
     </div>
   );
 }
