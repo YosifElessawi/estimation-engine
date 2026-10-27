@@ -1,0 +1,59 @@
+# A long self-play run under the current rules (the With auction, void announcements, encoder
+# v2): it continues the staged run's final nets, both of them, for about 12 hours (3,000 loops
+# at about 14 s each). The rules and the encoder changed since, so it records fresh PIMC games
+# for the card anchor (about 16 minutes) and skips the imitation warm start. Copy the staged
+# final from the main checkout to runs/m4-rules-v2/reference/staged-final.pt, then:
+#   uv run python -m estimation.rl.train run --config configs/m4-rules-v2.toml --out runs/m4-rules-v2
+# and watch it with:
+#   uv run python -m estimation.rl.watch runs/m4-rules-v2
+seed = 0
+workers = 5
+
+[reward]
+ahead_weight = 1.0
+behind_weight = 0.5
+tie_weight = 1.0
+normalize_weights = true
+win_blend = 0.5
+win_points = 100.0
+
+[record]
+games = 1000
+pimc_samples = 30
+
+[opponents]
+self_play = 0.70
+heuristic = 0.15
+pimc = 0.15
+pimc_samples = [4, 5, 6, 7, 8]
+
+[selfplay]
+start_from = "runs/m4-rules-v2/reference/staged-final.pt"
+iterations = 3000
+games = 240
+eval_games = 32
+# BiddingNet first relearns the auction alone, with the staged run's card play.
+card_frozen_iterations = 10
+# Both learning rates start where the staged run started, so the nets can adapt to the new
+# auction and inputs, and fall to a tenth, where it ended.
+bid_lr = 1e-4
+card_lr = 1e-4
+lr_end_factor = 0.1
+# The anchor starts at 0.3, not 1.0: enough to ground card play in PIMC's play under the new
+# rules without pulling the trained nets back to the warm start, and falls to 0.03.
+card_anchor_weight = 0.3
+card_anchor_end_factor = 0.1
+checkpoint_every = 25
+overlap = true
+balance = true
+chunk = 8
+# Every 50 loops: 40 sets against PIMC with 8 deals and 40 against the staged final.
+yardstick_every = 50
+yardstick_sets = 40
+yardstick_seed = 0
+yardstick_pimc_samples = 8
+yardstick_reference = "runs/m4-rules-v2/reference/staged-final.pt"
+
+[nets]
+hidden = 384
+device = "auto"
