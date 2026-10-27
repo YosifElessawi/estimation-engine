@@ -65,11 +65,11 @@ def test_make_chance_falls_away_beyond_the_measured_distances():
 
 
 def test_the_shipped_bot_uses_the_calibration():
-    from estimation.bots import YosifBot, make_bot
+    from estimation.bots import SearchBot, make_bot
 
-    shipped, switched_off = make_bot("yosif", 0), make_bot("yosif:calibrated=false", 0)
-    assert isinstance(shipped, YosifBot)
-    assert isinstance(switched_off, YosifBot)
-    assert shipped.config.calibrated
-    assert shipped.config.calibration is not None
-    assert not switched_off.config.calibrated
+    shipped, switched_off = make_bot("search", 0), make_bot("search:calibrated=false", 0)
+    assert isinstance(shipped, SearchBot)
+    assert isinstance(switched_off, SearchBot)
+    assert shipped.config.yosif.calibrated
+    assert shipped.config.yosif.calibration is not None
+    assert not switched_off.config.yosif.calibrated

@@ -25,8 +25,8 @@ from estimation.bots import (
     PIMCBot,
     PIMCConfig,
     RandomBot,
-    YosifBot,
-    YosifConfig,
+    SearchBot,
+    SearchConfig,
     make_bot,
 )
 from estimation.engine import Bola, Observation, Phase, Round, RulesConfig
@@ -195,9 +195,19 @@ def swapped_positions(seed: int) -> list[tuple[Round, Round, int]]:
         ("random", lambda: RandomBot(5)),
         ("pimc", lambda: PIMCBot(5, PIMCConfig(samples=4, oversample=2))),
         (
-            "yosif",
-            lambda: YosifBot(
-                5, YosifConfig(pimc=PIMCConfig(samples=4, oversample=2, leader_weight=True))
+            "search",
+            lambda: SearchBot(
+                5, SearchConfig(pimc=PIMCConfig(samples=4, oversample=2, leader_weight=True))
+            ),
+        ),
+        (
+            "search, heuristic bidding",
+            lambda: SearchBot(
+                5,
+                SearchConfig(
+                    bidding="heuristic",
+                    pimc=PIMCConfig(samples=4, oversample=2, leader_weight=True),
+                ),
             ),
         ),
     ],

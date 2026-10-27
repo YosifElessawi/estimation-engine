@@ -2,10 +2,11 @@
 
 At a card decision with more than one choice, it samples deals of the unseen cards that fit the
 hand sizes, voids and played cards, keeping those where each player's hand best fits its
-estimate. For each legal card and each deal it plays the round out with HeuristicBot's card play
-for all four seats and scores it by SPEC §3, then plays the card with the best mean of its own
-round score minus the mean of the other three. Dash Call, bidding and estimation reuse
-HeuristicBot.
+estimate. For each legal card and each deal it plays the round out with one card rule for all
+four seats (HeuristicBot's card play, unless the bot is given its own) and scores it by SPEC §3,
+then plays the card with the best mean of its own round score minus the mean of the other three.
+Dash Call, bidding and estimation reuse HeuristicBot. As ``pimc`` it is a frozen measuring stick
+on the Elo ladder; the Search bot (``bots/search``) builds on it with its own card rule.
 
 Search is deterministic for a given seed: the time budget is only measured, unless
 ``enforce_budget`` cuts the search short, which makes play depend on timing. Even then the budget
@@ -32,7 +33,7 @@ from .card_play import choose_card
 from .hand_eval import expected_tricks
 from .heuristic import DEFAULT_HEURISTIC, HeuristicBot, HeuristicConfig
 from .knowledge import Knowledge, read_knowledge
-from .rollout import finish_round
+from .rollout import CardRule, finish_round
 from .sampling import deal_unseen
 from .scoring import RoundScorer, estimates_of, standings_weights
 
@@ -73,16 +74,20 @@ def fits_announcements(
 
 class PIMCBot:
     """Card play by sampling and rollouts; everything else as HeuristicBot. Reads only its own
-    Observation: the deals it searches are its own samples."""
+    Observation: the deals it searches are its own samples. ``play`` is the card rule every seat
+    follows in the rollouts, and picks the card searched first (the one kept on a tie)."""
 
-    __slots__ = ("_heuristic", "_rng", "config", "seed")
+    __slots__ = ("_heuristic", "_play", "_rng", "config", "seed")
 
-    def __init__(self, seed: int, config: PIMCConfig = DEFAULT_PIMC) -> None:
+    def __init__(
+        self, seed: int, config: PIMCConfig = DEFAULT_PIMC, play: CardRule = choose_card
+    ) -> None:
         if config.samples < 1 or config.oversample < 1 or config.estimate_sigma <= 0:
             raise ValueError("PIMC needs samples >= 1, oversample >= 1 and estimate_sigma > 0")
         self.seed = seed
         self.config = config
         self._heuristic = HeuristicBot(config.heuristic)
+        self._play = play
         self._rng = random.Random(seed)
 
     def __repr__(self) -> str:
@@ -97,12 +102,12 @@ class PIMCBot:
 
     def choose(self, obs: Observation, cards: list[int]) -> int:
         """The card to play from the legal ``cards``: the best total over the sampled deals,
-        HeuristicBot's own card on a tie."""
+        the card rule's own card on a tie."""
         candidates, totals = self.search(obs, cards)
         return candidates[best_index(totals)]
 
     def search(self, obs: Observation, cards: list[int]) -> tuple[list[int], list[float]]:
-        """The cards searched, HeuristicBot's own card first, and each one's total over the
+        """The cards searched, the card rule's own card first, and each one's total over the
         sampled deals of own round score minus the mean of the other three. When only one
         candidate is left there is no search and its total is 0."""
         config = self.config
@@ -115,7 +120,7 @@ class PIMCBot:
         trick = [card for _, card in obs.trick]
         me = obs.seat
         want = estimates[me] > obs.tricks_won[me]
-        hint = choose_card(know.hand, trick, trump, want, know.unseen)
+        hint = self._play(know.hand, trick, trump, want, know.unseen)
         candidates = (
             representatives(cards, know.unseen, hint)
             if config.merge_equivalent
@@ -188,8 +193,8 @@ class PIMCBot:
         deadline: float | None = None,
     ) -> list[float]:
         """For each card, the sum over ``deals`` of own round score minus the mean of the other
-        three, playing the card and then the rest of the round with HeuristicBot card play for
-        every seat. Every card is rolled out on the same deals; with a ``deadline`` (a
+        three, playing the card and then the rest of the round with the card rule for every
+        seat. Every card is rolled out on the same deals; with a ``deadline`` (a
         ``time.perf_counter`` value) no new deal is started after it passes."""
         trump = obs.trump
         leader = obs.leader
@@ -206,7 +211,9 @@ class PIMCBot:
             for k, card in enumerate(cards):
                 hands = sample.copy()
                 hands[me] ^= 1 << card
-                tricks = finish_round(hands, [*trick, card], leader, trump, estimates, won.copy())
+                tricks = finish_round(
+                    hands, [*trick, card], leader, trump, estimates, won.copy(), self._play
+                )
                 totals[k] += scorer.value(tricks)
             if deadline is not None and time.perf_counter() > deadline:
                 break

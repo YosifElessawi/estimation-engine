@@ -56,3 +56,8 @@ def test_yosif_specs_play_exactly_as_before():
 
 def test_yosif_plays_whole_bolas_exactly_as_before():
     assert fingerprint(["yosif", "pimc:samples=2", "yosif", "heuristic"], [2]) == "4eee06062b6db8bd"
+
+
+def test_search_plays_exactly_like_its_old_name_yosif():
+    lineup = ["search", "search:risk_mode=false", "search:calibrated=true", "pimc:samples=8"]
+    assert fingerprint(lineup, [1], rounds=5) == "957b080ddf894ef7"

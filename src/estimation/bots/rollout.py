@@ -1,13 +1,16 @@
-"""Playing out a round on a known deal with HeuristicBot's card play for every seat (SPEC §6 M3).
+"""Playing out a round on a known deal with one card rule for every seat (SPEC §6 M3).
 
 PIMC calls this hundreds of times per decision, so it works on bitmasks and plain lists rather
-than the engine's Round. It must play exactly like four HeuristicBots in the engine; the tests
-check that against the engine itself.
+than the engine's Round. With HeuristicBot's card play (the default rule) it must play exactly
+like four HeuristicBots in the engine; the tests check that against the engine itself.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from .card_play import choose_card
+
+type CardRule = Callable[[int, Sequence[int], int, bool, int], int]
+"""A card choice like ``card_play.choose_card``: ``(hand, trick, trump, want, out) -> card``."""
 
 
 def trick_winner_offset(c0: int, c1: int, c2: int, c3: int, trump: int) -> int:
@@ -40,8 +43,10 @@ def finish_round(
     trump: int,
     estimates: Sequence[int],
     won: list[int],
+    choose: CardRule = choose_card,
 ) -> list[int]:
-    """Play the round to its end and return the tricks each seat won.
+    """Play the round to its end, every seat choosing its cards by ``choose``, and return the
+    tricks each seat won.
 
     ``hands`` are every seat's remaining cards, ``trick`` the cards of the trick in progress
     (leader first, possibly complete) and ``won`` the tricks won so far. ``hands``, ``trick`` and
@@ -59,7 +64,7 @@ def finish_round(
             trick = []
         seat = (leader + len(trick)) & 3
         hand = hands[seat]
-        card = choose_card(hand, trick, trump, estimates[seat] > won[seat], unplayed & ~hand)
+        card = choose(hand, trick, trump, estimates[seat] > won[seat], unplayed & ~hand)
         bit = 1 << card
         hands[seat] = hand ^ bit
         unplayed ^= bit

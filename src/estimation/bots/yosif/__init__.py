@@ -1,6 +1,6 @@
-"""Yosif's rule bot (design: docs/superpowers/specs/2026-10-26-yosif-bot-design.md)."""
+"""Yosif's Dash Calls, bids and estimates, the Search bot's default bidding (design:
+docs/superpowers/specs/2026-10-26-yosif-bot-design.md)."""
 
-from .bot import YosifBot
-from .policy import YosifConfig
+from .policy import Planner, YosifConfig
 
-__all__ = ["YosifBot", "YosifConfig"]
+__all__ = ["Planner", "YosifConfig"]

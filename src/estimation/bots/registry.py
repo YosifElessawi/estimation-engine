@@ -5,6 +5,12 @@ HeuristicBot with ``HeuristicConfig(risk_aversion=0.5)``. Any bot also takes ``n
 ``play_noise`` (0 to 1), which wrap it in a NoisyBot that plays that share of its decisions (or
 of its card plays) at random. ``rl:checkpoint=<path>`` plays a trained self-play checkpoint (M4);
 PyTorch loads only when an rl bot is made.
+
+``search`` is the Search bot: ``bidding=yosif`` (the default) or ``bidding=heuristic``, and any
+field of its card search (``PIMCConfig``, for example ``samples=8``) or of Yosif's bidding
+(``YosifConfig``, for example ``risk_mode=false``). ``yosif`` is its old name and loads it with
+Yosif's bidding, so saved games and ladder runs that name it play as before. ``pimc`` is the
+plain M3 search, a frozen measuring stick.
 """
 
 import dataclasses
@@ -18,7 +24,8 @@ from .heuristic import HeuristicBot, HeuristicConfig
 from .noisy import NoisyBot
 from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
-from .yosif import YosifBot, YosifConfig
+from .search import YOSIF, SearchBot, SearchConfig
+from .yosif import YosifConfig
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -47,16 +54,44 @@ def _rl(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     return RLBot(seed, configure(RLConfig(heuristic=heuristic, rules=rules), options, "rl"))
 
 
-def _yosif(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
-    pimc = PIMCConfig(heuristic=heuristic, rules=rules, leader_weight=True)
-    return YosifBot(seed, configure(YosifConfig(rules=rules, pimc=pimc), options, "yosif"))
+    config = SearchConfig(
+        pimc=PIMCConfig(heuristic=heuristic, rules=rules, leader_weight=True),
+        yosif=YosifConfig(rules=rules),
+    )
+    own: dict[str, str] = {}
+    search: dict[str, str] = {}
+    bidding: dict[str, str] = {}
+    pimc_fields = {field.name for field in dataclasses.fields(PIMCConfig)}
+    yosif_fields = {field.name for field in dataclasses.fields(YosifConfig)}
+    for key, value in options.items():
+        if key in pimc_fields:
+            search[key] = value
+        elif key in yosif_fields:
+            bidding[key] = value
+        else:
+            own[key] = value
+    config = dataclasses.replace(
+        configure(config, own, "search"),
+        pimc=configure(config.pimc, search, "search"),
+        yosif=configure(config.yosif, bidding, "search"),
+    )
+    return SearchBot(seed, config)
+
+
+def _yosif(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    """The Search bot's old name: the Search bot with Yosif's bidding."""
+    if "bidding" in options:
+        raise ValueError("bot yosif always bids by Yosif's rules; use search:bidding=... instead")
+    return _search(seed, {**options, "bidding": YOSIF}, rules)
 
 
 _FACTORIES: dict[str, BotFactory] = {
     "random": _random,
     "heuristic": _heuristic,
     "pimc": _pimc,
+    "search": _search,
     "rl": _rl,
     "yosif": _yosif,
 }

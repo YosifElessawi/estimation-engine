@@ -7,7 +7,8 @@ from .noisy import NoisyBot
 from .pimc import PIMCBot, PIMCConfig
 from .random_bot import RandomBot
 from .registry import BOT_NAMES, make_bot
-from .yosif import YosifBot, YosifConfig
+from .search import SearchBot, SearchConfig
+from .yosif import YosifConfig
 
 __all__ = [
     "BOT_NAMES",
@@ -19,7 +20,8 @@ __all__ = [
     "PIMCBot",
     "PIMCConfig",
     "RandomBot",
-    "YosifBot",
+    "SearchBot",
+    "SearchConfig",
     "YosifConfig",
     "make_bot",
 ]

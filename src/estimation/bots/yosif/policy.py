@@ -28,7 +28,6 @@ from estimation.engine.actions import ESTIMATE_BASE, is_bid, is_estimate
 from estimation.engine.config import DEFAULT_CONFIG
 
 from ..heuristic import STRONGEST_FIRST, lowest_bid
-from ..pimc import PIMCConfig
 from .calibration import Calibration, load_calibration
 from .counting import DEFAULT_COUNT, CountValues, Reads, count_hand, read_bids
 from .odds import Calibrated, Outlook, Stake, expected_points, make_chance, outlook, stake
@@ -39,7 +38,8 @@ MIN_BID, MAX_TRICKS = 4, 13
 
 @dataclass(frozen=True, slots=True)
 class YosifConfig:
-    """Yosif's bot. Rules marked [Yosif] are his; numbers marked [Claude] are starting values."""
+    """Yosif's bidding. Rules marked [Yosif] are his; numbers marked [Claude] are starting
+    values."""
 
     count: CountValues = DEFAULT_COUNT
     others_make: float = 0.5  # chance each other player makes their estimate (SCR-5) [Claude]
@@ -51,7 +51,6 @@ class YosifConfig:
     jump_points: float = 25.0  # about one good normal round, per round left [Claude]
     risk_min_make: float = 0.25  # a bigger call must still be makeable [Claude]
     rules: RulesConfig = DEFAULT_CONFIG  # the rules the stakes are priced by
-    pimc: PIMCConfig = field(default_factory=lambda: PIMCConfig(leader_weight=True))
     calibrated: bool = True  # price calls by the play-out calibration (``calibration``)
     calibration: Calibration | None = field(default_factory=load_calibration)
 
