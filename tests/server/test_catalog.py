@@ -42,7 +42,7 @@ def test_estimation_root_overrides_the_checkout(tmp_path: Path, monkeypatch: pyt
         ("yosif", "Yosif bot"),
         ("pimc:samples=1", "PIMC, 1 deal"),
         ("pimc:samples=1:play_noise=0.3", "PIMC, 1 deal, 30% random cards"),
-        ("pimc:samples=4:bid_search=true", "PIMC, 4 deals, bid_search=true"),
+        ("pimc:samples=4:oversample=1", "PIMC, 4 deals, oversample=1"),
         ("rl:checkpoint=runs/x/net.pt", "RL net"),
         ("rl:checkpoint=runs/x/net.pt:heuristic_bidding=true", "RL net, HeuristicBot bidding"),
         ("mystery:x=1", "mystery:x=1"),

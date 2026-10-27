@@ -5,7 +5,7 @@ hand sizes, voids and played cards, keeping those where each player's hand best 
 estimate. For each legal card and each deal it plays the round out with HeuristicBot's card play
 for all four seats and scores it by SPEC §3, then plays the card with the best mean of its own
 round score minus the mean of the other three. Dash Call, bidding and estimation reuse
-HeuristicBot, or with ``bid_search`` are searched the same way (see ``bid_search``).
+HeuristicBot.
 
 Search is deterministic for a given seed: the time budget is only measured, unless
 ``enforce_budget`` cuts the search short, which makes play depend on timing. Even then the budget
@@ -28,7 +28,6 @@ from estimation.engine import (
 from estimation.engine.actions import PLAY_BASE
 from estimation.engine.config import DEFAULT_CONFIG
 
-from .bid_search import BidSearch
 from .card_play import choose_card
 from .hand_eval import expected_tricks
 from .heuristic import DEFAULT_HEURISTIC, HeuristicBot, HeuristicConfig
@@ -48,8 +47,6 @@ class PIMCConfig:
     merge_equivalent: bool = False  # roll out one card per run of touching cards
     heuristic: HeuristicConfig = DEFAULT_HEURISTIC  # rollouts, bidding and estimation
     rules: RulesConfig = DEFAULT_CONFIG  # the rules rollouts are scored by
-    bid_search: bool = False  # choose Dash Calls, bids and estimates by search too
-    bid_samples: int = 30  # deals simulated per bidding decision when bid_search is on
     leader_weight: bool = False  # count players ahead in the game double (standings_weights)
 
 
@@ -78,7 +75,7 @@ class PIMCBot:
     """Card play by sampling and rollouts; everything else as HeuristicBot. Reads only its own
     Observation: the deals it searches are its own samples."""
 
-    __slots__ = ("_bidder", "_heuristic", "_rng", "config", "seed")
+    __slots__ = ("_heuristic", "_rng", "config", "seed")
 
     def __init__(self, seed: int, config: PIMCConfig = DEFAULT_PIMC) -> None:
         if config.samples < 1 or config.oversample < 1 or config.estimate_sigma <= 0:
@@ -87,26 +84,12 @@ class PIMCBot:
         self.config = config
         self._heuristic = HeuristicBot(config.heuristic)
         self._rng = random.Random(seed)
-        self._bidder = (
-            BidSearch(
-                self._rng,
-                config.bid_samples,
-                config.oversample,
-                config.estimate_sigma,
-                config.heuristic,
-                config.rules,
-            )
-            if config.bid_search
-            else None
-        )
 
     def __repr__(self) -> str:
         return f"PIMCBot(seed={self.seed}, {self.config})"
 
     def act(self, obs: Observation, legal: list[int]) -> int:
         if obs.phase is not Phase.PLAY:
-            if self._bidder is not None:
-                return self._bidder.choose(obs, legal)
             return self._heuristic.act(obs, legal)
         if len(legal) == 1:
             return legal[0]
