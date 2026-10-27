@@ -1,4 +1,4 @@
-"""Readable text for the bidding evaluator: hands, moves and situations, as in the quiz."""
+"""Readable text for the evaluators: hands, cards, moves and situations, as in the quiz."""
 
 from estimation.engine import DASH_CALL, NO_DASH_CALL, PASS, WITH, Phase, bid_of
 from estimation.engine.actions import ESTIMATE_BASE, is_bid, is_estimate, is_play
@@ -17,6 +17,11 @@ def hand_text(hand: int) -> str:
         ranks = [RANKS[r] for r in range(12, -1, -1) if hand >> (13 * suit + r) & 1]
         rows.append(f"{SUITS[suit]} {' '.join(ranks) if ranks else '-'}")
     return "  |  ".join(rows)
+
+
+def card_text(card: int) -> str:
+    """A card as rank then suit symbol: ``A♠``, ``10♥``."""
+    return f"{RANKS[card % 13]}{SUITS[card // 13]}"
 
 
 def action_text(action: int) -> str:
