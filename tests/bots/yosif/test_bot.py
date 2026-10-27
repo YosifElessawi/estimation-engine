@@ -21,7 +21,10 @@ from estimation.engine import (
 )
 from tests.bots.helpers import round_with
 
-FAST = YosifConfig(pimc=PIMCConfig(samples=2, oversample=1, leader_weight=True))
+# The rules tests check the decision logic on hands with clear counting, so they price calls by
+# the counting itself; the calibrated default has its own tests (test_calibration.py).
+FAST = YosifConfig(pimc=PIMCConfig(samples=2, oversample=1, leader_weight=True), calibrated=False)
+SHIPPED = YosifConfig(pimc=PIMCConfig(samples=2, oversample=1, leader_weight=True))
 EXAMPLE = "AS KS QS JS 9S 7S QH TH 3H AD QD 7D 4D"
 RULES = RulesConfig()
 
@@ -235,3 +238,17 @@ def test_yosif_predicts_its_estimate_and_returns_none_for_an_opening():
     chance = bot.predicted_make(estimating.observation(1), estimating.legal_actions()[3])
     assert chance is not None
     assert 0.0 <= chance <= 1.0
+
+
+def test_the_shipped_calibrated_bot_ends_the_example_auction_at_8_spades():
+    bot = YosifBot(0, SHIPPED)
+    assert bot.config.calibrated
+    rnd = round_with(0, EXAMPLE)
+    rnd.step(act(bot, rnd))
+    for _ in range(3):
+        rnd.step(NO_DASH_CALL)
+    rnd.step(act(bot, rnd))
+    for _ in range(3):
+        rnd.step(PASS)
+    rnd.step(act(bot, rnd))
+    assert rnd.observation(0).top_bid == bid_action(8, SPADES)

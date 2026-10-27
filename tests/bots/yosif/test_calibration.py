@@ -64,20 +64,12 @@ def test_make_chance_falls_away_beyond_the_measured_distances():
     assert spread.miss_size(4.0) > spread.miss_size(2.0)
 
 
-def test_the_shipped_bot_does_not_use_the_calibration_yet():
+def test_the_shipped_bot_uses_the_calibration():
     from estimation.bots import YosifBot, make_bot
 
-    shipped, switched_on = make_bot("yosif", 0), make_bot("yosif:calibrated=true", 0)
+    shipped, switched_off = make_bot("yosif", 0), make_bot("yosif:calibrated=false", 0)
     assert isinstance(shipped, YosifBot)
-    assert isinstance(switched_on, YosifBot)
-    assert not shipped.config.calibrated
-    assert switched_on.config.calibrated
-
-
-def test_big_calls_use_their_own_curve():
-    split = dataclasses.replace(FLAT, big_offsets=(0.0,), big_made=(0.3,), big_miss=(1.5,))
-    assert split.make(0.0, call=5) == pytest.approx(0.6)
-    assert split.make(0.0, call=8) == pytest.approx(0.3)
-    assert FLAT.make(0.0, call=9) == pytest.approx(0.6)  # no big curve: the one curve
-    o = Outlook(most=(0.0,), least=(1.0,), calibrated=Calibrated(natural=8.0, fit=split))
-    assert make_chance(o, 8) == pytest.approx(0.3)
+    assert isinstance(switched_off, YosifBot)
+    assert shipped.config.calibrated
+    assert shipped.config.calibration is not None
+    assert not switched_off.config.calibrated

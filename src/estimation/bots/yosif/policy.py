@@ -52,8 +52,7 @@ class YosifConfig:
     risk_min_make: float = 0.25  # a bigger call must still be makeable [Claude]
     rules: RulesConfig = DEFAULT_CONFIG  # the rules the stakes are priced by
     pimc: PIMCConfig = field(default_factory=lambda: PIMCConfig(leader_weight=True))
-    calibrated: bool = False  # price calls by the fit to saved games (``calibration``); off
-    # until a play-out measurement backs it: the saved-games fit over-reaches (2026-10-27)
+    calibrated: bool = True  # price calls by the play-out calibration (``calibration``)
     calibration: Calibration | None = field(default_factory=load_calibration)
 
 
