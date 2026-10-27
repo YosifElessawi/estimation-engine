@@ -69,12 +69,15 @@ def test_unknown_names_and_bad_options_are_rejected(spec: str):
 
 
 def test_the_search_bot_takes_bidding_search_and_yosif_options():
-    bot = make_bot("search:bidding=heuristic:samples=8:dash_break=0.5", 1)
+    bot = make_bot("search:samples=8:dash_break=0.5", 1)
     assert isinstance(bot, SearchBot)
-    assert bot.config.bidding == "heuristic"
+    assert bot.config.bidding == "yosif"
     assert bot.config.pimc.samples == 8
     assert bot.config.pimc.leader_weight
     assert bot.config.yosif.dash_break == 0.5
+    heuristic = make_bot("search:bidding=heuristic:samples=4", 1)
+    assert isinstance(heuristic, SearchBot)
+    assert heuristic.config.bidding == "heuristic"
     default = make_bot("search", 1)
     assert isinstance(default, SearchBot)
     assert default.config == SearchConfig()
@@ -90,7 +93,15 @@ def test_yosif_is_the_search_bot_with_yosif_bidding():
         make_bot("yosif:bidding=heuristic", 1)
 
 
-@pytest.mark.parametrize("spec", ["search:bidding=wizard", "search:nope=1", "pimc:bid_search=true"])
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "search:bidding=wizard",
+        "search:nope=1",
+        "search:bidding=heuristic:risk_mode=false",  # a Yosif-bidding option it would ignore
+        "pimc:bid_search=true",
+    ],
+)
 def test_bad_search_options_are_rejected(spec: str):
     with pytest.raises(ValueError, match="bot"):
         make_bot(spec, 0)

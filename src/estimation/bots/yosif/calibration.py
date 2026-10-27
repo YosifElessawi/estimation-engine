@@ -1,4 +1,5 @@
-"""The yosif bot's counting, calibrated on saved games (tuning from the ladder's games).
+"""Yosif's counting (the Search bot's default bidding), calibrated on saved games (tuning from
+the ladder's games).
 
 Yosif's rules still count the hand (``counting``, ``odds``). The calibration turns that count into
 what hands really do in games between strong card players, measured on the saved ladder games

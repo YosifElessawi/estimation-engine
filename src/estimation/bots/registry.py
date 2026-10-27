@@ -77,6 +77,11 @@ def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
         pimc=configure(config.pimc, search, "search"),
         yosif=configure(config.yosif, bidding, "search"),
     )
+    if bidding and config.bidding != YOSIF:
+        raise ValueError(
+            f"bot search only uses {', '.join(sorted(bidding))} with bidding=yosif, "
+            f"not bidding={config.bidding}"
+        )
     return SearchBot(seed, config)
 
 
