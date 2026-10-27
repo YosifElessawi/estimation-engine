@@ -10,7 +10,7 @@ what it does as last estimator. Per table: Over, Under and skipped rounds and th
 total. "Made" means exactly the estimate.
 
 Examples: ``uv run python -m estimation.arena.bidstats --from runs/ladder-v2`` and
-``uv run python -m estimation.arena.bidstats --bot yosif --games 300 --workers 5``.
+``uv run python -m estimation.arena.bidstats --bot search --games 300 --workers 5``.
 """
 
 import argparse

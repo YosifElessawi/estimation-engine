@@ -2,20 +2,28 @@
 
 The ladder report, the watch view and the web table name bots from here, so a spec such as
 ``rl:checkpoint=runs/m4/checkpoints/final.pt`` reads as "RL M4 final" everywhere. A bot sits in one
-or more tables: the leaderboard of bots worth playing, the RL checkpoints that show training
-progress, and the measuring rungs that exist only to measure the gaps between the others.
+or more tables: the leaderboard of the two bots players meet (the Search bot and the RL bot), the
+RL checkpoints that show training progress, and the measuring sticks that exist only to measure
+the gaps between the others.
 """
 
+import dataclasses
 import re
 from dataclasses import dataclass
 
 LEADERBOARD = "Leaderboard"
 CHECKPOINTS = "RL checkpoints"
-RUNGS = "Measuring rungs"
-GROUPS = (LEADERBOARD, CHECKPOINTS, RUNGS)
+STICKS = "Measuring sticks"
+GROUPS = (LEADERBOARD, CHECKPOINTS, STICKS)
 
 M4 = "rl:checkpoint=runs/m4/checkpoints/"
 STAGED = "rl:checkpoint=runs/m4-staged/checkpoints/"
+SEARCH_BOT = "search"
+RL_BOT = STAGED + "staged-final.pt"  # the best RL checkpoint, offered as "RL bot"
+OFFERED = (SEARCH_BOT, RL_BOT)
+"""The bots players meet at the table, the leaderboard's two rows."""
+ALIASES = {"yosif": SEARCH_BOT}
+"""Old names that load the same bot, for saved games and ladder runs that use them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,21 +41,15 @@ def _entry(spec: str, name: str, groups: tuple[str, ...], description: str) -> R
 _KNOWN = {
     e.spec: e
     for e in (
-        _entry("random", "RandomBot", (LEADERBOARD,), "Plays any legal move; fixed at 400 Elo"),
-        _entry("heuristic", "HeuristicBot", (LEADERBOARD,), "Rule-of-thumb bidding and card play"),
-        _entry("pimc", "PIMC", (LEADERBOARD,), "HeuristicBot bidding; searches 30 deals per card"),
-        _entry("yosif", "Yosif bot", (LEADERBOARD,), "Yosif's bidding rules, PIMC card play"),
         _entry(
-            M4 + "final.pt",
-            "RL M4 final",
-            (LEADERBOARD, CHECKPOINTS),
-            "Self-play nets after 150 iterations (M4)",
+            SEARCH_BOT,
+            "Search bot",
+            (LEADERBOARD,),
+            "Yosif's bidding rules; searches 30 deals per card",
         ),
+        _entry(RL_BOT, "RL bot", (LEADERBOARD, CHECKPOINTS), "Self-play nets, staged run final"),
         _entry(
-            STAGED + "staged-final.pt",
-            "RL staged final",
-            (LEADERBOARD, CHECKPOINTS),
-            "Self-play nets from the staged training run",
+            M4 + "final.pt", "RL M4 final", (CHECKPOINTS,), "Self-play nets after 150 iterations"
         ),
         _entry(
             M4 + "warm-start.pt:heuristic_bidding=true",
@@ -55,6 +57,9 @@ _KNOWN = {
             (CHECKPOINTS,),
             "Card play learned by copying PIMC; HeuristicBot bidding",
         ),
+        _entry("random", "RandomBot", (STICKS,), "Plays any legal move; fixed at 400 Elo"),
+        _entry("heuristic", "HeuristicBot", (STICKS,), "Rule-of-thumb bidding and card play"),
+        _entry("pimc", "PIMC", (STICKS,), "HeuristicBot bidding; searches 30 deals per card"),
     )
 }
 _ITERATION = re.compile(r"^rl:checkpoint=runs/m4/checkpoints/iter-0*(\d+)\.pt$")
@@ -66,18 +71,28 @@ def _percent(text: str) -> str:
     return f"{float(text) * 100:g}%"
 
 
+def canonical(spec: str) -> str:
+    """``spec`` with an old bot name replaced by the one it loads as (``ALIASES``)."""
+    name, sep, options = spec.partition(":")
+    return ALIASES.get(name, name) + sep + options
+
+
 def entry_for(spec: str) -> RosterEntry:
-    """The roster entry of ``spec``; a spec the roster does not know is named by itself."""
-    known = _KNOWN.get(spec)
+    """The roster entry of ``spec``; a spec the roster does not know is named by itself. An old
+    name (``ALIASES``) gets the entry of the bot it loads as, under its own spec."""
+    known = _KNOWN.get(canonical(spec))
     if known is not None:
-        return known
+        return known if known.spec == spec else dataclasses.replace(known, spec=spec)
     if match := _ITERATION.match(spec):
         n = match.group(1)
         return _entry(spec, f"RL iteration {n}", (CHECKPOINTS,), f"Self-play nets at iteration {n}")
     if match := _NOISE.match(spec):
         p = _percent(match.group(1))
         return _entry(
-            spec, f"HeuristicBot, {p} random moves", (RUNGS,), f"HeuristicBot playing {p} at random"
+            spec,
+            f"HeuristicBot, {p} random moves",
+            (STICKS,),
+            f"HeuristicBot playing {p} at random",
         )
     if match := _PIMC.match(spec):
         n = int(match.group(1))
@@ -85,9 +100,9 @@ def entry_for(spec: str) -> RosterEntry:
         if match.group(2):
             name += f", {_percent(match.group(2))} random cards"
         return _entry(
-            spec, name, (RUNGS,), f"PIMC searching {n} deal{'' if n == 1 else 's'} per card"
+            spec, name, (STICKS,), f"PIMC searching {n} deal{'' if n == 1 else 's'} per card"
         )
-    return _entry(spec, spec, (RUNGS,), "")
+    return _entry(spec, spec, (STICKS,), "")
 
 
 def name_of(spec: str) -> str:

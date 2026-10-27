@@ -83,10 +83,11 @@ V2_LADDER = (
     "pimc:samples=16",
     STAGED_FINAL,
     "pimc",
-    "yosif",
+    "search",
 )
 """The full ladder after the With-auction rules (2026-10-26): the default rungs, the M4 checkpoints
-where the 2026-10-25 ladder placed them, and the yosif bot last."""
+where the 2026-10-25 ladder placed them, and the Search bot last (rated as ``yosif``, its old
+name, until 2026-10-27)."""
 V2_EXTRAS = (
     ("heuristic", "pimc:samples=1:play_noise=0.3"),
     ("pimc:samples=4", "pimc:samples=8"),
@@ -96,8 +97,8 @@ V2_EXTRAS = (
     ("pimc:samples=16", "pimc"),
     (M4 + "final.pt", STAGED_FINAL),
     ("pimc:samples=8", STAGED_FINAL),
-    ("pimc", "yosif"),  # same card play, so this pair measures the yosif bot's bidding alone
-    ("heuristic", "yosif"),
+    ("pimc", "search"),  # the same search, so this pair measures the Search bot's bidding mostly
+    ("heuristic", "search"),
 )
 
 
