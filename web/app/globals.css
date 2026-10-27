@@ -671,6 +671,16 @@ select {
   margin-top: 6px;
 }
 
+.ladder__heading {
+  margin-top: 14px;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .ladder--more .ladder__row {
   grid-template-columns: minmax(0, 1fr) auto;
   padding: 6px 0;

@@ -11,9 +11,11 @@ import { Avatar } from "./Table";
 
 type Mode = "watch" | "play";
 
-// The roster's tables (estimation.arena.roster), in the order the menus list them. A bot sits
-// under its first table; one the roster has no table for goes under "Other".
-const GROUPS = ["Leaderboard", "RL checkpoints", "Measuring rungs"];
+// The roster's tables (estimation.arena.roster), in the order the leaderboard lists them. A bot
+// sits under its first table; one the roster has no table for goes under "Other". Seats offer
+// the Leaderboard's bots only: the Search bot and the RL bot.
+const LEADERBOARD = "Leaderboard";
+const GROUPS = [LEADERBOARD, "RL checkpoints", "Measuring sticks"];
 const OTHER = "Other";
 
 const groupOf = (bot: BotView): string => {
@@ -23,23 +25,13 @@ const groupOf = (bot: BotView): string => {
 
 const byElo = (a: BotView, b: BotView): number => (b.elo ?? -1) - (a.elo ?? -1);
 
-function pick(bots: BotView[], names: string[], fallback: number): string {
-  for (const name of names) {
-    const found = bots.find((bot) => bot.label === name);
-    if (found) return found.spec;
-  }
-  const leaders = bots.filter((bot) => groupOf(bot) === "Leaderboard").sort(byElo);
-  return (leaders[fallback] ?? bots[0])?.spec ?? "heuristic";
-}
+const offered = (bots: BotView[]): BotView[] => bots.filter((bot) => groupOf(bot) === LEADERBOARD).sort(byElo);
 
-/** The strongest bots of the leaderboard, one per seat. */
+/** The Search bot and the RL bot, taking turns round the table. */
 function defaults(bots: BotView[]): string[] {
-  return [
-    pick(bots, ["RL staged final", "RL M4 final"], 1),
-    pick(bots, ["PIMC"], 0),
-    pick(bots, ["Yosif bot"], 2),
-    pick(bots, ["HeuristicBot"], 3),
-  ];
+  const specs = offered(bots).map((bot) => bot.spec);
+  const order = specs.includes("search") ? ["search", ...specs.filter((spec) => spec !== "search")] : specs;
+  return SEATS.map((seat) => order[seat % Math.max(order.length, 1)] ?? "search");
 }
 
 function BotSelect({
@@ -53,22 +45,18 @@ function BotSelect({
   onChange: (spec: string) => void;
   id: string;
 }) {
-  const groups = [...GROUPS, OTHER]
-    .map((title) => ({ title, bots: bots.filter((bot) => groupOf(bot) === title).sort(byElo) }))
-    .filter((group) => group.bots.length > 0);
-  const known = bots.some((bot) => bot.spec === value);
+  const choices = offered(bots);
+  // A seat copied from a past game may hold a bot no longer offered: keep it, named.
+  const inMenu = choices.some((bot) => bot.spec === value);
+  const kept = inMenu ? undefined : bots.find((bot) => bot.spec === value);
   return (
     <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-      {!known && <option value={value}>{value}</option>}
-      {groups.map((group) => (
-        <optgroup key={group.title} label={group.title}>
-          {group.bots.map((bot) => (
-            <option key={bot.spec} value={bot.spec} title={bot.description}>
-              {bot.label} · {formatElo(bot.elo)}
-            </option>
-          ))}
-        </optgroup>
+      {choices.map((bot) => (
+        <option key={bot.spec} value={bot.spec} title={bot.description}>
+          {bot.label} · {formatElo(bot.elo)}
+        </option>
       ))}
+      {!inMenu && <option value={value}>{kept ? `${kept.label} · ${formatElo(kept.elo)}` : value}</option>}
     </select>
   );
 }
@@ -101,8 +89,11 @@ export function Setup({ bots, loadError, onStart }: Props) {
 
   const seats = useMemo(() => chosen ?? (bots ? defaults(bots) : null), [chosen, bots]);
   const rated = useMemo(() => (bots ?? []).filter((bot) => bot.elo !== null).sort(byElo), [bots]);
-  const leaders = rated.filter((bot) => groupOf(bot) === "Leaderboard");
-  const others = rated.filter((bot) => groupOf(bot) !== "Leaderboard");
+  const leaders = rated.filter((bot) => groupOf(bot) === LEADERBOARD);
+  const others = rated.filter((bot) => groupOf(bot) !== LEADERBOARD);
+  const otherGroups = [...GROUPS.slice(1), OTHER]
+    .map((title) => ({ title, bots: others.filter((bot) => groupOf(bot) === title) }))
+    .filter((group) => group.bots.length > 0);
   const top = Math.max(...rated.map((bot) => bot.elo ?? 0), 1);
   const viewer = mode === "play" ? humanSeat : 0;
 
@@ -255,21 +246,25 @@ export function Setup({ bots, loadError, onStart }: Props) {
               </ol>
               {others.length > 0 && (
                 <button type="button" className="link" onClick={() => setAllRatings(!allRatings)}>
-                  {allRatings ? "Hide the other ratings" : `Show ${others.length} more: RL checkpoints and measuring rungs`}
+                  {allRatings ? "Hide the other ratings" : `Show ${others.length} more: RL checkpoints and measuring sticks`}
                 </button>
               )}
-              {allRatings && (
-                <ol className="ladder ladder--more">
-                  {others.map((bot) => (
-                    <li key={bot.spec} className="ladder__row" title={bot.description}>
-                      <span className="ladder__who">
-                        <span className="ladder__name">{bot.label}</span>
-                      </span>
-                      <span className="ladder__elo">{formatElo(bot.elo)}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
+              {allRatings &&
+                otherGroups.map((group) => (
+                  <div key={group.title} className="ladder__group">
+                    <h3 className="ladder__heading">{group.title}</h3>
+                    <ol className="ladder ladder--more">
+                      {group.bots.map((bot) => (
+                        <li key={bot.spec} className="ladder__row" title={bot.description}>
+                          <span className="ladder__who">
+                            <span className="ladder__name">{bot.label}</span>
+                          </span>
+                          <span className="ladder__elo">{formatElo(bot.elo)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ))}
               <p className="panel__note">Elo under the current rules, from 200 duplicate sets per pair. RandomBot is fixed at 400.</p>
             </section>
           )}

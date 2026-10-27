@@ -140,3 +140,35 @@ def test_a_failed_save_is_logged_and_the_game_goes_on(
     assert frames(client, game["id"], end, 1)[0]["kind"] == "game_end"
     assert any("could not save game" in r.message for r in caplog.records)
     assert history(client) == []
+
+
+def test_old_bot_names_in_saved_games_list_by_todays_names(catalog: Catalog, history_file: Path):
+    GameHistory(history_file).save(
+        {
+            "id": "old",
+            "finished_at": "2026-10-26T23:48:49+00:00",
+            "mode": "watch",
+            "seed": 3,
+            "seed_chosen": True,
+            "human_seat": None,
+            "seats": [
+                {"spec": "yosif", "label": "Yosif bot", "elo": 4713.0},
+                {"spec": "pimc", "label": "PIMC", "elo": 4925.0},
+                {"spec": "heuristic", "label": "HeuristicBot", "elo": 1000.0},
+                {"spec": "random", "label": "RandomBot", "elo": 400.0},
+            ],
+            "scores": [-62, 134, 100, 175],
+            "winners": [3],
+            "rounds": 18,
+            "actions": [],
+        }
+    )
+    (saved,) = history(TestClient(create_app(catalog, history_file=history_file)))
+    assert [seat["label"] for seat in saved["seats"]] == [
+        "Search bot",
+        "PIMC",
+        "HeuristicBot",
+        "RandomBot",
+    ]
+    assert saved["seats"][0]["spec"] == "search"  # the bot yosif loads, so it plays as it did
+    assert saved["seats"][0]["elo"] == 4713.0  # the rating it had when the game was played

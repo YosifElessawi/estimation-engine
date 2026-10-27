@@ -33,11 +33,12 @@ def test_bots_lists_the_catalog_with_elo(client: TestClient, catalog: Catalog):
         "family": "random",
         "elo": 400,
         "explains": False,
-        "groups": ["Leaderboard"],
+        "groups": ["Measuring sticks"],
         "description": "Plays any legal move; fixed at 400 Elo",
     }
     groups = {bot["spec"]: bot["groups"] for bot in bots}
-    assert groups["rl:checkpoint=runs/m4/checkpoints/final.pt"] == ["Leaderboard", "RL checkpoints"]
+    assert groups["search"] == ["Leaderboard"]
+    assert groups["rl:checkpoint=runs/m4/checkpoints/final.pt"] == ["RL checkpoints"]
     assert groups["rl:checkpoint=runs/m4/checkpoints/iter-0010.pt"] == ["RL checkpoints"]
 
 

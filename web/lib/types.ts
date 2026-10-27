@@ -155,7 +155,7 @@ export interface BotView {
   family: string;
   elo: number | null;
   explains: boolean;
-  groups: string[]; // roster tables: Leaderboard, RL checkpoints, Measuring rungs
+  groups: string[]; // roster tables: Leaderboard, RL checkpoints, Measuring sticks
   description: string;
 }
 

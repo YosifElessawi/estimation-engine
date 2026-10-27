@@ -2,13 +2,17 @@
 
 Ratings come from the ladder report (``runs/ladder-200/ladder.json``) and the M4 checkpoints from
 their index (``runs/m4/checkpoints/index.json``), both under the project root. Both are
-git-ignored run output: without them the catalog lists the default ladder's bots, unrated.
+git-ignored run output: without them the catalog lists the default ladder's bots, unrated. The
+two bots players meet (``roster.OFFERED``) are always listed, the RL bot when its checkpoint is
+on disk. An old name in the ladder report (``roster.ALIASES``, for example ``yosif``) is listed
+and rated as the bot it loads as.
 
 A seat may also hold any other spec the bot registry accepts, for example ``pimc:samples=3``. An
 ``rl`` spec's checkpoint must be a file under the root's ``runs/`` folder; relative paths are
 resolved against the root, so specs read the same as in the ladder report.
 """
 
+import dataclasses
 import json
 import os
 from dataclasses import dataclass
@@ -16,7 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from estimation.arena.ladder import DEFAULT_LADDER
-from estimation.arena.roster import name_of
+from estimation.arena.roster import OFFERED, canonical, name_of
 from estimation.bots import Bot, make_bot
 from estimation.engine import RulesConfig
 
@@ -67,10 +71,18 @@ def label_of(spec: str, checkpoints: dict[str, dict[str, Any]] | None = None) ->
     except ValueError:
         return spec
     extras: list[str] = []
+    name = canonical(name)
     if name == "random" and not options:
         return "RandomBot"
     if name == "heuristic":
         label = "HeuristicBot"
+    elif name == "search":
+        label = "Search bot"
+        if options.pop("bidding", "yosif") == "heuristic":
+            extras.append("HeuristicBot bidding")
+        if "samples" in options:
+            samples = int(options.pop("samples"))
+            extras.append(f"{samples} deal{'' if samples == 1 else 's'}")
     elif name == "pimc":
         samples = int(options.pop("samples", "30"))
         label = f"PIMC, {samples} deal{'' if samples == 1 else 's'}"
@@ -122,6 +134,12 @@ def runs_root(checkout: Path = ROOT) -> Path:
     return checkout
 
 
+def _on_disk(root: Path, spec: str) -> bool:
+    """Whether ``spec`` can be played under ``root``: an rl spec's checkpoint must be a file."""
+    name, options = parse_spec(spec)
+    return name != "rl" or (root / options.get("checkpoint", "")).is_file()
+
+
 class Catalog:
     """The bots on offer, weakest first (unrated bots last), and a factory for seat specs."""
 
@@ -147,8 +165,11 @@ class Catalog:
         specs: list[str] = list(DEFAULT_LADDER)
         ladder = _read_json(root / ladder_file)
         if ladder is not None:
-            ratings = {str(spec): float(elo) for spec, elo in dict(ladder["ratings"]).items()}
-            specs = [str(spec) for spec in ladder["bots"]]
+            rated = {str(spec): float(elo) for spec, elo in dict(ladder["ratings"]).items()}
+            # A bot rated under its own name wins over one rated under an old name.
+            for spec in sorted(rated, key=lambda spec: canonical(spec) == spec):
+                ratings[canonical(spec)] = rated[spec]
+            specs = list(dict.fromkeys(canonical(str(spec)) for spec in ladder["bots"]))
         checkpoints: dict[str, dict[str, Any]] = {}
         index = _read_json(root / checkpoint_index)
         if index is not None:
@@ -165,6 +186,9 @@ class Catalog:
                     spec += ":heuristic_bidding=true"
                 if spec not in specs:
                     specs.append(spec)
+        for spec in OFFERED:
+            if spec not in specs and _on_disk(root, spec):
+                specs.append(spec)
         entries = [
             BotEntry(
                 spec=spec,
@@ -185,10 +209,11 @@ class Catalog:
         return cls.load(Path(env) if env else runs_root())
 
     def entry(self, spec: str) -> BotEntry:
-        """The listed entry for ``spec``, or an unrated one for any other spec."""
-        known = self._by_spec.get(spec)
+        """The listed entry for ``spec`` (or for the bot an old name loads as), or an unrated one
+        for any other spec."""
+        known = self._by_spec.get(canonical(spec))
         if known is not None:
-            return known
+            return known if known.spec == spec else dataclasses.replace(known, spec=spec)
         name = parse_spec(spec)[0]
         return BotEntry(spec, label_of(spec, self._checkpoints), name, None, name == "rl")
 

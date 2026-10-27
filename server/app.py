@@ -29,7 +29,7 @@ from typing import Annotated, Literal, TypedDict
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from estimation.arena.roster import entry_for
+from estimation.arena.roster import canonical, entry_for
 from estimation.engine import IllegalActionError, RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
 
@@ -63,7 +63,8 @@ class Move(BaseModel):
 
 class BotView(TypedDict):
     """A bot on offer. ``groups`` are the roster tables it sits in (Leaderboard, RL checkpoints,
-    Measuring rungs), best first, and ``description`` the roster's one line about it."""
+    Measuring sticks), best first, and ``description`` the roster's one line about it. Seats
+    offer the Leaderboard's bots only."""
 
     spec: str
     label: str
@@ -166,6 +167,19 @@ class GameStore:
 
     def _seat_elo(self, spec: str) -> float | None:
         return None if spec == HUMAN else _bot_view(self.catalog.entry(spec))["elo"]
+
+    def listed(self, game: SavedGame) -> SavedGameView:
+        """A saved game as the history list shows it: each seat by the bot's name today (an old
+        name such as ``yosif`` as the bot it loads, ``search``), with the Elo it had when the
+        game was played."""
+        view = list_view(game)
+        seats = [
+            SavedSeat(
+                spec=canonical(seat["spec"]), label=self._seat_label(seat["spec"]), elo=seat["elo"]
+            )
+            for seat in view["seats"]
+        ]
+        return {**view, "seats": seats}
 
     def view(self, entry: Entry) -> GameView:
         session = entry.session
@@ -348,7 +362,7 @@ def create_app(
     def list_history(
         limit: Annotated[int, Query(ge=1, le=MAX_HISTORY)] = 100,
     ) -> list[SavedGameView]:
-        return [list_view(game) for game in store.history.games()[:limit]]
+        return [store.listed(game) for game in store.history.games()[:limit]]
 
     @app.post("/api/history/{game_id}/review")
     def review_saved(game_id: str) -> GameView:

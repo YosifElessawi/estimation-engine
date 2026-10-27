@@ -27,9 +27,11 @@ Without portless, `npm run dev` serves it at `http://localhost:3000`.
 
 ## Bots and ratings
 
-The start page shows the leaderboard, and the seat menus list every bot in the roster's tables
-(Leaderboard, RL checkpoints, Measuring rungs), named and described by
-`estimation.arena.roster` and labelled with their ladder Elo. The ratings come from the newest
+The seat menus offer the two bots players meet: the Search bot and the RL bot (its best
+checkpoint). The start page's leaderboard shows those two on top, then, on request, the RL
+checkpoints and the measuring sticks (RandomBot, HeuristicBot, PIMC and their weakened
+versions). Bots are named and described by `estimation.arena.roster` and labelled with their
+ladder Elo. The ratings come from the newest
 ladder report under the project's `runs/` folder (`runs/ladder-v2/ladder.json`, else
 `runs/ladder-200/ladder.json`) and the checkpoints from `runs/m4/checkpoints/index.json`. `runs/` is
 git-ignored and lives in the main checkout, so a table started from a worktree reads the main
