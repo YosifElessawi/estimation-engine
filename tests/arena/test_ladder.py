@@ -134,16 +134,18 @@ def test_a_pair_without_saved_games_is_played_again(
     assert len(list((tmp_path / "games").glob("*.jsonl.gz"))) == 1
 
 
-def test_the_v2_preset_lists_26_bots_and_10_extras():
+def test_the_v2_preset_lists_27_bots_and_12_extras():
     preset = ladder.PRESETS["v2"]
-    assert len(preset.bots) == 26
-    assert len(set(preset.bots)) == 26
+    assert len(preset.bots) == 27
+    assert len(set(preset.bots)) == 27
     assert preset.bots[0] == "random"
-    assert preset.bots[-1] == "search"
-    assert len(preset.extras) == 10
+    assert preset.bots[-2:] == ("search", ladder.RL_V2)
+    assert len(preset.extras) == 12
     assert all(a in preset.bots and b in preset.bots for a, b in preset.extras)
     assert ("pimc", "search") in preset.extras
     assert ("heuristic", "search") in preset.extras
+    assert ("pimc", ladder.RL_V2) in preset.extras
+    assert (ladder.STAGED_FINAL, ladder.RL_V2) in preset.extras
     assert preset.dir == Path("runs/ladder-v2")
     assert (preset.sets, preset.seed) == (200, 0)
 

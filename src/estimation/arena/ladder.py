@@ -67,6 +67,7 @@ the one below it."""
 
 M4 = "rl:checkpoint=runs/m4/checkpoints/"
 STAGED_FINAL = "rl:checkpoint=runs/m4-staged/checkpoints/staged-final.pt"
+RL_V2 = "rl:checkpoint=runs/m4-rules-v2/checkpoints/final.pt"
 V2_LADDER = (
     *DEFAULT_LADDER[:11],  # random up to HeuristicBot
     M4 + "iter-0010.pt",
@@ -84,10 +85,11 @@ V2_LADDER = (
     STAGED_FINAL,
     "pimc",
     "search",
+    RL_V2,
 )
 """The full ladder after the With-auction rules (2026-10-26): the default rungs, the M4 checkpoints
-where the 2026-10-25 ladder placed them, and the Search bot last (rated as ``yosif``, its old
-name, until 2026-10-27)."""
+where the 2026-10-25 ladder placed them, the Search bot (rated as ``yosif``, its old name, until
+2026-10-27) and RL v2 last (added 2026-10-28)."""
 V2_EXTRAS = (
     ("heuristic", "pimc:samples=1:play_noise=0.3"),
     ("pimc:samples=4", "pimc:samples=8"),
@@ -99,6 +101,8 @@ V2_EXTRAS = (
     ("pimc:samples=8", STAGED_FINAL),
     ("pimc", "search"),  # the same search, so this pair measures the Search bot's bidding mostly
     ("heuristic", "search"),
+    ("pimc", RL_V2),
+    (STAGED_FINAL, RL_V2),
 )
 
 
