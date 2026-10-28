@@ -2,7 +2,7 @@
 
 A bot that plays **Estimation**, the 4-player trick-taking card game, by the rules of the Pocket Estimation app. It is built in six milestones: an exact rules engine, baseline bots with a fair rating arena, a search bot, a self-play RL bot, a hybrid of the two, and a web table with game review.
 
-**Status (2026-10-25):** Milestones 1-3 are done and merged, with an Elo ladder (M2) and an opt-in search bidder (experimental, M3). Measured Elo, RandomBot fixed at 400: HeuristicBot about 3,840, PIMC about 4,830. Next: Milestone 4.
+**Status (2026-10-28):** Milestones 1-4 are merged, and the web table (M6) has its first slice. Players meet two bots: the **Search bot** (M3, no learning, tuned with evals) and the **RL bot** (M4, self-play, now the RL v2 checkpoint); hybrids (M5) come later. Elo on the current ladder (`--preset v2`, rated after the With-auction rules of 2026-10-26), RandomBot fixed at 400: HeuristicBot about 3,600, PIMC about 4,910, Search bot about 4,890 (rated as the Yosif bot), RL bot (RL v2) about 5,115.
 
 ## How to Use This Spec
 
@@ -447,7 +447,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 **Build:**
 - **Bot interface:** `act(obs: Observation, legal: list[int]) -> int`. A bot sees only its own `Observation`.
 - **RandomBot:** picks uniformly from the legal actions. It anchors the Elo scale at 400.
-- **HeuristicBot:** Dash Calls with a hopeless hand. Bids and estimates from high cards (A, K, Q) and trump length, and super-calls only with a very strong hand. In play, tries to win tricks until it reaches its estimate, then ducks.
+- **HeuristicBot:** Dash Calls with a hopeless hand. Bids and estimates from high cards (A, K, Q) and trump length, and super-calls only with a very strong hand. In play, tries to win tricks until it reaches its estimate, then ducks. It is frozen (2026-10-27): it anchors the Elo ladder, so its play never changes, and a test checks it plays exactly as recorded.
 - **Duplicate runner:** a lineup is 4 bots, one per seat, repeats allowed. A duplicate set plays one seed's deals 4 times, rotating the lineup so that in rotation `k` seat `i` gets bot `(i + k) % 4`. Every bot plays every hand.
 - **Metrics:**
   - Relative Score Advantage (RSA): a bot's Bola score minus the mean of the other three seats, averaged over all its Bolas, with a 95% confidence interval over duplicate sets.
@@ -464,7 +464,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Goal:** strong card play from search, with no training. Target: clearly above HeuristicBot on the Elo ladder.
 
-**Build:**
+**Build** (the plain PIMC bot, kept unchanged as the `pimc` measuring stick; the Search bot below builds on it):
 - Track voids (a player who did not follow suit has none of that suit), the void announcements (TBL-7) and played cards.
 - At each card decision, sample N = 30 deals of the unseen cards. Samples MUST be consistent with hand sizes, voids, played cards and the void announcements (a player announced void misses a suit in its dealt hand, any other player holds all four), and SHOULD be weighted by how well they fit each player's estimate.
 - For each legal card and each sample, play out the rest of the round with HeuristicBot's card play for every seat, and score it with §3. Choose the card with the best mean of (own round score minus the mean of the other three).
@@ -475,7 +475,13 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Result (done 2026-10-24):** with three HeuristicBots over 200 sets, PIMC's RSA is +172 per Bola (95% CI +167 to +177) and it won all 200 sets. Card decisions: mean 4.5 ms, slowest 83 ms, none over 250 ms. The ladder rates PIMC at about 4,830, about 990 above HeuristicBot; even PIMC with a single deal is about 430 above it, and each doubling of deals adds less.
 
-**Experiment: search bidding (opt-in, `pimc:bid_search=true`).** Dash Calls, bids and estimates chosen the same way as cards, by simulating each candidate's round on sampled deals. Its simulated opponents play HeuristicBot's naive card play and never sabotage a Dash caller, so it Dash Calls in about 40% of rounds; against PIMC players those calls fail 72% of the time and it loses every set to plain PIMC. With Dash Calls left to HeuristicBot it only draws level. It stays off by default: search is only as good as its model of the other players, and M4's learned bidding trains on real outcomes instead.
+**Search bot (2026-10-27, Yosif).** The project's search player, merged from PIMC and the Yosif bot (`search`):
+- Card play: the PIMC search above, counting each player ahead in the game double, with its own copy of the play-out rules. The copy started identical to HeuristicBot's card play and may change with eval evidence; HeuristicBot's stays frozen.
+- Dash Call, bidding and estimation: a config. Yosif's rules by default (design: `docs/superpowers/specs/2026-10-26-yosif-bot-design.md`), HeuristicBot's as an option (`search:bidding=heuristic`).
+- The old name `yosif` loads the Search bot with Yosif's bidding, so saved games and ladder runs still play as before.
+- PIMC as first built (HeuristicBot bidding and play-outs, `pimc` and `pimc:samples=N`) stays as a frozen measuring stick for the ladder, the RL training opponents and the evaluators.
+
+**Experiment: search bidding (removed 2026-10-27).** Choosing Dash Calls, bids and estimates by simulating each candidate's round on sampled deals Dash Called far too often against PIMC players and lost every set to plain PIMC, so it was deleted.
 
 ### M4. Self-Play RL
 
@@ -515,7 +521,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Build:**
 - A FastAPI backend wrapping `Bola` and the bots, and a Next.js frontend. Local only, served through portless.
-- Play a full Bola against any saved checkpoint or ladder bot, chosen by its Elo (RandomBot at 400 up to the strongest bot).
+- Play a full Bola against the two bots players meet, the Search bot and the RL bot (the RL checkpoint picked as best, now RL v2: self-play from the staged final, 3,000 loops under the current rules), each shown with its Elo. The leaderboard lists those two first, then the RL checkpoints, then the measuring sticks (RandomBot, HeuristicBot, PIMC and their weakened versions).
 - **Coach mode** (toggle): the expected score of your hand after the deal, and the change in win probability after every trick.
 - **Post-round review:** step through each trick and label each of your card plays by expected points lost against the best move:
   - **Best:** the best move.
@@ -552,7 +558,7 @@ Why the milestones are shaped the way they are.
   CLAUDE.md                instructions every agent session reads
   .claude/agents/          project subagents (spec-checker)
   src/estimation/engine/   M1: cards, actions, config, round, bola, scoring, observation, bench
-  src/estimation/bots/     M2-M5: random, heuristic, pimc, rl, hybrid
+  src/estimation/bots/     M2-M5: random, heuristic, pimc, search, yosif (bidding), rl, hybrid
   src/estimation/arena/    M2: duplicate runner, ratings, CLI
   src/estimation/rl/       M4: encoders, networks, training
   server/                  M6: FastAPI app
