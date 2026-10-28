@@ -45,6 +45,11 @@ def test_unknown_specs_fall_back_to_the_spec():
     assert entry.groups == (STICKS,)
 
 
+def test_tables_are_listed_leaderboard_then_rl_checkpoints_then_measuring_sticks():
+    assert GROUPS == ("Leaderboard", "RL checkpoints", "Measuring sticks")
+    assert GROUPS == (LEADERBOARD, CHECKPOINTS, STICKS)
+
+
 def test_the_leaderboard_holds_only_the_search_bot_and_the_rl_bot():
     assert OFFERED == ("search", RL_BOT)
     for spec in OFFERED:

@@ -108,7 +108,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
     const current = seats ?? defaults(bots ?? []);
     setMode(game.human_seat === null ? "watch" : "play");
     if (game.human_seat !== null) setHumanSeat(game.human_seat);
-    setChosen(game.seats.map((seat, i) => (i === game.human_seat ? (current[i] ?? "heuristic") : seat.spec)));
+    setChosen(game.seats.map((seat, i) => (i === game.human_seat ? (current[i] ?? "search") : seat.spec)));
     setSeed(String(game.seed));
     setError(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -156,7 +156,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
           ) : (
             bots &&
             seats && (
-              <BotSelect id={`seat-${seat}`} bots={bots} value={seats[seat] ?? "heuristic"} onChange={(spec) => setSeat(seat, spec)} />
+              <BotSelect id={`seat-${seat}`} bots={bots} value={seats[seat] ?? "search"} onChange={(spec) => setSeat(seat, spec)} />
             )
           )}
           <span className="pick__meta">

@@ -1,7 +1,8 @@
 """The bots a seat can hold, each labelled with its Elo from the ladder (SPEC §6 M6).
 
-Ratings come from the ladder report (``runs/ladder-200/ladder.json``) and the M4 checkpoints from
-their index (``runs/m4/checkpoints/index.json``), both under the project root. Both are
+Ratings come from the ladder report (``runs/ladder-v2/ladder.json``, else the older
+``runs/ladder-200/ladder.json``) and the M4 checkpoints from their index
+(``runs/m4/checkpoints/index.json``), both under the project root. Both are
 git-ignored run output: without them the catalog lists the default ladder's bots, unrated. The
 two bots players meet (``roster.OFFERED``) are always listed, the RL bot when its checkpoint is
 on disk. An old name in the ladder report (``roster.ALIASES``, for example ``yosif``) is listed
