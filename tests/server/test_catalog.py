@@ -153,7 +153,7 @@ def test_a_rating_under_the_new_name_wins_over_the_old_one(tmp_path: Path):
 
 def test_the_rl_bot_is_offered_when_its_checkpoint_is_on_disk(tmp_path: Path):
     assert RL_BOT not in [entry.spec for entry in Catalog.load(tmp_path).entries]
-    make_checkpoint(tmp_path / "runs" / "m4-staged" / "checkpoints" / "staged-final.pt")
+    make_checkpoint(tmp_path / "runs" / "m4-rules-v2" / "checkpoints" / "final.pt")
     entries = {entry.spec: entry for entry in Catalog.load(tmp_path).entries}
-    assert entries[RL_BOT].label == "RL bot"
+    assert entries[RL_BOT].label == "RL v2"
     assert entries[RL_BOT].explains

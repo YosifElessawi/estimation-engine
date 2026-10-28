@@ -30,7 +30,10 @@ def test_names_read_plainly():
     assert entry_for("rl:checkpoint=runs/m4/checkpoints/iter-0020.pt").name == "RL iteration 20"
     assert entry_for("rl:checkpoint=runs/m4/checkpoints/final.pt").name == "RL M4 final"
     assert entry_for("search").name == "Search bot"
-    assert entry_for(RL_BOT).name == "RL bot"
+    assert entry_for(RL_BOT).name == "RL v2"
+    assert entry_for("rl:checkpoint=runs/m4-staged/checkpoints/staged-final.pt").name == (
+        "RL staged final"
+    )
     assert entry_for("random").groups == (STICKS,)
     assert entry_for("pimc").groups == (STICKS,)
     assert entry_for("pimc:samples=16").groups == (STICKS,)
@@ -47,7 +50,8 @@ def test_the_leaderboard_holds_only_the_search_bot_and_the_rl_bot():
     for spec in OFFERED:
         assert entry_for(spec).groups[0] == LEADERBOARD
     assert entry_for(RL_BOT).groups == (LEADERBOARD, CHECKPOINTS)  # also a training checkpoint
-    assert entry_for("rl:checkpoint=runs/m4/checkpoints/final.pt").groups == (CHECKPOINTS,)
+    for older in ("m4/checkpoints/final.pt", "m4-staged/checkpoints/staged-final.pt"):
+        assert entry_for(f"rl:checkpoint=runs/{older}").groups == (CHECKPOINTS,)
 
 
 def test_the_old_name_yosif_reads_as_the_search_bot():

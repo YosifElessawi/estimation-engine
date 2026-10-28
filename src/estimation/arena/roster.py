@@ -18,8 +18,9 @@ GROUPS = (LEADERBOARD, CHECKPOINTS, STICKS)
 
 M4 = "rl:checkpoint=runs/m4/checkpoints/"
 STAGED = "rl:checkpoint=runs/m4-staged/checkpoints/"
+RULES_V2 = "rl:checkpoint=runs/m4-rules-v2/checkpoints/"
 SEARCH_BOT = "search"
-RL_BOT = STAGED + "staged-final.pt"  # the best RL checkpoint, offered as "RL bot"
+RL_BOT = RULES_V2 + "final.pt"  # the best RL checkpoint (RL v2), the RL bot players meet
 OFFERED = (SEARCH_BOT, RL_BOT)
 """The bots players meet at the table, the leaderboard's two rows."""
 ALIASES = {"yosif": SEARCH_BOT}
@@ -47,7 +48,18 @@ _KNOWN = {
             (LEADERBOARD,),
             "Yosif's bidding rules; searches 30 deals per card",
         ),
-        _entry(RL_BOT, "RL bot", (LEADERBOARD, CHECKPOINTS), "Self-play nets, staged run final"),
+        _entry(
+            RL_BOT,
+            "RL v2",
+            (LEADERBOARD, CHECKPOINTS),
+            "Self-play from the staged final, 3,000 loops under the current rules",
+        ),
+        _entry(
+            STAGED + "staged-final.pt",
+            "RL staged final",
+            (CHECKPOINTS,),
+            "Self-play nets from the staged training run",
+        ),
         _entry(
             M4 + "final.pt", "RL M4 final", (CHECKPOINTS,), "Self-play nets after 150 iterations"
         ),
