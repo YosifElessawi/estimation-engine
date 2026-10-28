@@ -23,27 +23,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from estimation.arena.games import (
-    GameRecord,
-    GamesHeader,
-    code_version,
-    games_files,
-    read_games,
-    rules_of,
-)
-from estimation.arena.match import play_bola
+from estimation.arena.games import GameRecord
 from estimation.bots import HeuristicBot, make_bot
 from estimation.engine import Bola, IllegalActionError, Phase, RulesConfig
 
 from .decisions import KINDS, Decision, candidates, decisions_of
 from .playout import value_table
 from .report import action_text, situation
+from .sources import add_source_arguments, games_from
 from .work import Progress, print_progress, run_tasks
 
 DEFAULT_DECISIONS = 300
 DEFAULT_DEALS = 12  # [Claude]
 DEFAULT_CARD_PLAY = "pimc:samples=8"  # [Claude]: PIMC-4 under-punished calls strong players break
-WEB_GAMES = Path("runs/web/games.jsonl")
 WORST = 20
 
 
@@ -231,43 +223,12 @@ def _to_json(
     }
 
 
-def _play_game(task: tuple[tuple[str, ...], int, int]) -> GameRecord:
-    lineup, deal, index = task
-    seeds = [deal * 4 + seat for seat in range(4)]
-    bots = [make_bot(spec, s) for spec, s in zip(lineup, seeds, strict=True)]
-    played = play_bola(deal, bots, keep_actions=True)
-    return GameRecord(
-        set_index=index,
-        rotation=0,
-        deal_seed=deal,
-        seats=(lineup[0], lineup[1], lineup[2], lineup[3]),
-        bot_seeds=(seeds[0], seeds[1], seeds[2], seeds[3]),
-        scores=played.scores,
-        rounds=played.rounds,
-        actions=played.actions,
-    )
-
-
-def _play_lineup(
-    lineup: Sequence[str], games: int, seed: int, workers: int, progress: Progress | None
-) -> list[GameRecord]:
-    tasks = [(tuple(lineup), seed + i, i) for i in range(games)]
-    return run_tasks(_play_game, tasks, workers, "games", progress)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m estimation.eval.bidding",
         description="Points each of a bot's bidding decisions cost against the best candidate.",
     )
-    parser.add_argument("--bot", required=True, help="the bot spec to evaluate, or human")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--from", dest="source", type=Path, help="a run folder or games file")
-    source.add_argument("--lineup", help="play new games with these 4 bots, comma-separated")
-    source.add_argument(
-        "--web", nargs="?", const=WEB_GAMES, type=Path, help="the web table's saved games"
-    )
-    parser.add_argument("--games", type=int, default=10, help="new games with --lineup (10)")
+    add_source_arguments(parser)
     parser.add_argument("--decisions", type=int, default=DEFAULT_DECISIONS, help="(300)")
     parser.add_argument("--deals", type=int, default=DEFAULT_DEALS, help="deals per decision (12)")
     parser.add_argument("--card-play", default=DEFAULT_CARD_PLAY, help="card player in play-outs")
@@ -278,35 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if min(args.games, args.decisions, args.deals, args.workers) < 1 or args.seed < 0:
         parser.error("--games, --decisions, --deals and --workers must be at least 1")
-    groups: list[tuple[GamesHeader | None, list[GameRecord]]]
-    notes: list[str] = []
-    if args.lineup:
-        lineup = [bot.strip() for bot in args.lineup.split(",")]
-        if len(lineup) != 4:
-            parser.error("--lineup needs 4 bots")
-        progress = print_progress if args.progress else None
-        groups = [(None, _play_lineup(lineup, args.games, args.seed, args.workers, progress))]
-    else:
-        path: Path = args.source if args.source is not None else args.web
-        files = games_files(path)
-        if not files:
-            parser.error(f"no saved games under {path}")
-        read = [read_games(file) for file in files]
-        groups = [(header, records) for header, records, _ in read]
-        unreadable = sum(bad for _, _, bad in read)
-        if unreadable:
-            notes.append(f"Skipped {unreadable} damaged lines in the games files.")
-        current = code_version()
-        versions = {h.code_version for h, _ in groups if h is not None}
-        if any(h is None for h, _ in groups):
-            notes.append("Note: web games carry no code version; they are replayed as saved.")
-        if versions - {current}:
-            notes.append(
-                f"Note: games played by code {', '.join(sorted(versions))}, "
-                f"evaluated with {current}."
-            )
-    rules = rules_of(groups[0][0])
-    records = [record for _, recs in groups for record in recs]
+    games = games_from(args, parser)
+    rules, records, notes = games.rules, games.records, list(games.notes)
     decisions: list[Decision] = []
     skipped = 0
     for record in records:
