@@ -18,7 +18,7 @@ from typing import TypedDict, cast
 import numpy as np
 import torch
 
-from estimation.bots import Bot, NoisyBot
+from estimation.bots import Bot, HybridBot, NoisyBot
 from estimation.bots.rl import RLBot, policy_at
 from estimation.engine import Observation, Phase
 from estimation.engine.actions import PLAY_BASE
@@ -49,14 +49,14 @@ class WhyView(TypedDict):
     note: str | None
 
 
-def rl_bot(bot: Bot) -> RLBot | None:
-    """The RL bot behind ``bot`` (unwrapping noise), if it is one."""
+def rl_bot(bot: Bot) -> RLBot | HybridBot | None:
+    """The RL or Hybrid bot behind ``bot`` (unwrapping noise), if it is one."""
     inner = bot.inner if isinstance(bot, NoisyBot) else bot
-    return inner if isinstance(inner, RLBot) else None
+    return inner if isinstance(inner, RLBot | HybridBot) else None
 
 
 def explain(bot: Bot, obs: Observation, legal: list[int], chosen: int) -> WhyView | None:
-    """What ``bot``'s nets predicted for each legal action at ``obs``, if it is an RL bot."""
+    """What ``bot``'s nets predicted for each legal action at ``obs``, if it uses RL nets."""
     rl = rl_bot(bot)
     if rl is None:
         return None
@@ -77,8 +77,11 @@ def explain(bot: Bot, obs: Observation, legal: list[int], chosen: int) -> WhyVie
             )
             for action in ranked
         ]
-        return WhyView(net="CardPlayNet", baseline=round(baseline, 2), options=options, note=None)
-    if rl.config.heuristic_bidding:
+        note = None
+        if isinstance(rl, HybridBot) and ranked and chosen != ranked[0]:
+            note = "Search over sampled deals preferred this card over CardPlayNet's top choice."
+        return WhyView(net="CardPlayNet", baseline=round(baseline, 2), options=options, note=note)
+    if isinstance(rl, RLBot) and rl.config.heuristic_bidding:
         return WhyView(
             net="HeuristicBot",
             baseline=None,

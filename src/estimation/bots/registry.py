@@ -54,6 +54,12 @@ def _rl(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     return RLBot(seed, configure(RLConfig(heuristic=heuristic, rules=rules), options, "rl"))
 
 
+def _hybrid(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    from .hybrid import HybridBot, HybridConfig  # PyTorch loads only when a hybrid bot is made
+
+    return HybridBot(seed, configure(HybridConfig(rules=rules), options, "hybrid"))
+
+
 def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
     config = SearchConfig(
@@ -98,6 +104,7 @@ _FACTORIES: dict[str, BotFactory] = {
     "pimc": _pimc,
     "search": _search,
     "rl": _rl,
+    "hybrid": _hybrid,
     "yosif": _yosif,
 }
 BOT_NAMES = tuple(_FACTORIES)

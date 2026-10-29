@@ -21,8 +21,9 @@ STAGED = "rl:checkpoint=runs/m4-staged/checkpoints/"
 RULES_V2 = "rl:checkpoint=runs/m4-rules-v2/checkpoints/"
 SEARCH_BOT = "search"
 RL_BOT = RULES_V2 + "final.pt"  # the best RL checkpoint (RL v2), the RL bot players meet
-OFFERED = (SEARCH_BOT, RL_BOT)
-"""The bots players meet at the table, the leaderboard's two rows."""
+HYBRID_BOT = "hybrid"
+OFFERED = (SEARCH_BOT, RL_BOT, HYBRID_BOT)
+"""The bots players meet at the table, the leaderboard's rows."""
 ALIASES = {"yosif": SEARCH_BOT}
 """Old names that load the same bot, for saved games and ladder runs that use them."""
 
@@ -55,6 +56,12 @@ _KNOWN = {
             "Self-play from the staged final, 3,000 loops under the current rules",
         ),
         _entry(
+            HYBRID_BOT,
+            "Hybrid",
+            (LEADERBOARD,),
+            "RL v2 bidding and deal weights; searches 30 deals per card with CardPlayNet",
+        ),
+        _entry(
             STAGED + "staged-final.pt",
             "RL staged final",
             (CHECKPOINTS,),
@@ -77,6 +84,7 @@ _KNOWN = {
 _ITERATION = re.compile(r"^rl:checkpoint=runs/m4/checkpoints/iter-0*(\d+)\.pt$")
 _NOISE = re.compile(r"^heuristic:noise=([0-9.]+)$")
 _PIMC = re.compile(r"^pimc:samples=(\d+)(?::play_noise=([0-9.]+))?$")
+_HYBRID = re.compile(r"^hybrid:samples=(\d+)(?::play_noise=([0-9.]+))?$")
 
 
 def _percent(text: str) -> str:
@@ -113,6 +121,14 @@ def entry_for(spec: str) -> RosterEntry:
             name += f", {_percent(match.group(2))} random cards"
         return _entry(
             spec, name, (STICKS,), f"PIMC searching {n} deal{'' if n == 1 else 's'} per card"
+        )
+    if match := _HYBRID.match(spec):
+        n = int(match.group(1))
+        name = f"Hybrid, {n} deal{'' if n == 1 else 's'}"
+        if match.group(2):
+            name += f", {_percent(match.group(2))} random cards"
+        return _entry(
+            spec, name, (STICKS,), f"Hybrid searching {n} deal{'' if n == 1 else 's'} per card"
         )
     return _entry(spec, spec, (STICKS,), "")
 

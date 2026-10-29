@@ -27,8 +27,8 @@ Without portless, `npm run dev` serves it at `http://localhost:3000`.
 
 ## Bots and ratings
 
-The seat menus offer the two bots players meet: the Search bot and the RL bot (its best
-checkpoint). The start page's leaderboard shows those two on top, then, on request, the RL
+The seat menus offer the bots players meet: the Search bot, the RL bot (its best checkpoint) and
+the Hybrid bot. The start page's leaderboard shows those on top, then, on request, the RL
 checkpoints and the measuring sticks (RandomBot, HeuristicBot, PIMC and their weakened
 versions). Bots are named and described by `estimation.arena.roster` and labelled with their
 ladder Elo. The ratings come from the newest

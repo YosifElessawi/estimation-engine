@@ -47,7 +47,8 @@ def test_bots_are_built_for_the_rules_being_played():
 
 
 def test_every_bot_satisfies_the_bot_interface(tmp_path: Path):
-    required = {"rl": f":checkpoint={make_checkpoint(tmp_path / 'net.pt')}"}
+    ckpt = f":checkpoint={make_checkpoint(tmp_path / 'net.pt')}"
+    required = {"rl": ckpt, "hybrid": ckpt}
     for name in BOT_NAMES:
         bot: Bot = make_bot(name + required.get(name, ""), 0)
         assert callable(bot.act)

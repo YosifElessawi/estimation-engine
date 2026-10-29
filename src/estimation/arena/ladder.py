@@ -86,10 +86,11 @@ V2_LADDER = (
     "pimc",
     "search",
     RL_V2,
+    "hybrid",
 )
 """The full ladder after the With-auction rules (2026-10-26): the default rungs, the M4 checkpoints
 where the 2026-10-25 ladder placed them, the Search bot (rated as ``yosif``, its old name, until
-2026-10-27) and RL v2 last (added 2026-10-28)."""
+2026-10-27), RL v2 (added 2026-10-28) and the hybrid bot last."""
 V2_EXTRAS = (
     ("heuristic", "pimc:samples=1:play_noise=0.3"),
     ("pimc:samples=4", "pimc:samples=8"),
@@ -103,6 +104,8 @@ V2_EXTRAS = (
     ("heuristic", "search"),
     ("pimc", RL_V2),
     (STAGED_FINAL, RL_V2),
+    ("pimc", "hybrid"),
+    ("search", "hybrid"),
 )
 
 

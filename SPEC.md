@@ -521,7 +521,7 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 
 **Build:**
 - A FastAPI backend wrapping `Bola` and the bots, and a Next.js frontend. Local only, served through portless.
-- Play a full Bola against the two bots players meet, the Search bot and the RL bot (the RL checkpoint picked as best, now RL v2: self-play from the staged final, 3,000 loops under the current rules), each shown with its Elo. The leaderboard lists those two first, then the RL checkpoints, then the measuring sticks (RandomBot, HeuristicBot, PIMC and their weakened versions).
+- Play a full Bola against the three bots players meet, the Search bot, the RL bot (the RL checkpoint picked as best, now RL v2: self-play from the staged final, 3,000 loops under the current rules) and the Hybrid bot (M5, added 2026-10-29, Yosif), each shown with its Elo. The leaderboard lists those three first, then the RL checkpoints, then the measuring sticks (RandomBot, HeuristicBot, PIMC and their weakened versions).
 - **Coach mode** (toggle): the expected score of your hand after the deal, and the change in win probability after every trick.
 - **Post-round review:** step through each trick and label each of your card plays by expected points lost against the best move:
   - **Best:** the best move.

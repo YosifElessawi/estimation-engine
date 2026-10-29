@@ -23,6 +23,7 @@ from typing import Any, cast
 from estimation.arena.ladder import DEFAULT_LADDER
 from estimation.arena.roster import OFFERED, canonical, name_of
 from estimation.bots import Bot, make_bot
+from estimation.bots.hybrid import RL_V2_CHECKPOINT
 from estimation.engine import RulesConfig
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,6 +88,12 @@ def label_of(spec: str, checkpoints: dict[str, dict[str, Any]] | None = None) ->
     elif name == "pimc":
         samples = int(options.pop("samples", "30"))
         label = f"PIMC, {samples} deal{'' if samples == 1 else 's'}"
+    elif name == "hybrid":
+        label = "Hybrid"
+        options.pop("checkpoint", None)
+        if "samples" in options:
+            samples = int(options.pop("samples"))
+            extras.append(f"{samples} deal{'' if samples == 1 else 's'}")
     elif name == "rl" and "checkpoint" in options:
         path = Path(options.pop("checkpoint"))
         heuristic = options.pop("heuristic_bidding", "false").lower() in ("1", "true", "yes", "on")
@@ -136,9 +143,14 @@ def runs_root(checkout: Path = ROOT) -> Path:
 
 
 def _on_disk(root: Path, spec: str) -> bool:
-    """Whether ``spec`` can be played under ``root``: an rl spec's checkpoint must be a file."""
+    """Whether ``spec`` can be played under ``root``: an rl or hybrid spec's checkpoint must be a
+    file."""
     name, options = parse_spec(spec)
-    return name != "rl" or (root / options.get("checkpoint", "")).is_file()
+    if name == "rl":
+        return (root / options.get("checkpoint", "")).is_file()
+    if name == "hybrid":
+        return (root / options.get("checkpoint", RL_V2_CHECKPOINT)).is_file()
+    return True
 
 
 class Catalog:
@@ -196,7 +208,7 @@ class Catalog:
                 label=label_of(spec, checkpoints),
                 family=parse_spec(spec)[0],
                 elo=ratings.get(spec),
-                explains=parse_spec(spec)[0] == "rl",
+                explains=parse_spec(spec)[0] in ("rl", "hybrid"),
             )
             for spec in specs
         ]
@@ -216,13 +228,17 @@ class Catalog:
         if known is not None:
             return known if known.spec == spec else dataclasses.replace(known, spec=spec)
         name = parse_spec(spec)[0]
-        return BotEntry(spec, label_of(spec, self._checkpoints), name, None, name == "rl")
+        return BotEntry(
+            spec, label_of(spec, self._checkpoints), name, None, name in ("rl", "hybrid")
+        )
 
     def resolve(self, spec: str) -> str:
-        """``spec`` with an rl checkpoint as an absolute path, checked to be a file under the
-        root's ``runs/`` folder. Raises ValueError for anything else."""
+        """``spec`` with an rl or hybrid checkpoint as an absolute path, checked to be a file
+        under the root's ``runs/`` folder. Raises ValueError for anything else."""
         name, options = parse_spec(spec)
-        if name != "rl" or "checkpoint" not in options:
+        if name == "hybrid" and "checkpoint" not in options:
+            options["checkpoint"] = RL_V2_CHECKPOINT
+        if name not in ("rl", "hybrid") or "checkpoint" not in options:
             return spec
         runs = (self.root / RUNS).resolve()
         path = (self.root / options["checkpoint"]).resolve()

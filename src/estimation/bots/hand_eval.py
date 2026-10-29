@@ -77,8 +77,8 @@ def _trump_value(pattern: int, values: HandValues) -> float:
 
 
 @cache
-def _tables(
-    values: HandValues,
+def suit_tables(
+    values: HandValues = DEFAULT_VALUES,
 ) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
     """Per 13-bit suit pattern: side value, Sans value, trump value and ruff value."""
     side = tuple(_side_value(p, values) for p in range(SUIT_PATTERNS))
@@ -96,7 +96,7 @@ def expected_tricks(hand: int, trump: int, values: HandValues = DEFAULT_VALUES) 
 
     Trump tricks (honours, length and ruffs together) never exceed the number of trumps held.
     """
-    side, sans, trumps, ruffs = _tables(values)
+    side, sans, trumps, ruffs = suit_tables(values)
     patterns = (hand & 0x1FFF, (hand >> 13) & 0x1FFF, (hand >> 26) & 0x1FFF, hand >> 39)
     if trump == SANS:
         return sans[patterns[0]] + sans[patterns[1]] + sans[patterns[2]] + sans[patterns[3]]

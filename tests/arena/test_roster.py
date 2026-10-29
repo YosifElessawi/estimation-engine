@@ -4,6 +4,7 @@ from estimation.arena.ladder import PRESETS
 from estimation.arena.roster import (
     CHECKPOINTS,
     GROUPS,
+    HYBRID_BOT,
     LEADERBOARD,
     OFFERED,
     RL_BOT,
@@ -31,6 +32,9 @@ def test_names_read_plainly():
     assert entry_for("rl:checkpoint=runs/m4/checkpoints/final.pt").name == "RL M4 final"
     assert entry_for("search").name == "Search bot"
     assert entry_for(RL_BOT).name == "RL v2"
+    assert entry_for(HYBRID_BOT).name == "Hybrid"
+    assert entry_for("hybrid:samples=8").name == "Hybrid, 8 deals"
+    assert entry_for("hybrid:samples=1:play_noise=0.3").name == "Hybrid, 1 deal, 30% random cards"
     assert entry_for("rl:checkpoint=runs/m4-staged/checkpoints/staged-final.pt").name == (
         "RL staged final"
     )
@@ -50,11 +54,12 @@ def test_tables_are_listed_leaderboard_then_rl_checkpoints_then_measuring_sticks
     assert GROUPS == (LEADERBOARD, CHECKPOINTS, STICKS)
 
 
-def test_the_leaderboard_holds_only_the_search_bot_and_the_rl_bot():
-    assert OFFERED == ("search", RL_BOT)
+def test_the_leaderboard_holds_only_the_search_rl_and_hybrid_bots():
+    assert OFFERED == ("search", RL_BOT, HYBRID_BOT)
     for spec in OFFERED:
         assert entry_for(spec).groups[0] == LEADERBOARD
     assert entry_for(RL_BOT).groups == (LEADERBOARD, CHECKPOINTS)  # also a training checkpoint
+    assert entry_for(HYBRID_BOT).groups == (LEADERBOARD,)
     for older in ("m4/checkpoints/final.pt", "m4-staged/checkpoints/staged-final.pt"):
         assert entry_for(f"rl:checkpoint=runs/{older}").groups == (CHECKPOINTS,)
 

@@ -13,7 +13,7 @@ type Mode = "watch" | "play";
 
 // The roster's tables (estimation.arena.roster), in the order the leaderboard lists them. A bot
 // sits under its first table; one the roster has no table for goes under "Other". Seats offer
-// the Leaderboard's bots only: the Search bot and the RL bot.
+// the Leaderboard's bots only: the Search bot, the RL bot and the Hybrid bot.
 const LEADERBOARD = "Leaderboard";
 const GROUPS = [LEADERBOARD, "RL checkpoints", "Measuring sticks"];
 const OTHER = "Other";

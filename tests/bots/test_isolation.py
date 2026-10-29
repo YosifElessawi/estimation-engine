@@ -103,8 +103,9 @@ def imported_modules(path: Path) -> set[str]:
 
 
 def rl_modules_the_bot_reads() -> list[Path]:
-    """Every ``estimation.rl`` module the RL bot imports, directly or through another one."""
-    todo = [BOTS / "rl.py"]
+    """Every ``estimation.rl`` module the RL and hybrid bots import, directly or through another
+    one."""
+    todo = [BOTS / "rl.py", *sorted((BOTS / "hybrid").glob("*.py"))]
     seen: set[Path] = set()
     while todo:
         path = todo.pop()
@@ -236,21 +237,25 @@ def test_the_encoder_ignores_other_seats_hidden_cards():
     assert checked > 100
 
 
-@pytest.mark.parametrize("bidding", ["net", "heuristic"])
+@pytest.mark.parametrize("bidding", ["net", "heuristic", "hybrid"])
 def test_the_rl_bots_choice_ignores_other_seats_hidden_cards(bidding: str, tmp_path: Path):
     path = make_checkpoint(tmp_path / "net.pt", seed=4)
-    spec = f"rl:checkpoint={path}" + (":heuristic_bidding=true" if bidding == "heuristic" else "")
-    bot = make_bot(spec, 5)
+    if bidding == "hybrid":
+        spec = f"hybrid:checkpoint={path}:samples=2:oversample=2"
+    elif bidding == "heuristic":
+        spec = f"rl:checkpoint={path}:heuristic_bidding=true"
+    else:
+        spec = f"rl:checkpoint={path}"
     checked = 0
     seen: set[Phase] = set()
-    for seed in range(12):
+    for seed in range(4 if bidding == "hybrid" else 12):
         for rnd, other, me in swapped_positions(seed):
-            assert bot.act(other.observation(me), other.legal_actions()) == bot.act(
-                rnd.observation(me), rnd.legal_actions()
-            )
+            assert make_bot(spec, 5).act(other.observation(me), other.legal_actions()) == make_bot(
+                spec, 5
+            ).act(rnd.observation(me), rnd.legal_actions())
             seen.add(rnd.phase)
             checked += 1
-    assert checked > 100
+    assert checked > (25 if bidding == "hybrid" else 100)
     assert len(seen) >= 3
 
 
