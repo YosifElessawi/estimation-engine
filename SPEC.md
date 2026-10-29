@@ -2,7 +2,7 @@
 
 A bot that plays **Estimation**, the 4-player trick-taking card game, by the rules of the Pocket Estimation app. It is built in six milestones: an exact rules engine, baseline bots with a fair rating arena, a search bot, a self-play RL bot, a hybrid of the two, and a web table with game review.
 
-**Status (2026-10-28):** Milestones 1-4 are merged, and the web table (M6) has its first slice. Players meet two bots: the **Search bot** (M3, no learning, tuned with evals) and the **RL bot** (M4, self-play, now the RL v2 checkpoint); hybrids (M5) come later. Elo on the current ladder (`--preset v2`, rated after the With-auction rules of 2026-10-26), RandomBot fixed at 400: HeuristicBot about 3,600, PIMC about 4,910, Search bot about 4,890 (rated as the Yosif bot), RL bot (RL v2) about 5,115.
+**Status (2026-10-29):** Milestones 1-5 are built, and the web table (M6) has its first slice. Players meet three bots: the **Search bot** (M3, no learning, tuned with evals), the **RL bot** (M4, self-play, now the RL v2 checkpoint) and the **Hybrid bot** (M5, RL v2 bidding and deal weights with CardPlayNet search). Elo on the current ladder (`--preset v2`, rated after the With-auction rules of 2026-10-26), RandomBot fixed at 400: HeuristicBot about 3,600, PIMC about 4,910, Search bot about 4,885, RL bot (RL v2) about 5,125, Hybrid bot about 5,445.
 
 ## How to Use This Spec
 
@@ -514,6 +514,8 @@ Do one milestone at a time, on its own branch (CLAUDE.md has the step-by-step). 
 **Build:** the M3 search, with BiddingNet weighting the sampled deals and CardPlayNet evaluating positions in place of HeuristicBot rollouts.
 
 **Done when:** it beats both the M3 and M4 bots in the arena (RSA confidence interval above 0).
+
+**Result (done 2026-10-29):** over 200 duplicate sets each on the v2 ladder (`--preset v2`), Hybrid beat RL v2 168 sets to 32 (RSA +38.9 per Bola, 95% CI +33.6 to +44.2; 67% combined 1st-place share), beat the Search bot 196 sets to 4 (RSA +65.4, 95% CI +60.2 to +70.7; 81% combined 1st place) and beat PIMC 194 sets to 6 (RSA +63.7, 95% CI +59.0 to +68.5; 85% combined 1st place). The ladder rates Hybrid at 5,446 Elo (95% range 5,212 to 5,958), about 323 Elo above RL v2 (5,123) and 559 Elo above the Search bot (4,887).
 
 ### M6. Web Table and Game Review
 

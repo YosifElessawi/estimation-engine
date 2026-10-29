@@ -59,7 +59,7 @@ _KNOWN = {
             HYBRID_BOT,
             "Hybrid",
             (LEADERBOARD,),
-            "RL v2 bidding and deal weights; searches 30 deals per card with CardPlayNet",
+            "RL v2 bidding and deal weights; searches 16 deals per card with CardPlayNet",
         ),
         _entry(
             STAGED + "staged-final.pt",
