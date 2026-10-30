@@ -55,7 +55,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(f"no page build in {static}: run `npm run build:public` in web/ first")
     table = PublicTable(Catalog.from_env(), records, bot=args.bot)
     table.catalog.make(args.bot, 0, table.rules)  # fail now, not on the first game
-    uvicorn.run(create_public_app(table, static), host=args.host, port=args.port)
+    # No access log: it would write every visitor's IP address down.
+    uvicorn.run(create_public_app(table, static), host=args.host, port=args.port, access_log=False)
 
 
 if __name__ == "__main__":
