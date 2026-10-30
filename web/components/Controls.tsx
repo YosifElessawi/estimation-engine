@@ -70,17 +70,24 @@ function hintOf(legal: ActionView[], table: TableView): string {
   const kinds = new Set(legal.map((action) => action.kind));
   if (kinds.has("dash") || kinds.has("no_dash")) return "A Dash call promises to take no tricks at all.";
   if (kinds.has("estimate")) {
-    // EST-3: nobody estimates above the Caller's number
-    const most = Math.max(...legal.filter((action) => action.kind === "estimate").map((action) => action.tricks ?? 0));
-    const cap = table.caller !== null && most < 13 ? ` Up to ${most}, the Caller's number.` : "";
-    // EST-5: the last estimator may not bring the total to exactly 13
+    const numbers = legal.filter((action) => action.kind === "estimate").map((action) => action.tricks ?? 0);
+    const most = Math.max(...numbers);
     const me = table.current_player;
+    // EST-5: the last estimator may not bring the total to exactly 13
+    let last = "";
     if (me !== null && table.last_estimator === me) {
       const others = table.estimates.reduce<number>((total, e, seat) => (seat === me ? total : total + (e ?? 0)), 0);
       const banned = 13 - others;
-      if (banned >= 0 && banned <= 13) return `You estimate last: ${banned} would make the total 13, so it's out.${cap}`;
+      if (banned >= 0 && banned <= 13) last = ` You estimate last: ${banned} would make the total 13, so it's out.`;
     }
-    return `How many tricks will you take?${cap}`;
+    // EST-2: a With player who chooses picks from its own call up to the Caller's number, first
+    if (me !== null && table.caller !== me && table.with_players.some((w) => w.seat === me)) {
+      const held = table.with_players.find((w) => w.seat === me)?.w ?? Math.min(...numbers);
+      return `You're With: pick ${held} to ${most}.${last}`;
+    }
+    // EST-3: nobody estimates above the Caller's number
+    const cap = table.caller !== null && most < 13 ? ` Up to ${most}, the Caller's number.` : "";
+    return last ? `${last.trim()}${cap}` : `How many tricks will you take?${cap}`;
   }
   const stay = legal.find((action) => action.kind === "stay");
   if (stay) return `The bid you went With was raised. Join it, stay at ${stay.tricks ?? ""}, or outbid.`;
