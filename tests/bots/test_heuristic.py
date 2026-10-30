@@ -23,7 +23,7 @@ from estimation.engine import (
     play_action,
 )
 
-from .helpers import round_with
+from .helpers import LATEST_CALL_ONLY, round_with
 
 NO = NO_DASH_CALL
 NO_DASH = (NO, NO, NO, NO)
@@ -98,8 +98,11 @@ def test_answers_a_raise_by_the_player_it_joined_with_a_legal_move():
 
 
 def test_raises_when_keeping_its_bid_would_leave_13():
-    """AUC-6: with nobody left to estimate, keeping 5 Hearts would total 13."""
-    rnd = round_with(2, HEART_FIT, NO, NO, NO, DASH_CALL, bid_action(4, HEARTS), WITH)
+    """AUC-6 under the With rules before 2026-10-30, where seats 0 and 1 would keep 4 each:
+    with nobody left to estimate, keeping 5 Hearts would total 13."""
+    rnd = round_with(
+        2, HEART_FIT, NO, NO, NO, DASH_CALL, bid_action(4, HEARTS), WITH, config=LATEST_CALL_ONLY
+    )
     rnd.step(bid_action(5, HEARTS))  # seat 2 outbids seat 0; seat 1 joined seat 0
     rnd.step(PASS)  # seat 0 passes, holding 4 Hearts
     assert rnd.current_player == 2

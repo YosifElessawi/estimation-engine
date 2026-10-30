@@ -1,17 +1,34 @@
-"""The auction in open rounds: AUC-1 to AUC-6, GAM-2 (opener), GAM-3, L1 to L3, L5, L10 and L11."""
+"""The auction in open rounds: AUC-1 to AUC-6, GAM-2 (opener), GAM-3, L1 to L3, L5 and L10 to
+L12. The With rules before 2026-10-30 are tested with ``LATEST_CALL_ONLY``."""
+
+import dataclasses
 
 import pytest
 
 from estimation.engine.actions import PASS, WITH
 from estimation.engine.cards import CLUBS, DIAMONDS, HEARTS, SANS, SPADES
+from estimation.engine.config import DEFAULT_CONFIG, RulesConfig
 from estimation.engine.observation import WithInfo
 from estimation.engine.round import IllegalActionError, Phase, Round
 
-from .helpers import DASH, NO, NO_DASH_ROUND, bid, legal_bids, legal_estimates, new_round, run
+from .helpers import (
+    DASH,
+    LATEST_CALL_ONLY,
+    NO,
+    NO_DASH_ROUND,
+    bid,
+    est,
+    legal_bids,
+    legal_estimates,
+    new_round,
+    run,
+)
 
 
-def auction(round_no: int = 1, dash: tuple[int, ...] = NO_DASH_ROUND) -> Round:
-    rnd = run(new_round(round_no), *dash)
+def auction(
+    round_no: int = 1, dash: tuple[int, ...] = NO_DASH_ROUND, config: RulesConfig = DEFAULT_CONFIG
+) -> Round:
+    rnd = run(new_round(round_no, config=config), *dash)
     assert rnd.phase is Phase.AUCTION
     return rnd
 
@@ -93,13 +110,31 @@ def test_AUC_2_with_joins_at_the_top_bids_trick_count_and_trump():
 
 
 def test_AUC_2_each_bidder_holds_its_latest_call():
-    rnd = auction()
+    rnd = auction(config=LATEST_CALL_ONLY)
     run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS, PASS, bid(6, SPADES), bid(7, HEARTS), PASS)
     assert rnd.current_player == 1  # final turn
     rnd.step(PASS)
     # Seat 0 bid 4 Hearts first, but its latest call is 6 Spades: it is not With in Hearts.
     assert held(rnd) == ()
     assert rnd.observation(0).caller == 1
+
+
+def test_AUC_4_any_earlier_call_in_the_winning_trump_makes_you_with():
+    rnd = auction()
+    run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS, PASS, bid(6, SPADES), bid(7, HEARTS), PASS)
+    rnd.step(PASS)
+    # Seat 0's latest call is 6 Spades, but it called 4 Hearts: With, choosing from 4 to 7.
+    assert held(rnd) == ((0, 4, HEARTS),)
+    assert rnd.current_player == 0
+    assert legal_estimates(rnd) == [4, 5, 6, 7]
+
+
+def test_AUC_4_with_any_call_off_counts_only_the_latest_call():
+    rnd = auction(config=dataclasses.replace(DEFAULT_CONFIG, with_any_call=False))
+    run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS, PASS, bid(6, SPADES), bid(7, HEARTS), PASS)
+    rnd.step(PASS)
+    assert held(rnd) == ()
+    assert finish_estimates(rnd) == [2, 3, 0]
 
 
 def test_AUC_3_top_bidder_gets_one_final_turn_to_keep_or_raise():
@@ -215,7 +250,16 @@ def test_AUC_4_outbid_in_your_own_trump_and_passing_holds_you_at_your_bid():
     run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS, PASS, PASS, PASS)
     assert rnd.observation(0).caller == 1
     assert held(rnd) == ((0, 4, HEARTS),)
-    assert rnd.observation(0).estimates[0] == 4  # EST-2
+    assert rnd.observation(0).estimates[0] is None  # EST-2: it chooses 4 or 5, first
+    assert rnd.current_player == 0
+    assert legal_estimates(rnd) == [4, 5]
+
+
+def test_AUC_4_latest_call_only_holds_you_at_exactly_your_bid():
+    rnd = auction(config=LATEST_CALL_ONLY)
+    run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS, PASS, PASS, PASS)
+    assert held(rnd) == ((0, 4, HEARTS),)
+    assert rnd.observation(0).estimates[0] == 4
 
 
 def test_AUC_4_with_follows_the_trump_however_high_it_goes():
@@ -265,7 +309,7 @@ def test_AUC_5_two_bidders_may_bid_13():
 
 
 def test_AUC_6_a_final_raise_that_would_leave_13_is_not_allowed():
-    rnd = auction(1, (NO, NO, DASH, DASH))
+    rnd = auction(1, (NO, NO, DASH, DASH), LATEST_CALL_ONLY)
     run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS)  # seat 0 holds 4 Hearts
     assert rnd.current_player == 1
     legal = legal_bids(rnd)
@@ -289,6 +333,36 @@ def test_AUC_6_an_answer_that_would_leave_13_is_not_allowed():
     assert rnd.observation(0).total == 14
 
 
+def test_AUC_6_a_with_player_who_chooses_is_someone_left_to_estimate():
+    rnd = auction(1, (NO, NO, DASH, DASH))
+    run(rnd, bid(4, HEARTS), bid(5, HEARTS), PASS)  # seat 0 called 4 Hearts
+    assert bid(9, HEARTS) in legal_bids(rnd)  # seat 0 will choose from 4 to 9
+    rnd.step(bid(9, HEARTS))
+    assert rnd.current_player == 0
+    assert legal_estimates(rnd) == [5, 6, 7, 8, 9]  # EST-5: 4 would make 13, and it is last
+
+
+def test_AUC_6_latest_call_only_blocks_keeping_a_bid_that_leaves_13():
+    rnd = auction(1, (NO, NO, NO, DASH), LATEST_CALL_ONLY)
+    run(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS), PASS)
+    assert rnd.current_player == 2  # the final turn
+    assert PASS not in rnd.legal_actions()  # keeping: 5 + 4 + 4 + 0 = 13
+    with pytest.raises(IllegalActionError):
+        rnd.step(PASS)
+    rnd.step(bid(6, HEARTS))
+    assert rnd.phase is Phase.PLAY  # seats 0 and 1 keep 4 each: nobody left to estimate
+    obs = rnd.observation(0)
+    assert obs.with_players == (WithInfo(0, 4, HEARTS), WithInfo(1, 4, HEARTS))
+    assert obs.total == 14
+
+
+def test_AUC_6_with_choose_off_blocks_keeping_a_bid_that_leaves_13():
+    rnd = auction(1, (NO, NO, NO, DASH), dataclasses.replace(DEFAULT_CONFIG, with_choose=False))
+    run(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS), PASS)
+    assert rnd.current_player == 2
+    assert PASS not in rnd.legal_actions()  # seats 0 and 1 keep 4: 5 + 4 + 4 + 0 = 13
+
+
 def test_AUC_6_ending_with_estimators_left_is_never_blocked():
     rnd = auction(1, (NO, NO, NO, DASH))
     run(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS))
@@ -307,9 +381,12 @@ def test_L1_answering_a_raise_and_held_when_outbid_in_your_own_trump():
     obs = rnd.observation(3)
     assert (obs.caller, obs.trump) == (1, HEARTS)
     assert obs.with_players == (WithInfo(0, 4, HEARTS), WithInfo(2, 6, HEARTS))
-    assert obs.estimates == (4, 6, 6, None)
-    assert rnd.current_player == 3  # the only player left to estimate
-    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5, 6]
+    assert obs.estimates == (None, 6, 6, None)  # seat 2 keeps 6; seat 0 chooses
+    assert rnd.current_player == 0  # EST-2: seat 0 chooses first
+    assert legal_estimates(rnd) == [4, 5, 6]
+    rnd.step(est(5))
+    assert rnd.current_player == 3  # then the only other player, last
+    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5, 6]  # 6 + 5 + 6 = 17 already
     rnd.step(rnd.legal_actions()[0])
     while rnd.phase is Phase.PLAY:
         rnd.step(rnd.legal_actions()[0])
@@ -320,6 +397,8 @@ def test_L1_staying_leaves_the_answering_player_with_at_5():
     rnd = auction()
     run(rnd, bid(4, HEARTS), bid(5, HEARTS), WITH, PASS, PASS, bid(6, HEARTS), PASS)
     assert held(rnd) == ((0, 4, HEARTS), (2, 5, HEARTS))
+    assert rnd.observation(0).estimates == (None, 6, 5, None)  # seat 2 stayed: it keeps 5
+    assert finish_estimates(rnd) == [0, 3]
 
 
 def test_L2_minimum_raise_over_5_hearts():
@@ -345,29 +424,32 @@ def test_L3_lone_bidder_legal_actions_and_final_turn():
     assert rnd.legal_actions() == [*range(bid(6, HEARTS) + 1, bid(12, SANS) + 1), PASS]
 
 
-def test_L5_nobody_left_to_estimate_blocks_keeping_a_bid_that_leaves_13():
+def test_L5_staying_would_leave_13_with_nobody_left_to_estimate():
     rnd = auction(1, (NO, NO, NO, DASH))
-    seats = turns(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS), PASS)
-    assert seats == [0, 1, 2, 0]
-    assert rnd.current_player == 2  # the final turn
-    assert PASS not in rnd.legal_actions()  # keeping: 5 + 4 + 4 + 0 = 13
+    seats = turns(rnd, bid(4, HEARTS), WITH, WITH, bid(5, HEARTS), PASS)
+    assert seats == [0, 1, 2, 0, 1]  # seat 0's final turn raise, then seat 1 stays at 4
+    assert rnd.current_player == 2  # the last answer
+    assert PASS not in rnd.legal_actions()  # staying too: 5 + 4 + 4 + 0 = 13
     with pytest.raises(IllegalActionError):
         rnd.step(PASS)
-    assert bid(6, HEARTS) in rnd.legal_actions()
-    rnd.step(bid(5, SPADES))
-    assert held(rnd) == ()
-    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5]  # seat 0, no longer held
-    assert finish_estimates(rnd) == [0, 1]
-    assert rnd.observation(0).estimates[0] is not None
-
-
-def test_L5_raising_in_the_same_trump_leaves_both_with():
-    rnd = auction(1, (NO, NO, NO, DASH))
-    run(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS), PASS, bid(6, HEARTS))
-    assert rnd.phase is Phase.PLAY  # nobody left to estimate
+    rnd.step(WITH)  # 5 + 4 + 5 = 14
+    assert rnd.phase is Phase.PLAY  # nobody estimates
     obs = rnd.observation(0)
-    assert obs.with_players == (WithInfo(0, 4, HEARTS), WithInfo(1, 4, HEARTS))
+    assert obs.with_players == (WithInfo(1, 4, HEARTS), WithInfo(2, 5, HEARTS))
     assert obs.total == 14
+
+
+def test_L5_with_players_who_choose_end_on_a_total_off_13():
+    rnd = auction(1, (NO, NO, NO, DASH))
+    run(rnd, bid(4, HEARTS), WITH, bid(5, HEARTS), PASS)
+    assert PASS in rnd.legal_actions()  # seats 0 and 1 choose, so keeping is allowed
+    rnd.step(PASS)
+    assert held(rnd) == ((0, 4, HEARTS), (1, 4, HEARTS))
+    assert rnd.current_player == 0  # EST-2: from the Caller's left, past seat 3's Dash
+    assert legal_estimates(rnd) == [4, 5]
+    rnd.step(est(4))
+    assert rnd.current_player == 1  # the last to estimate
+    assert legal_estimates(rnd) == [5]  # EST-5: 5 + 4 + 4 + 0 would make 13
 
 
 def test_L10_with_lost_to_another_trump():
@@ -389,6 +471,33 @@ def test_L11_outbid_in_another_trump_but_own_trump_wins():
     obs = rnd.observation(0)
     assert (obs.caller, obs.trump) == (2, HEARTS)
     assert obs.with_players == (WithInfo(0, 4, HEARTS),)
-    assert obs.estimates[0] == 4
-    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5, 6]
+    assert obs.estimates[0] is None
+    assert rnd.current_player == 0  # EST-2: seat 0 chooses first
+    assert legal_estimates(rnd) == [4, 5, 6]
+    rnd.step(est(4))
+    assert legal_estimates(rnd) == [0, 1, 2, 3, 4, 5, 6]  # seat 1 never called Hearts
     assert finish_estimates(rnd) == [3, 1]
+
+
+def test_L12_an_earlier_call_in_the_winning_trump_makes_you_with():
+    rnd = auction(10)  # F = seat 1
+    seats = turns(rnd, PASS, PASS, bid(5, SANS), WITH, bid(6, HEARTS), bid(6, SANS), PASS)
+    assert seats == [1, 2, 3, 0, 3, 0, 3]  # seat 3's final turn raise, seat 0 outbids it
+    assert held(rnd) == ((3, 5, SANS),)  # seat 3 passed holding 6 Hearts, but called 5 Sans
+    assert rnd.current_player == 0  # seat 0's final turn
+    rnd.step(PASS)
+    obs = rnd.observation(1)
+    assert (obs.caller, obs.trump) == (0, SANS)
+    assert obs.with_players == (WithInfo(3, 5, SANS),)
+    assert rnd.current_player == 3  # EST-2: seat 3 chooses first
+    assert legal_estimates(rnd) == [5, 6]
+    rnd.step(est(5))
+    assert finish_estimates(rnd) == [1, 2]
+    assert rnd.observation(1).last_estimator == 2
+
+
+def test_L12_latest_call_only_leaves_seat_3_out():
+    rnd = auction(10, config=LATEST_CALL_ONLY)
+    run(rnd, PASS, PASS, bid(5, SANS), WITH, bid(6, HEARTS), bid(6, SANS), PASS, PASS)
+    assert held(rnd) == ()
+    assert finish_estimates(rnd) == [1, 2, 3]  # what the engine did before 2026-10-30

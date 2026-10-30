@@ -21,7 +21,7 @@ from estimation.engine import (
     bid_of,
     estimate_action,
 )
-from tests.bots.helpers import round_with
+from tests.bots.helpers import LATEST_CALL_ONLY, round_with
 
 # The rules tests check the decision logic on hands with clear counting, so they price calls by
 # the counting itself; the calibrated default has its own tests (test_calibration.py).
@@ -129,8 +129,9 @@ def test_outbid_in_its_own_trump_it_passes_to_hold_its_bid():
 
 
 def test_final_turn_raises_when_keeping_is_not_allowed_AUC_6():
-    # L5: seat 3 Dash Calls, seat 0 bids 4 Hearts, seat 1 says With, seat 2 bids 5 Hearts and
-    # seat 0 passes holding 4 Hearts. Keeping 5 Hearts would total 13 with nobody to estimate.
+    # Under the With rules before 2026-10-30: seat 3 Dash Calls, seat 0 bids 4 Hearts, seat 1
+    # says With, seat 2 bids 5 Hearts and seat 0 passes holding 4 Hearts. Seats 0 and 1 would
+    # keep 4 each, so keeping 5 Hearts would total 13 with nobody to estimate.
     bot = SearchBot(0, FAST)
     rnd = round_with(
         2,
@@ -143,6 +144,7 @@ def test_final_turn_raises_when_keeping_is_not_allowed_AUC_6():
         WITH,
         bid_action(5, HEARTS),
         PASS,
+        config=LATEST_CALL_ONLY,
     )
     assert rnd.current_player == 2
     legal = rnd.legal_actions()

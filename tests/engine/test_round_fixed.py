@@ -107,6 +107,21 @@ def test_FIX_4_with_answers_and_final_turn_work_in_the_super_call_auction():
     assert legal_estimates(rnd) == list(range(10))
 
 
+def test_FIX_4_a_with_player_who_chooses_in_the_super_call_auction():
+    # Seat 0 super-calls 8 Spades, seat 1 outbids it with 9 Spades and keeps it: seat 0 called
+    # Spades, so it is With and chooses 8 or 9 first (EST-2); 9 would score as a super call.
+    rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), bid(9, SPADES), PASS, PASS, PASS)
+    assert rnd.current_player == 1  # seat 1's final turn
+    rnd.step(PASS)
+    obs = rnd.observation(0)
+    assert (obs.caller, obs.trump) == (1, SPADES)
+    assert obs.with_players == (WithInfo(0, 8, SPADES),)
+    assert rnd.current_player == 0
+    assert legal_estimates(rnd) == [8, 9]
+    rnd.step(est(9))
+    assert rnd.current_player == 2  # then seats 2 and 3, from the Caller's left
+
+
 @pytest.mark.parametrize("may_bid_fixed", [True, False])
 def test_FIX_4_super_caller_answering_a_raise_follows_the_fixed_trump_switch(may_bid_fixed: bool):
     config = RulesConfig(super_caller_may_bid_fixed=may_bid_fixed)

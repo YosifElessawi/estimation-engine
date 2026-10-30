@@ -97,6 +97,7 @@ class _PublicBidding:
         "answers",
         "c",
         "caller",
+        "calls",
         "chosen",
         "cur",
         "dash",
@@ -114,6 +115,7 @@ class _PublicBidding:
         "phase",
         "pos",
         "rules",
+        "stayed",
         "super_call",
         "super_seat",
         "supers",
@@ -137,6 +139,8 @@ class _PublicBidding:
         self.top = -1
         self.top_seat = -1
         self.hold = [-1, -1, -1, -1]
+        self.calls = [-1] * 20  # each seat's last call in each trump (AUC-4)
+        self.stayed = [-1, -1, -1, -1]  # the call each seat stayed at when answering (EST-2)
         self.joined = [-1, -1, -1, -1]
         self.final = False
         self.answers: list[int] = []
@@ -178,14 +182,14 @@ class _PublicBidding:
             else:
                 actions = list(bids)
             if self.answers:
-                if len(self.answers) > 1 or not self._ends_on_13(self.top, seat, self.top):
+                if len(self.answers) > 1 or not self._ends_on_13(self.top, seat, WITH):
                     actions.append(WITH)
-                if len(self.answers) > 1 or not self._ends_on_13(self.top, seat, self.hold[seat]):
+                if len(self.answers) > 1 or not self._ends_on_13(self.top, seat, PASS):
                     actions.append(PASS)
             elif self.final:
                 if not self._answerers(seat):
-                    actions = [a for a in actions if not self._ends_on_13(a, -1, -1)]
-                if not self._ends_on_13(self.top, -1, -1):
+                    actions = [a for a in actions if not self._ends_on_13(a)]
+                if not self._ends_on_13(self.top):
                     actions.append(PASS)
             else:
                 if self.top_seat >= 0:
@@ -198,7 +202,8 @@ class _PublicBidding:
             actions.extend(a for a in range(ESTIMATE_BASE, PLAY_BASE) if a != forbidden)
             return actions
         forbidden = 13 - self.total if self.pos == len(self.order) - 1 else -1
-        return [ESTIMATE_BASE + k for k in range(self.c + 1) if k != forbidden]
+        low = max(self.with_w[self.cur], 0)  # EST-2: a choosing With player's floor
+        return [ESTIMATE_BASE + k for k in range(low, self.c + 1) if k != forbidden]
 
     def _answerers(self, bidder: int) -> list[int]:
         return [
@@ -207,16 +212,38 @@ class _PublicBidding:
             if self.joined[s] == bidder
         ]
 
-    def _ends_on_13(self, bid: int, seat: int, held: int) -> bool:
+    def _call(self, seat: int, action: int) -> None:
+        self.hold[seat] = action
+        self.calls[seat * 5 + (action - FIRST_BID) % 5] = action
+
+    def _with_call(self, seat: int, trump: int) -> int:
+        if self.rules.with_any_call:
+            return self.calls[seat * 5 + trump]
+        held = self.hold[seat]
+        return held if held >= 0 and (held - FIRST_BID) % 5 == trump else -1
+
+    def _keeps(self, call: int, c: int, stayed: int) -> bool:
+        if not self.rules.with_choose:
+            return True
+        return (call - FIRST_BID) // 5 + 4 == c or call == stayed
+
+    def _ends_on_13(self, bid: int, seat: int = -1, answer: int = -1) -> bool:
         tricks, trump = divmod(bid - FIRST_BID, 5)
-        total = tricks + 4
+        c = tricks + 4
+        total = c
         for s in range(4):
             if s == self.top_seat or self.dash[s]:
                 continue
-            h = held if s == seat else self.hold[s]
-            if h < 0 or (h - FIRST_BID) % 5 != trump:
+            if s == seat and answer == WITH:
+                total += c
+                continue
+            call = self._with_call(s, trump)
+            if call < 0:
                 return False
-            total += (h - FIRST_BID) // 5 + 4
+            stayed = self.hold[s] if s == seat and answer == PASS else self.stayed[s]
+            if not self._keeps(call, c, stayed):
+                return False
+            total += (call - FIRST_BID) // 5 + 4
         return total == 13
 
     def step(self, seat: int, action: int) -> None:
@@ -245,8 +272,9 @@ class _PublicBidding:
                     self._next_bidder(seat)
                     return
                 if action == WITH:
-                    self.hold[seat] = self.top
+                    self._call(seat, self.top)
                 else:
+                    self.stayed[seat] = self.hold[seat]
                     self.joined[seat] = -1
                 self.answers.pop(0)
                 if self.answers:
@@ -258,7 +286,7 @@ class _PublicBidding:
                 if self.final:
                     answerers = self._answerers(seat)
                     self.top = action
-                    self.hold[seat] = action
+                    self._call(seat, action)
                     if answerers:
                         self.final = False
                         self.answers = answerers
@@ -273,7 +301,7 @@ class _PublicBidding:
                     return
                 self.out[seat] = True
             else:  # WITH
-                self.hold[seat] = self.top
+                self._call(seat, self.top)
                 self.joined[seat] = self.top_seat
                 self.out[seat] = True
             self._next_bidder(seat)
@@ -290,15 +318,17 @@ class _PublicBidding:
             self.top_seat = seat
             self.out = [False, False, False, False]
             self.hold = [-1, -1, -1, -1]
-            self.hold[seat] = action
+            self.calls = [-1] * 20
+            self.stayed = [-1, -1, -1, -1]
+            self._call(seat, action)
             self.joined = [-1, -1, -1, -1]
             self.final = False
             self.answers = []
             self.phase = Phase.AUCTION
             self._next_bidder(seat)
             return
-        if self.caller >= 0 and k == self.c:
-            self.with_w[seat] = self.c
+        if self.caller >= 0 and (k == self.c or self.with_w[seat] >= 0):
+            self.with_w[seat] = k  # EST-4, or a choosing With player's pick (EST-2)
         self.est[seat] = k
         self.total += k
         self.pos += 1
@@ -313,7 +343,7 @@ class _PublicBidding:
                     self.joined[s] = -1
         self.top = action
         self.top_seat = seat
-        self.hold[seat] = action
+        self._call(seat, action)
         self.joined[seat] = -1
         self.out[seat] = False
 
@@ -334,18 +364,26 @@ class _PublicBidding:
         self.c = tricks
         self.trump = trump
         self.final = False
-        for s, held in enumerate(self.hold):
-            if s != caller and not self.dash[s] and held >= 0 and (held - FIRST_BID) % 5 == trump:
-                w = (held - FIRST_BID) // 5 + 4
-                self.with_w[s] = w
+        after = ((caller + 1) & 3, (caller + 2) & 3, (caller + 3) & 3)
+        choosers: list[int] = []
+        for s in after:
+            if self.dash[s]:
+                continue
+            call = self._with_call(s, trump)
+            if call < 0:
+                continue
+            w = (call - FIRST_BID) // 5 + 4
+            self.with_w[s] = w
+            if self._keeps(call, tricks, self.stayed[s]):
                 self.est[s] = w
                 self.total += w
+            else:
+                choosers.append(s)
         self.est[caller] = tricks
         self.total += tricks
-        self.order = tuple(
-            s
-            for s in ((caller + 1) & 3, (caller + 2) & 3, (caller + 3) & 3)
-            if not self.dash[s] and self.with_w[s] < 0
+        self.order = (
+            *choosers,
+            *(s for s in after if not self.dash[s] and self.with_w[s] < 0),
         )
         self.pos = 0
         if self.order:
@@ -356,15 +394,15 @@ class _PublicBidding:
     def observation(self, seat: int) -> Observation:
         if self.phase is Phase.AUCTION:
             top_trump = (self.top - FIRST_BID) % 5
+            calls = (
+                (s, self._with_call(s, top_trump))
+                for s in range(4)
+                if self.top_seat >= 0 and s != self.top_seat and self.out[s] and not self.dash[s]
+            )
             with_players = tuple(
-                WithInfo(s, (h - FIRST_BID) // 5 + 4, top_trump)
-                for s, h in enumerate(self.hold)
-                if self.top_seat >= 0
-                and s != self.top_seat
-                and self.out[s]
-                and not self.dash[s]
-                and h >= 0
-                and (h - FIRST_BID) % 5 == top_trump
+                WithInfo(s, (call - FIRST_BID) // 5 + 4, top_trump)
+                for s, call in calls
+                if call >= 0
             )
         else:
             with_players = tuple(

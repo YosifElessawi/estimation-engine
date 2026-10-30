@@ -6,11 +6,17 @@ from estimation.engine import (
     Observation,
     Phase,
     Round,
+    RulesConfig,
     TrickRecord,
     bid_action,
     mask_of,
     parse_hand,
 )
+from estimation.engine.config import DEFAULT_CONFIG
+
+# The With rules before 2026-10-30 (SPEC AUC-4, EST-2): only the latest call counts and a With
+# player keeps its number. Bots and fingerprints made under them are tested under them.
+LATEST_CALL_ONLY = RulesConfig(with_any_call=False, with_choose=False)
 
 
 def deal_with(seat: int, text: str) -> tuple[int, int, int, int]:
@@ -25,10 +31,15 @@ def deal_with(seat: int, text: str) -> tuple[int, int, int, int]:
 
 
 def round_with(
-    seat: int, text: str, *actions: int, round_no: int = 1, fixed_trump: int | None = None
+    seat: int,
+    text: str,
+    *actions: int,
+    round_no: int = 1,
+    fixed_trump: int | None = None,
+    config: RulesConfig = DEFAULT_CONFIG,
 ) -> Round:
     """Round ``round_no`` dealt by ``deal_with(seat, text)``, after the given actions."""
-    rnd = Round.new(round_no, deal_with(seat, text), fixed_trump)
+    rnd = Round.new(round_no, deal_with(seat, text), fixed_trump, config=config)
     for action in actions:
         rnd.step(action)
     return rnd
