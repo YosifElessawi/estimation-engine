@@ -14,8 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from estimation.engine import RulesConfig
+
 from .duplicate import ROTATIONS, ArenaRun, SetResult
-from .games import changed_rules, code_version
+from .games import changed_rules, code_version, played_by
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -120,9 +122,9 @@ def _percent(share: float) -> str:
 
 
 def format_report(report: Report) -> str:
-    rules = (
-        ", ".join(f"{k}={v}" for k, v in report.rules.items()) if report.rules else "default rules"
-    )
+    played = played_by(report.rules)
+    changed = {k: v for k, v in changed_rules(played).items() if v != getattr(RulesConfig(), k)}
+    rules = ", ".join(f"{k}={v}" for k, v in changed.items()) if changed else "default rules"
     lines = [
         f"Duplicate arena: {', '.join(report.lineup)}",
         f"{report.sets:,} sets x {ROTATIONS} rotations = {report.bolas:,} Bolas "

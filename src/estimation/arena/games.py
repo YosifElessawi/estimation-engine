@@ -85,19 +85,33 @@ def code_version() -> str:
     return version_of(commit, changes)
 
 
+# Rules added after games files were first written, with the value every file written before
+# them was played by. A header always lists them, so a header without one predates it.
+LEGACY_RULES: dict[str, Any] = {"with_any_call": False, "with_choose": False}  # 2026-10-30
+
+
 def changed_rules(config: RulesConfig) -> dict[str, Any]:
-    """The rules that differ from the defaults, by field name."""
+    """The rules that differ from the defaults, by field name, and always ``LEGACY_RULES``'
+    fields."""
     defaults = RulesConfig()
     return {
         field.name: getattr(config, field.name)
         for field in dataclasses.fields(config)
-        if getattr(config, field.name) != getattr(defaults, field.name)
+        if field.name in LEGACY_RULES
+        or getattr(config, field.name) != getattr(defaults, field.name)
     }
 
 
+def played_by(rules: dict[str, Any]) -> RulesConfig:
+    """The rules a saved header or report's ``rules`` stand for: a rule they do not list has its
+    default, or its ``LEGACY_RULES`` value when they predate that rule."""
+    return RulesConfig(**{**LEGACY_RULES, **rules})
+
+
 def rules_of(header: GamesHeader | None) -> RulesConfig:
-    """The rules a games file was played by (the defaults for a web game)."""
-    return RulesConfig(**header.rules) if header is not None else RulesConfig()
+    """The rules a games file was played by (``played_by`` its header). A web game, which has no
+    header, is replayed by the current defaults."""
+    return played_by(header.rules) if header is not None else RulesConfig()
 
 
 def make_header(
