@@ -47,6 +47,9 @@ def test_public_bidding_reproduces_every_non_card_observation_and_legal_list():
     configs = (
         RulesConfig(),
         RulesConfig(super_call_min=9, super_caller_may_bid_fixed=True),
+        RulesConfig(with_any_call=False),
+        RulesConfig(with_choose=False),
+        RulesConfig(with_any_call=False, with_choose=False),
     )
     checked = 0
     saw_super = saw_with = saw_dash = False
@@ -83,6 +86,33 @@ def test_public_bidding_reproduces_every_non_card_observation_and_legal_list():
     assert saw_super
     assert saw_with
     assert saw_dash
+
+
+@pytest.mark.parametrize(
+    "rules", [RulesConfig(), RulesConfig(with_any_call=False, with_choose=False)]
+)
+def test_public_bidding_follows_L12_an_earlier_call_in_the_winning_trump(rules: RulesConfig):
+    """Yosif's round (SPEC L12): seat 3 bids 5 Sans, later 6 Hearts, and Sans wins. Under the
+    default rules it is With and chooses first, and the mirror must agree step by step."""
+    sans, hearts = FIRST_BID + 5 + 4, FIRST_BID + 10 + 2  # 5 Sans, 6 Hearts
+    auction = [(1, 0), (2, 0), (3, 0), (0, 0), (1, 53), (2, 53), (3, sans), (0, 52)]
+    auction += [(3, hearts), (0, FIRST_BID + 10 + 4), (3, 53), (0, 53)]
+    rnd = Round.new(10, deal(5, 10), config=rules)
+    for seat, action in auction:
+        assert rnd.current_player == seat
+        rnd.step(action)
+    while rnd.phase is Phase.ESTIMATION:
+        rnd.step(rnd.legal_actions()[-1])
+    log = list(rnd.log)
+    replayed = Round.new(10, deal(5, 10), config=rules)
+    state = _PublicBidding(replayed.observation(0), rules)
+    for seat, action in log:
+        assert state.legal_actions() == replayed.legal_actions()
+        assert state.observation(seat) == replace(replayed.observation(seat), hand=0)
+        state.step(seat, action)
+        replayed.step(action)
+    order = [seat for seat, action in log[len(auction) :]]
+    assert order == ([3, 1, 2] if rules.with_any_call else [1, 2, 3])
 
 
 def test_bidding_history_matches_encoded_engine_observations():

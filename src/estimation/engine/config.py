@@ -18,6 +18,8 @@ class RulesConfig:
     super_call_scoring: bool = True  # SCR-6
     super_call_min: int = 8  # SCR-6 and FIX-4
     super_caller_may_bid_fixed: bool = True  # FIX-4, open question (SPEC §4)
+    with_any_call: bool = True  # AUC-4: any call in the winning trump makes a player With
+    with_choose: bool = True  # EST-2: a With player not kept at its w picks w to c, first
     calls_to_double: int = 3  # SCR-8
     calls_count_risk_and_dash: bool = False  # SCR-8
     all_lose_doubles_next: bool = True  # SCR-9

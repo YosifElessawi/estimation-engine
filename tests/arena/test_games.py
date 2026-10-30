@@ -152,3 +152,23 @@ def test_damaged_files_and_lines_are_skipped_and_counted(tmp_path: Path):
     web = tmp_path / "games.jsonl"
     web.write_text('{"not": "a game"}\n{broken json\n')
     assert read_games(web) == (None, [], 2)
+
+
+def test_headers_always_list_the_with_rules_and_old_files_replay_by_the_old_ones():
+    from estimation.arena.games import LEGACY_RULES, changed_rules, make_header, rules_of
+
+    assert changed_rules(RulesConfig()) == {"with_any_call": True, "with_choose": True}
+    written = make_header(("heuristic",) * 4, 1, 0, RulesConfig(), version="test")
+    assert rules_of(written) == RulesConfig()
+    # A file written before 2026-10-30 lists neither: it was played by the old With rules.
+    old = rules_of(HEADER)
+    assert (old.with_any_call, old.with_choose) == (False, False)
+    assert set(LEGACY_RULES) == {"with_any_call", "with_choose"}
+    assert rules_of(None) == RulesConfig()  # a web game: the current rules
+
+
+def test_a_ladder_pair_played_before_the_with_rules_changed_is_not_reused():
+    from estimation.arena.games import played_by
+
+    assert played_by({}) != RulesConfig()  # an old report: the With rules of its day
+    assert played_by({"with_any_call": True, "with_choose": True}) == RulesConfig()

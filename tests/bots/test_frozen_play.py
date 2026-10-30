@@ -3,7 +3,8 @@
 HeuristicBot anchors the Elo ladder, and saved ladder pairs and games name ``pimc``,
 ``pimc:samples=N`` and ``yosif``, so a change to any of them would quietly move every rating
 measured through them. Each test plays seeded games and compares a fingerprint of every action
-and score with the one recorded before the Search bot got its own play-out rules (2026-10-27).
+and score with the one recorded before the Search bot got its own play-out rules (2026-10-27),
+under the rules of that day (the With rules changed on 2026-10-30).
 
 HeuristicBot and ``pimc`` are measuring sticks and stay frozen: if one of their tests fails,
 undo the change. ``yosif`` is the Search bot's old name, so its tests also prove the merge left
@@ -17,14 +18,18 @@ from collections.abc import Sequence
 from estimation.bots import make_bot
 from estimation.engine import Bola
 
+from .helpers import LATEST_CALL_ONLY
+
 
 def fingerprint(lineup: Sequence[str], seeds: Sequence[int], rounds: int | None = None) -> str:
     """A hash of every action and the scores of seeded Bolas with ``lineup`` in seats 0-3,
     stopping each one after ``rounds`` rounds when given."""
     digest = hashlib.sha256()
     for seed in seeds:
-        bots = [make_bot(spec, seed * 4 + seat) for seat, spec in enumerate(lineup)]
-        bola = Bola(seed)
+        bots = [
+            make_bot(spec, seed * 4 + seat, LATEST_CALL_ONLY) for seat, spec in enumerate(lineup)
+        ]
+        bola = Bola(seed, LATEST_CALL_ONLY)
         while not bola.is_over and (rounds is None or len(bola.history) < rounds):
             seat = bola.current_player
             assert seat is not None

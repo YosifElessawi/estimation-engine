@@ -12,6 +12,7 @@ from estimation.engine.actions import (
     play_action,
 )
 from estimation.engine.cards import CLUBS, SANS, deal, parse_card
+from estimation.engine.config import DEFAULT_CONFIG, RulesConfig
 from estimation.engine.round import Round
 
 NO = NO_DASH_CALL
@@ -31,8 +32,18 @@ def play(text: str) -> int:
     return play_action(parse_card(text))
 
 
-def new_round(round_no: int = 1, fixed_trump: int | None = None, seed: int = 0) -> Round:
-    return Round.new(round_no, deal(seed, round_no), fixed_trump)
+# The auction's With rules before 2026-10-30: only the latest call counts, and a With player
+# keeps its number (AUC-4, EST-2 with with_any_call and with_choose off).
+LATEST_CALL_ONLY = RulesConfig(with_any_call=False, with_choose=False)
+
+
+def new_round(
+    round_no: int = 1,
+    fixed_trump: int | None = None,
+    seed: int = 0,
+    config: RulesConfig = DEFAULT_CONFIG,
+) -> Round:
+    return Round.new(round_no, deal(seed, round_no), fixed_trump, config=config)
 
 
 def run(rnd: Round, *actions: int) -> Round:

@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from estimation.bots import make_bot
+from estimation.engine import RulesConfig
 
 from .duplicate import SetResult, run_arena
-from .games import code_version, make_header, read_header, write_games
+from .games import code_version, make_header, played_by, read_header, write_games
 from .ratings import (
     ANCHOR,
     ANCHOR_RATING,
@@ -212,7 +213,7 @@ def _saved(
         same = same and header is not None and header.code_version == version
     same = same and header is not None and list(header.lineup) == lineup
     same = same and header is not None and (header.sets, header.seed) == (sets, seed)
-    return report if same and not report["rules"] else None
+    return report if same and played_by(report["rules"]) == RulesConfig() else None
 
 
 def play_pair(

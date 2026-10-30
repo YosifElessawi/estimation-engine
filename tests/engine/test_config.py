@@ -22,6 +22,8 @@ def test_rules_config_defaults_match_the_spec():
         "super_call_scoring": True,
         "super_call_min": 8,
         "super_caller_may_bid_fixed": True,
+        "with_any_call": True,
+        "with_choose": True,
         "calls_to_double": 3,
         "calls_count_risk_and_dash": False,
         "all_lose_doubles_next": True,

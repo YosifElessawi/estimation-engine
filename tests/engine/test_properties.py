@@ -38,7 +38,7 @@ ROUND_REPLAY_RATE = 0.1
 BOLA_REPLAY_EVERY = 10
 
 
-def test_flags_under_test_are_the_nine_rules_config_switches():
+def test_flags_under_test_are_the_eleven_rules_config_switches():
     assert BOOL_FLAGS == [
         "only_bonus_for_dash_calls",
         "only_winner_for_super_calls",
@@ -46,6 +46,8 @@ def test_flags_under_test_are_the_nine_rules_config_switches():
         "dash_replaces_base",
         "super_call_scoring",
         "super_caller_may_bid_fixed",
+        "with_any_call",
+        "with_choose",
         "calls_count_risk_and_dash",
         "all_lose_doubles_next",
         "carry_stacks",
