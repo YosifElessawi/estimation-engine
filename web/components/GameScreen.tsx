@@ -13,6 +13,10 @@ import { Drawer, type DrawerTab } from "./Drawer";
 import { RoundResult } from "./RoundResult";
 import { Table } from "./Table";
 
+// The public build (NEXT_PUBLIC_EDITION=public, see PublicApp) leaves out what only the full table
+// has. Checked in this module so the build folds it away.
+const PUBLIC = process.env.NEXT_PUBLIC_EDITION === "public";
+
 const CHUNK = 80;
 
 /** How long a frame stays on screen while the game plays itself, in ms at normal speed. */
@@ -27,7 +31,8 @@ function dwell(frame: Frame): number {
 
 interface Props {
   initial: GameView;
-  onNewGame: () => void;
+  /** Leave the game for a new one; ``finished`` says whether it is over. */
+  onNewGame: (finished: boolean) => void;
   onOpen: (game: GameView) => void;
 }
 
@@ -35,12 +40,14 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
   const [game, setGame] = useState(initial);
   const spectator = game.mode !== "play";
   const bottom = game.human_seat ?? 0;
+  // The public table sends nothing before the player's last move (server/public).
+  const first = initial.start ?? 0;
 
   const cache = useRef(new Map<number, Frame>());
   const knownRef = useRef(initial.known);
   const finishedRef = useRef(initial.finished);
   const [, setVersion] = useState(0);
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(first);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoplay, setAutoplay] = useState(false);
@@ -69,10 +76,10 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
     [game.id, store],
   );
 
-  // First frames: a watched game's opening, or everything up to the human's first decision.
+  // First frames: a watched game's opening, or everything up to the human's next decision.
   useEffect(() => {
-    fetchFrames(0, spectator ? CHUNK : 500).catch(report);
-  }, [fetchFrames, spectator, report]);
+    fetchFrames(first, spectator ? CHUNK : 500).catch(report);
+  }, [fetchFrames, first, spectator, report]);
 
   const goTo = useCallback(
     async (target: number) => {
@@ -204,7 +211,11 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
-      if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      if (event.key === "Escape") {
+        setDrawer(null);
+      } else if (PUBLIC) {
+        // no stepping back at the public table: the last trick is in the Log
+      } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
         event.preventDefault();
         const forward = event.key === "ArrowRight";
         if (event.shiftKey) void seek(forward ? "next" : "prev", "trick");
@@ -212,8 +223,6 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
       } else if (event.key === " " && spectator) {
         event.preventDefault();
         setAutoplay((on) => !on);
-      } else if (event.key === "Escape") {
-        setDrawer(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -241,13 +250,15 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
     [frame, move],
   );
 
-  const tabs: DrawerTab[] = game.seats.some((seat) => seat.explains) && spectator ? ["scores", "log", "why"] : ["scores", "log"];
+  const tabs: DrawerTab[] =
+    !PUBLIC && game.seats.some((seat) => seat.explains) && spectator ? ["scores", "log", "why"] : ["scores", "log"];
   const toggle = (tab: DrawerTab) => setDrawer((open) => (open === tab ? null : tab));
+  const leave = () => onNewGame(finishedRef.current);
 
   if (!frame) {
     return (
       <div className="game">
-        <TopBar game={game} frame={null} drawer={drawer} tabs={tabs} onToggle={toggle} onNewGame={onNewGame} />
+        <TopBar game={game} frame={null} drawer={drawer} tabs={tabs} onToggle={toggle} onNewGame={leave} />
         <div className="game__loading">{error ?? "Dealing…"}</div>
       </div>
     );
@@ -256,17 +267,23 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
   const turn = frame.table.current_player;
   const resultActions =
     frame.kind === "game_end" ? (
-      <>
-        {game.mode !== "review" && <span className="result__saved">Saved under Past games on the start page.</span>}
-        {game.mode === "play" && (
-          <button type="button" className="btn btn--primary" onClick={review}>
-            Review with every hand
-          </button>
-        )}
-        <button type="button" className="btn btn--ghost" onClick={onNewGame}>
-          New game
+      PUBLIC ? (
+        <button type="button" className="btn btn--primary" onClick={leave}>
+          Play again
         </button>
-      </>
+      ) : (
+        <>
+          {game.mode !== "review" && <span className="result__saved">Saved under Past games on the start page.</span>}
+          {game.mode === "play" && (
+            <button type="button" className="btn btn--primary" onClick={review}>
+              Review with every hand
+            </button>
+          )}
+          <button type="button" className="btn btn--ghost" onClick={leave}>
+            New game
+          </button>
+        </>
+      )
     ) : !spectator && frame.kind === "round_end" && index < last ? (
       <button
         type="button"
@@ -281,7 +298,14 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
     ) : null;
 
   const dock = spectator ? null : decisions.length > 0 ? (
-    <DecisionPanel key={frame.index} legal={decisions} table={frame.table} busy={busy} onAct={(action) => void move(action)} />
+    <DecisionPanel
+      key={frame.index}
+      legal={decisions}
+      table={frame.table}
+      game={game}
+      busy={busy}
+      onAct={(action) => void move(action)}
+    />
   ) : (
     <StatusPill
       frame={frame}
@@ -304,7 +328,7 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
         drawer={drawer}
         tabs={tabs}
         onToggle={toggle}
-        onNewGame={onNewGame}
+        onNewGame={leave}
         pace={spectator ? null : <SpeedSelect speed={speed} onSpeed={setSpeed} />}
       />
       <div className="game__body">
@@ -336,7 +360,7 @@ export function GameScreen({ initial, onNewGame, onOpen }: Props) {
           <Drawer tab={drawer} tabs={tabs} frame={frame} game={game} onTab={setDrawer} onClose={() => setDrawer(null)} />
         )}
       </div>
-      {spectator && (
+      {!PUBLIC && spectator && (
         <WatchBar
           index={index}
           known={known}
@@ -400,7 +424,9 @@ function TopBar({
           </span>
         )}
         {table && table.carry > 1 && <span className="tag tag--rose">Counts x{table.carry}</span>}
-        {game.mode !== "play" && <span className="tag tag--muted">{game.mode === "watch" ? "Watching" : "Reviewing"}</span>}
+        {!PUBLIC && game.mode !== "play" && (
+          <span className="tag tag--muted">{game.mode === "watch" ? "Watching" : "Reviewing"}</span>
+        )}
       </div>
       {frame && <Contract frame={frame} game={game} />}
       <div className="bar__tools">
@@ -451,6 +477,14 @@ function Contract({ frame, game }: { frame: Frame; game: GameView }) {
       <span key="caller">
         <span className="contract__who">{seatName(game, caller)} called</span>
         <span className="contract__short">Contract</span> <b>{contract}</b>
+      </span>,
+    );
+  }
+  if (table.phase === "auction" && table.top_bid && table.top_bidder !== null) {
+    parts.push(
+      <span key="top">
+        <span className="contract__who">Top bid</span> <b>{table.top_bid.tricks}</b> <TrumpGlyph trump={table.top_bid.trump} />{" "}
+        <span className="contract__who">{seatName(game, table.top_bidder)}</span>
       </span>,
     );
   }

@@ -226,8 +226,9 @@ class GameSession:
 
     def _run_bots(self) -> None:
         """Play bots until the human must act or the game ends, then offer the human's legal
-        actions on the last frame."""
-        while not self.bola.is_over and self.bola.current_player != self.human:
+        actions on the last frame. A played game rebuilt from its action log (``script``) first
+        replays every logged move, the human's included."""
+        while not self.bola.is_over and (self._script or self.bola.current_player != self.human):
             self._step()
         if self.human is not None and not self.bola.is_over:
             obs = self.bola.observation(self.human)
