@@ -10,7 +10,8 @@ class RulesConfig:
     risk_points: int = 10  # SCR-4, per Risk
     only_bonus: int = 10  # SCR-5
     only_bonus_for_dash_calls: bool = True  # SCR-5
-    only_bonus_for_super_calls: bool = True  # SCR-5
+    only_winner_for_super_calls: bool = True  # SCR-5
+    only_loser_for_super_calls: bool = True  # SCR-5
     dash_over: int = 25  # SCR-2
     dash_under: int = 33  # SCR-2
     dash_replaces_base: bool = True  # SCR-2

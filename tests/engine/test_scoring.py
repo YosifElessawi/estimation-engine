@@ -128,15 +128,15 @@ G5B = dataclasses.replace(G5A, tricks=(7, 2, 1, 3))
 
 def test_G5_super_call_at_8_made():
     result = score_round(G5A)
-    assert result.scores == (74, 12, 11, -11)
-    assert components(result, 0) == {"super": 64, "call": 10}
+    assert result.scores == (64, 12, 11, -11)
+    assert components(result, 0) == {"super": 64}
     assert result.seats[0].is_super
 
 
 def test_G5_super_call_at_8_failed():
     result = score_round(G5B)
-    assert result.scores == (-52, 12, 11, 13)
-    assert components(result, 0) == {"super": -32, "call": -10, "only": -10}
+    assert result.scores == (-42, 12, 11, 13)
+    assert components(result, 0) == {"super": -32, "only": -10}
 
 
 def test_G5_super_call_scoring_off():
@@ -145,8 +145,8 @@ def test_G5_super_call_scoring_off():
     assert score_round(G5B, off).scores[0] == -21
 
 
-def test_G5_only_bonus_for_super_calls_off():
-    assert score_round(G5B, cfg(only_bonus_for_super_calls=False)).scores[0] == -42
+def test_G5_only_loser_for_super_calls_off():
+    assert score_round(G5B, cfg(only_loser_for_super_calls=False)).scores[0] == -32
 
 
 G6 = RoundOutcome(
@@ -227,8 +227,8 @@ G9 = RoundOutcome(
 
 def test_G9_super_call_in_a_fixed_trump_round():
     result = score_round(G9)
-    assert result.scores == (74, 12, -11, 13)
-    assert components(result, 0) == {"super": 64, "call": 10}
+    assert result.scores == (64, 12, -11, 13)
+    assert components(result, 0) == {"super": 64}
     assert result.trump_changed is True
 
 
@@ -339,6 +339,30 @@ def test_SCR_5_only_winner_and_only_loser():
 def test_SCR_5_applies_to_dash_and_super_callers_by_default():
     assert score_round(G4).seats[0].only_points == -10
     assert score_round(G5B).seats[0].only_points == -10
+    solo_super_win = dataclasses.replace(G5A, tricks=(8, 1, 2, 2))
+    assert score_round(solo_super_win).seats[0].only_points == 10
+    assert (
+        score_round(solo_super_win, cfg(only_winner_for_super_calls=False)).seats[0].only_points
+        == 0
+    )
+    assert (
+        score_round(
+            solo_super_win,
+            cfg(only_winner_for_super_calls=True, only_loser_for_super_calls=False),
+        )
+        .seats[0]
+        .only_points
+        == 10
+    )
+    assert (
+        score_round(
+            G5B,
+            cfg(only_winner_for_super_calls=False, only_loser_for_super_calls=True),
+        )
+        .seats[0]
+        .only_points
+        == -10
+    )
 
 
 @pytest.mark.parametrize(("bid", "made", "missed"), [(8, 64, -32), (9, 81, -40), (10, 100, -50)])
@@ -349,7 +373,9 @@ def test_SCR_6_super_call_values(bid: int, made: int, missed: int):
     )
     loss = dataclasses.replace(win, tricks=(bid - 1, others + 1, 0, 0))
     assert score_round(win).seats[0].super_points == made
+    assert score_round(win).seats[0].call_points == 0
     assert score_round(loss).seats[0].super_points == missed
+    assert score_round(loss).seats[0].call_points == 0
 
 
 def test_SCR_6_applies_to_with_players_at_8_or_more():
@@ -360,6 +386,7 @@ def test_SCR_6_applies_to_with_players_at_8_or_more():
     assert result.seats[1].is_super
     assert result.seats[1].super_points == -40
     assert result.seats[1].base_points == 0
+    assert result.seats[1].call_points == 0
 
 
 def test_SCR_6_threshold_follows_super_call_min():
@@ -494,7 +521,8 @@ def outcomes(draw: st.DrawFn) -> RoundOutcome:
 
 @given(outcome=outcomes(), flags=st.fixed_dictionaries({
     "only_bonus_for_dash_calls": st.booleans(),
-    "only_bonus_for_super_calls": st.booleans(),
+    "only_winner_for_super_calls": st.booleans(),
+    "only_loser_for_super_calls": st.booleans(),
     "dash_replaces_base": st.booleans(),
     "super_call_scoring": st.booleans(),
     "calls_count_risk_and_dash": st.booleans(),

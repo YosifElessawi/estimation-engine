@@ -41,12 +41,14 @@ class Outlook:
 @dataclass(frozen=True, slots=True)
 class Stake:
     """A number's points: ``win`` when made, ``lose`` (a positive cost) when missed, plus
-    ``per_trick`` for each trick of the miss. ``solo`` says whether SCR-5 applies."""
+    ``per_trick`` for each trick of the miss. ``solo_win`` and ``solo_lose`` say whether
+    SCR-5's only-winner and only-loser bonuses apply."""
 
     win: float
     lose: float
     per_trick: float
-    solo: bool = True
+    solo_win: bool = True
+    solo_lose: bool = True
 
 
 def spread(chances: Iterable[float]) -> list[float]:
@@ -114,17 +116,20 @@ def stake(
             value = (rules.dash_over + rules.dash_under) / 2
         else:
             value = rules.dash_over if over else rules.dash_under
+        solo = rules.only_bonus_for_dash_calls
         if rules.dash_replaces_base:
-            return Stake(value + risk, value + risk, 0, rules.only_bonus_for_dash_calls)
-        return Stake(
-            value + rules.win_base + risk, value + risk, 1, rules.only_bonus_for_dash_calls
-        )
-    call = rules.caller_with_bonus if caller else 0
+            return Stake(value + risk, value + risk, 0, solo, solo)
+        return Stake(value + rules.win_base + risk, value + risk, 1, solo, solo)
     if caller and k >= rules.super_call_min and rules.super_call_scoring:
         square = k * k
         return Stake(
-            square + call + risk, square // 2 + call + risk, 0, rules.only_bonus_for_super_calls
+            square + risk,
+            square // 2 + risk,
+            0,
+            rules.only_winner_for_super_calls,
+            rules.only_loser_for_super_calls,
         )
+    call = rules.caller_with_bonus if caller else 0
     return Stake(rules.win_base + k + call + risk, call + risk, 1)
 
 
@@ -132,9 +137,10 @@ def expected_points(o: Outlook, k: int, s: Stake, others_make: float, rules: Rul
     """Expected points of aiming at ``k``, with SCR-5 from the chance each other player makes
     their estimate."""
     make = make_chance(o, k)
-    bonus = rules.only_bonus if s.solo else 0
-    solo_win = bonus * (1 - others_make) ** 3
-    solo_lose = bonus * others_make**3
+    win_bonus = rules.only_bonus if s.solo_win else 0
+    lose_bonus = rules.only_bonus if s.solo_lose else 0
+    solo_win = win_bonus * (1 - others_make) ** 3
+    solo_lose = lose_bonus * others_make**3
     return (
         make * (s.win + solo_win)
         - (1 - make) * (s.lose + solo_lose)

@@ -196,15 +196,15 @@ A player **wins** the round if their tricks `T` exactly equal their estimate `B`
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | SCR-1 | Base | Every player not scored by SCR-2 or SCR-6 | `+(10 + B)` | `-\|B - T\|` | `[Page]` win, `[Play]` loss |
 | SCR-2 | Dash Call | Dash callers, instead of SCR-1 | Over `+25`, Under `+33` | Over `-25`, Under `-33` | `[Page]` values, `[Play]` instead of SCR-1 |
-| SCR-3 | Caller / With | The Caller and each With player | `+10` | `-10` | `[Page]` |
+| SCR-3 | Caller / With | The Caller and each With player not scored by SCR-6 | `+10` | `-10` | `[Page]`, `[Play]` not on SCR-6 |
 | SCR-4 | Risk | The last estimator | `+10` per Risk | `-10` per Risk | `[Page]` |
 | SCR-5 | Only winner / only loser | The one winner when exactly one player won; the one loser when exactly one player lost | `+10` | `-10` | `[Page]`, `[Play]` |
-| SCR-6 | Super call | The Caller and each With player with `B >= 8`, instead of SCR-1 | `+B*B` | `-(B*B // 2)` | `[Play]` |
+| SCR-6 | Super call | The Caller and each With player with `B >= 8`, instead of SCR-1 and SCR-3 | `+B*B` | `-(B*B // 2)` | `[Play]` |
 
 - SCR-1 loss `[Play]`: the page's score table shows -10 on every loss, but the app does not apply it. A plain loss costs only the difference.
-- SCR-5 also applies to Dash callers and super callers. Each of those two cases has its own switch, both on by default (`only_bonus_for_dash_calls`, `only_bonus_for_super_calls`). `[Play]`
+- SCR-5 also applies to Dash callers (`only_bonus_for_dash_calls`) and super callers, with separate switches for a super caller's only-winner bonus (`only_winner_for_super_calls`) and only-loser penalty (`only_loser_for_super_calls`), all on by default. `[Play]`
 - SCR-6 values: 8 gives +64 / -32, 9 gives +81 / -40, 10 gives +100 / -50.
-- Switches (§5.3): with `dash_replaces_base=False`, a Dash caller also gets SCR-1 with `B = 0`. With `super_call_scoring=False`, a super caller gets SCR-1 instead of SCR-6.
+- Switches (§5.3): with `dash_replaces_base=False`, a Dash caller also gets SCR-1 with `B = 0`. With `super_call_scoring=False`, a super caller gets SCR-1 and SCR-3 instead of SCR-6.
 
 ### 3.2 Multipliers
 
@@ -265,10 +265,10 @@ Total 12: Under, 0 Risks (seat 3 could not estimate 5). With `dash_replaces_base
 
 | Case | Tricks (seats 0, 1, 2, 3) | Scores (seats 0, 1, 2, 3) | Seat 0's points |
 | :--- | :--- | :--- | :--- |
-| (a) Caller makes it | 8, 2, 1, 2 | 74, 12, 11, -11 (seat 3 only loser) | +64 super call, +10 Caller |
-| (b) Caller fails | 7, 2, 1, 3 | -52, 12, 11, 13 (seat 0 only loser) | -32 super call, -10 Caller, -10 only loser |
+| (a) Caller makes it | 8, 2, 1, 2 | 64, 12, 11, -11 (seat 3 only loser) | +64 super call |
+| (b) Caller fails | 7, 2, 1, 3 | -42, 12, 11, 13 (seat 0 only loser) | -32 super call, -10 only loser |
 
-With `super_call_scoring=False`, seat 0 scores 28 in (a) and -21 in (b). With `only_bonus_for_super_calls=False`, seat 0 scores -42 in (b).
+With `super_call_scoring=False`, seat 0 scores 28 in (a) and -21 in (b). With `only_loser_for_super_calls=False`, seat 0 scores -32 in (b).
 
 **G6. Everyone loses.** F = seat 0. Auction: seat 0 bids 4 Clubs, seat 1 says With, seats 2 and 3 pass, and seat 0 keeps its bid on its final turn. Seat 1 is With at 4, so its estimate is 4. Estimates: seat 2 estimates 4 (so it is With too), seat 3 (last) estimates 0 (1 would make 13). Total 12: Under, 0 Risks. Tricks: 5, 3, 2, 3, so every player lost.
 
@@ -292,7 +292,7 @@ With `super_call_scoring=False`, seat 0 scores 28 in (a) and -21 in (b). With `o
 
 | Seat | Role | B | T | Result | Points | Score |
 | :--- | :--- | ---: | ---: | :--- | :--- | ---: |
-| 0 | Caller, super call | 8 | 8 | win | +64 super call, +10 Caller | 74 |
+| 0 | Caller, super call | 8 | 8 | win | +64 super call | 64 |
 | 1 | | 2 | 2 | win | 10+2 | 12 |
 | 2 | | 1 | 0 | loss, only loser | -1, -10 only loser | -11 |
 | 3 | Last estimator | 3 | 3 | win | 10+3 | 13 |
@@ -360,7 +360,8 @@ class RulesConfig:
     risk_points: int = 10  # SCR-4, per Risk
     only_bonus: int = 10  # SCR-5
     only_bonus_for_dash_calls: bool = True  # SCR-5
-    only_bonus_for_super_calls: bool = True  # SCR-5
+    only_winner_for_super_calls: bool = True  # SCR-5
+    only_loser_for_super_calls: bool = True  # SCR-5
     dash_over: int = 25  # SCR-2
     dash_under: int = 33  # SCR-2
     dash_replaces_base: bool = True  # SCR-2

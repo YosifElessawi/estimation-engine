@@ -172,16 +172,13 @@ def score_round(outcome: RoundOutcome, config: RulesConfig = DEFAULT_CONFIG) -> 
             super_points = b * b if win else -(b * b // 2)
         else:  # SCR-1
             base = config.win_base + b if win else -abs(b - t)
-        if is_caller or is_with:  # SCR-3
+        if (is_caller or is_with) and not (is_super and config.super_call_scoring):  # SCR-3
             call = sign * config.caller_with_bonus
         if is_last:  # SCR-4
             risk = sign * config.risk_points * risks
-        if (
-            (winners == 1 and win) or (winners == 3 and not win)  # SCR-5
-        ) and (
-            (not is_dash or config.only_bonus_for_dash_calls)
-            and (not is_super or config.only_bonus_for_super_calls)
-        ):
+        only_win = winners == 1 and win and (not is_super or config.only_winner_for_super_calls)
+        only_lose = winners == 3 and not win and (not is_super or config.only_loser_for_super_calls)
+        if (only_win or only_lose) and (not is_dash or config.only_bonus_for_dash_calls):  # SCR-5
             only = sign * config.only_bonus
 
         points = base + dash + call + risk + only + super_points

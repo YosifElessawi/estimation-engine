@@ -89,8 +89,8 @@ def test_stake_matches_G4_dash_under():
 
 def test_stake_matches_G5_super_call_made_and_missed():
     s = stake(8, caller=True, dash=False, last_risks=0, over=True, rules=RULES)
-    assert s.win == engine_points(G5A, 0) == 74
-    assert -(s.lose + s.per_trick * 1) == engine_points(G5B, 0) == -42
+    assert s.win == engine_points(G5A, 0) == 64
+    assert -(s.lose + s.per_trick * 1) == engine_points(G5B, 0) == -32
 
 
 def test_stake_matches_super_call_scoring_off():
