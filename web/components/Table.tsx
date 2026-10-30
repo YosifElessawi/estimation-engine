@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 
 import { SANS, bySuit, sortHand, suitOf, trickLeader } from "@/lib/cards";
 import { type Position, formatElo, positionOf, seatName } from "@/lib/seats";
@@ -8,6 +8,10 @@ import type { Frame, GameView, TableView } from "@/lib/types";
 
 import { CallText, TrumpGlyph } from "./ActionText";
 import { Backs, PlayingCard } from "./PlayingCard";
+
+// The public build (NEXT_PUBLIC_EDITION=public, see PublicApp) leaves out what only the full table
+// has. Checked in this module so the build folds it away.
+const PUBLIC = process.env.NEXT_PUBLIC_EDITION === "public";
 
 interface TableProps {
   frame: Frame;
@@ -150,7 +154,7 @@ function Seat({
       className={`seat seat--${position} ${turn ? "is-turn" : ""} ${out ? "is-out" : ""}`}
       aria-label={name}
     >
-      <div className="plate" title={info && !human ? `${info.label} · Elo ${formatElo(info.elo)}` : undefined}>
+      <div className="plate" title={!PUBLIC && info && !human ? `${info.label} · Elo ${formatElo(info.elo)}` : undefined}>
         <Avatar seat={seat} human={human} name={name} turn={turn} />
         <div className="plate__info">
           <div className="plate__name">
@@ -259,7 +263,7 @@ function Center({
     );
   }
   if (table.phase === "play" || table.phase === "done") {
-    return <Trick frame={frame} game={game} bottom={bottom} awaitingMyCard={awaitingMyCard} />;
+    return <Trick key={table.tricks_played} frame={frame} game={game} bottom={bottom} awaitingMyCard={awaitingMyCard} />;
   }
   if (table.phase === "auction") {
     if (table.top_bid && table.top_bidder !== null) {
@@ -307,6 +311,8 @@ function Center({
   );
 }
 
+/** The cards on the table. While a trick is under way, "Last trick" shows the one before it
+ * (the only earlier trick the public table lets a player see again). */
 function Trick({
   frame,
   game,
@@ -318,20 +324,26 @@ function Trick({
   bottom: number;
   awaitingMyCard: boolean;
 }) {
+  const [peek, setPeek] = useState(false);
   const table = frame.table;
   const event = frame.event;
+  const last = table.last_trick;
+  const justTaken = table.trick.length === 0 && event?.trick_winner !== null && event?.trick_winner !== undefined;
+  const canPeek = last !== null && !justTaken && table.phase === "play";
+  const peeking = peek && canPeek;
   let cards = table.trick;
   let winner: number | null = null;
-  if (cards.length === 0 && event?.trick_winner !== null && event?.trick_winner !== undefined && table.last_trick) {
-    cards = table.last_trick.cards;
-    winner = table.last_trick.winner;
+  if (last && (justTaken || peeking)) {
+    cards = last.cards;
+    winner = last.winner;
   }
   const done = winner !== null;
   const leading = done ? winner : trickLeader(cards, table.trump);
-  const fresh = event?.action.kind === "play" ? event.action.card : null;
+  const fresh = !peeking && event?.action.kind === "play" ? event.action.card : null;
   const winnerName = winner !== null ? seatName(game, winner) : null;
+  const you = winnerName === "You";
   return (
-    <div className="trick" aria-label="Cards on the table">
+    <div className={`trick ${peeking ? "is-peeking" : ""}`} aria-label={peeking ? "The last trick" : "Cards on the table"}>
       {awaitingMyCard && !done && <div className="trick__slot trick__slot--s trick__slot--empty" aria-hidden />}
       {cards.map(({ seat, card }, order) => {
         const slot = SLOT[positionOf(seat, bottom)];
@@ -348,8 +360,13 @@ function Trick({
       })}
       {done && winner !== null && (
         <div className={`trick__label trick__label--${SLOT[positionOf(winner, bottom)]}`}>
-          {winnerName} {winnerName === "You" ? "take" : "takes"} it
+          {peeking ? `${winnerName} took the last trick` : `${winnerName} ${you ? "take" : "takes"} it`}
         </div>
+      )}
+      {canPeek && (
+        <button type="button" className={`trick__peek ${peeking ? "is-on" : ""}`} aria-pressed={peeking} onClick={() => setPeek(!peeking)}>
+          {peeking ? "Back to this trick" : "Last trick"}
+        </button>
       )}
     </div>
   );

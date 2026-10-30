@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { api } from "@/lib/api";
+import { lobbyApi } from "@/lib/lobbyApi";
 import type { BotView, GameView } from "@/lib/types";
 
 import { GameScreen } from "./GameScreen";
@@ -17,7 +17,7 @@ export function EstimationApp() {
   useEffect(() => {
     let cancelled = false;
     const load = (attempt: number) => {
-      api
+      lobbyApi
         .bots()
         .then((found) => {
           if (!cancelled) {

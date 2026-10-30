@@ -8,6 +8,10 @@ import type { Frame, GameView } from "@/lib/types";
 import { ActionText, CardGlyph, TrumpGlyph } from "./ActionText";
 import { Avatar } from "./Table";
 
+// The public build (NEXT_PUBLIC_EDITION=public, see PublicApp) leaves out what only the full table
+// has. Checked in this module so the build folds it away.
+const PUBLIC = process.env.NEXT_PUBLIC_EDITION === "public";
+
 export type DrawerTab = "scores" | "log" | "why";
 
 const TITLES: Record<DrawerTab, string> = { scores: "Scores", log: "Log", why: "Why" };
@@ -47,7 +51,7 @@ export function Drawer({
       <div className="drawer__body">
         {tab === "scores" && <Scores frame={frame} game={game} />}
         {tab === "log" && <Log frame={frame} game={game} />}
-        {tab === "why" && <Why frame={frame} game={game} />}
+        {!PUBLIC && tab === "why" && <Why frame={frame} game={game} />}
       </div>
     </aside>
   );
@@ -69,7 +73,9 @@ function Scores({ frame, game }: { frame: Frame; game: GameView }) {
               <Avatar seat={seat} human={human(game, seat)} name={seatName(game, seat)} />
               <span className="standings__who">
                 <span className="standings__name">{seatName(game, seat)}</span>
-                {info && !info.human && <span className="standings__elo">Elo {formatElo(info.elo)}</span>}
+                {!PUBLIC && info && !info.human && (
+                  <span className="standings__elo">Elo {formatElo(info.elo)}</span>
+                )}
               </span>
               <span className="standings__score">{frame.scores[seat]}</span>
             </li>
@@ -110,9 +116,11 @@ function Scores({ frame, game }: { frame: Frame; game: GameView }) {
           </table>
         </div>
       )}
-      <p className="drawer__note">
-        {game.seed === null ? "The seed stays hidden until the game ends." : <>Seed <span className="mono">{game.seed}</span>: the same seats and seed replay this game.</>}
-      </p>
+      {!PUBLIC && (
+        <p className="drawer__note">
+          {game.seed === null ? "The seed stays hidden until the game ends." : <>Seed <span className="mono">{game.seed}</span>: the same seats and seed replay this game.</>}
+        </p>
+      )}
     </>
   );
 }

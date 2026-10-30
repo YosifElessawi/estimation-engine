@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { api } from "@/lib/api";
+import { lobbyApi } from "@/lib/lobbyApi";
 import { type Position, formatElo, positionOf } from "@/lib/seats";
 import type { BotView, GameView, SavedGame } from "@/lib/types";
 
@@ -81,7 +81,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
 
   useEffect(() => {
     if (!bots) return;
-    api
+    lobbyApi
       .history()
       .then(setPast)
       .catch((e: unknown) => setError(`Could not load past games: ${e instanceof Error ? e.message : String(e)}`));
@@ -118,7 +118,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
     setBusy(true);
     setError(null);
     try {
-      onStart(await api.reviewSaved(game.id));
+      onStart(await lobbyApi.reviewSaved(game.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -136,7 +136,7 @@ export function Setup({ bots, loadError, onStart }: Props) {
     setBusy(true);
     setError(null);
     try {
-      onStart(await api.newGame(lineup, trimmed === "" ? null : Number(trimmed)));
+      onStart(await lobbyApi.newGame(lineup, trimmed === "" ? null : Number(trimmed)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);

@@ -177,6 +177,14 @@ export interface GameView {
   known: number;
   finished: boolean;
   waiting: boolean;
+  /** The public table only: the first frame the page may ask for (the player's last move). */
+  start?: number;
+}
+
+/** The public table's answer to a new game: the game and the token every later call needs. */
+export interface CreatedGame {
+  game: GameView;
+  token: string;
 }
 
 export interface FramesView {

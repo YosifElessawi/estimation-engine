@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 
-import { SANS, suitOf } from "@/lib/cards";
-import type { ActionView, Frame, SeekTarget, TableView } from "@/lib/types";
+import { SANS, suitOf, trumpName } from "@/lib/cards";
+import { positionOf, seatName } from "@/lib/seats";
+import type { ActionView, Frame, GameView, SeekTarget, TableView } from "@/lib/types";
 
 import { TrumpGlyph } from "./ActionText";
 
@@ -13,7 +14,25 @@ export const SPEED_FACTORS: Record<Speed, number> = { slow: 1.7, normal: 1, fast
 const TRUMPS = [0, 1, 2, 3, SANS];
 const SIMPLE = ["no_dash", "dash", "keep", "stay", "with", "pass"];
 
-function simpleLabel(action: ActionView) {
+const WHERE = { bottom: "", left: "on your left", top: "across", right: "on your right" } as const;
+
+/** The viewer's own call in this auction, when it is a bid or a With (AUC-2: they hold it). */
+function heldCall(table: TableView): ActionView | null {
+  const me = table.current_player;
+  const call = me !== null ? (table.calls[me] ?? null) : null;
+  if (!call || call.tricks === null || call.trump === null) return null;
+  return call.kind === "bid" || call.kind === "with" || call.kind === "super_call" ? call : null;
+}
+
+function Bid({ tricks, trump }: { tricks: number; trump: number }) {
+  return (
+    <>
+      {tricks} <TrumpGlyph trump={trump} />
+    </>
+  );
+}
+
+function simpleLabel(action: ActionView, table: TableView) {
   switch (action.kind) {
     case "no_dash":
       return "No dash";
@@ -26,11 +45,22 @@ function simpleLabel(action: ActionView) {
     case "with":
       return action.tricks !== null && action.trump !== null ? (
         <>
-          With {action.tricks} <TrumpGlyph trump={action.trump} />
+          With <Bid tricks={action.tricks} trump={action.trump} />
         </>
       ) : (
         "With"
       );
+    case "pass": {
+      // AUC-2: passing keeps the call you hold
+      const held = table.phase === "auction" ? heldCall(table) : null;
+      return held && held.tricks !== null && held.trump !== null ? (
+        <>
+          Pass, keep <Bid tricks={held.tricks} trump={held.trump} />
+        </>
+      ) : (
+        "Pass"
+      );
+    }
     default:
       return action.label;
   }
@@ -40,20 +70,22 @@ function hintOf(legal: ActionView[], table: TableView): string {
   const kinds = new Set(legal.map((action) => action.kind));
   if (kinds.has("dash") || kinds.has("no_dash")) return "A Dash call promises to take no tricks at all.";
   if (kinds.has("estimate")) {
+    // EST-3: nobody estimates above the Caller's number
+    const most = Math.max(...legal.filter((action) => action.kind === "estimate").map((action) => action.tricks ?? 0));
+    const cap = table.caller !== null && most < 13 ? ` Up to ${most}, the Caller's number.` : "";
     // EST-5: the last estimator may not bring the total to exactly 13
     const me = table.current_player;
     if (me !== null && table.last_estimator === me) {
       const others = table.estimates.reduce<number>((total, e, seat) => (seat === me ? total : total + (e ?? 0)), 0);
       const banned = 13 - others;
-      if (banned >= 0 && banned <= 13) return `You estimate last: ${banned} would make the total 13, so it's out.`;
+      if (banned >= 0 && banned <= 13) return `You estimate last: ${banned} would make the total 13, so it's out.${cap}`;
     }
-    return "How many tricks will you take?";
+    return `How many tricks will you take?${cap}`;
   }
   const stay = legal.find((action) => action.kind === "stay");
   if (stay) return `The bid you went With was raised. Join it, stay at ${stay.tricks ?? ""}, or outbid.`;
   if (kinds.has("keep")) return "Last word on your bid: keep it or raise it.";
-  const top = table.top_bid;
-  if (top) return `Beat ${top.tricks} ${top.trump === SANS ? "NT" : ["♣", "♦", "♥", "♠"][top.trump] ?? ""}${kinds.has("with") ? ", go With it," : ""} or pass.`;
+  if (table.top_bid) return `Beat the top bid${kinds.has("with") ? ", go With it," : ""} or pass.`;
   return "Pick how many tricks and a trump, or pass.";
 }
 
@@ -64,16 +96,47 @@ function titleOf(legal: ActionView[]): string {
   return "Your bid";
 }
 
+/** The bid to beat during an auction, who holds it and what the viewer holds, at the top of the
+ * bidding box. */
+function Standing({ table, game }: { table: TableView; game: GameView }) {
+  const top = table.top_bid;
+  const holder = table.top_bidder;
+  if (!top || holder === null) return null;
+  const me = table.current_player;
+  const held = heldCall(table);
+  return (
+    <div className="standing">
+      <span className="standing__label">Top bid</span>
+      <span className="standing__bid">
+        <Bid tricks={top.tricks} trump={top.trump} />
+        {top.trump !== SANS && <span className="standing__trump">{trumpName(top.trump)}</span>}
+      </span>
+      <span className="standing__who">
+        {holder === me ? "is yours" : `by ${seatName(game, holder)}`}
+        {holder !== me && <span className="standing__where"> {WHERE[positionOf(holder, game.human_seat ?? 0)]}</span>}
+      </span>
+      {held && held.tricks !== null && held.trump !== null && holder !== me && (
+        <span className="standing__mine">
+          {held.kind === "with" ? "You're With at" : "You hold"} <Bid tricks={held.tricks} trump={held.trump} />
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** The viewer's non-card decisions, docked above their hand: Dash Call, bids, With, Pass,
- * estimates and super calls. Bids are picked in two short rows, tricks then trump. */
+ * estimates and super calls. During an auction the bid to beat sits on top; bids are picked in
+ * two short rows, tricks then trump, and the button says the exact bid. */
 export function DecisionPanel({
   legal,
   table,
+  game,
   busy,
   onAct,
 }: {
   legal: ActionView[];
   table: TableView;
+  game: GameView;
   busy: boolean;
   onAct: (action: number) => void;
 }) {
@@ -110,6 +173,8 @@ export function DecisionPanel({
         <h2>{superMode ? "Super call" : titleOf(legal)}</h2>
         <p>{superMode ? "A super call names more tricks in a trump of your choice." : hintOf(legal, table)}</p>
       </header>
+
+      {table.phase === "auction" && <Standing table={table} game={game} />}
 
       {estimates.length > 0 && !superMode && (
         <div className="decide__row" role="group" aria-label="Estimate">
@@ -161,6 +226,7 @@ export function DecisionPanel({
                   type="button"
                   className={`chip-btn chip-btn--suit ${trump === t ? "is-on" : ""}`}
                   aria-pressed={trump === t}
+                  aria-label={trumpName(t)}
                   disabled={busy || !trumpOk(t)}
                   onClick={() => pickTrump(t)}
                 >
@@ -181,7 +247,7 @@ export function DecisionPanel({
             disabled={busy}
             onClick={() => onAct(action.id)}
           >
-            {simpleLabel(action)}
+            {simpleLabel(action, table)}
           </button>
         ))}
         {supers.length > 0 && (bids.length > 0 || estimates.length > 0) && (
@@ -204,12 +270,14 @@ export function DecisionPanel({
             disabled={busy || !chosen}
             onClick={() => chosen && onAct(chosen.id)}
           >
-            {chosen && chosen.trump !== null ? (
+            {chosen && chosen.trump !== null && chosen.tricks !== null ? (
               <>
-                {superMode ? "Super call" : "Bid"} {chosen.tricks} <TrumpGlyph trump={chosen.trump} />
+                {superMode ? "Super call" : "Bid"} <Bid tricks={chosen.tricks} trump={chosen.trump} />
               </>
+            ) : tricks === null ? (
+              "Pick tricks"
             ) : (
-              "Pick tricks and trump"
+              "Pick a trump"
             )}
           </button>
         )}
