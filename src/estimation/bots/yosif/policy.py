@@ -161,9 +161,10 @@ class Planner:
         """Expected points of a call made with ``chance``, SCR-5 included (``expected_points``
         without the per-trick part)."""
         c = self.config
-        bonus = c.rules.only_bonus if s.solo else 0
-        return chance * (s.win + bonus * (1 - c.others_make) ** 3) - (1 - chance) * (
-            s.lose + bonus * c.others_make**3
+        win_bonus = c.rules.only_bonus if s.solo_win else 0
+        lose_bonus = c.rules.only_bonus if s.solo_lose else 0
+        return chance * (s.win + win_bonus * (1 - c.others_make) ** 3) - (1 - chance) * (
+            s.lose + lose_bonus * c.others_make**3
         )
 
     def _risk(self, obs: Observation) -> bool:

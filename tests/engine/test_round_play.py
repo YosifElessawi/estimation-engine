@@ -196,9 +196,9 @@ def test_G4_dash_call_fails_in_an_under_round_full_round(config: RulesConfig, da
 @pytest.mark.parametrize(
     ("config", "made", "failed"),
     [
-        (RulesConfig(), (74, 12, 11, -11), (-52, 12, 11, 13)),
+        (RulesConfig(), (64, 12, 11, -11), (-42, 12, 11, 13)),
         (RulesConfig(super_call_scoring=False), (28, 12, 11, -11), (-21, 12, 11, 13)),
-        (RulesConfig(only_bonus_for_super_calls=False), (74, 12, 11, -11), (-42, 12, 11, 13)),
+        (RulesConfig(only_loser_for_super_calls=False), (64, 12, 11, -11), (-32, 12, 11, 13)),
     ],
 )
 def test_G5_super_call_at_8_full_round(

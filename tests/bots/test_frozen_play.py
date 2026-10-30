@@ -36,17 +36,17 @@ def fingerprint(lineup: Sequence[str], seeds: Sequence[int], rounds: int | None 
 
 
 def test_heuristic_bot_plays_exactly_as_before():
-    assert fingerprint(["heuristic"] * 4, range(12)) == "531bbd337c51415b"
+    assert fingerprint(["heuristic"] * 4, range(12)) == "94e5d5d18a3a00fa"
 
 
 def test_noisy_heuristic_rungs_play_exactly_as_before():
     lineup = ["heuristic:noise=0.75", "heuristic:noise=0.1", "heuristic:noise=0.01", "random"]
-    assert fingerprint(lineup, range(6)) == "429377b700e26555"
+    assert fingerprint(lineup, range(6)) == "6f243c2e572b07af"
 
 
 def test_pimc_measuring_sticks_play_exactly_as_before():
     lineup = ["pimc", "pimc:samples=4", "pimc:samples=1:play_noise=0.3", "heuristic"]
-    assert fingerprint(lineup, [0]) == "7e39c13d07b08007"
+    assert fingerprint(lineup, [0]) == "024ed1537b476786"
 
 
 def test_yosif_specs_play_exactly_as_before():
@@ -55,7 +55,7 @@ def test_yosif_specs_play_exactly_as_before():
 
 
 def test_yosif_plays_whole_bolas_exactly_as_before():
-    assert fingerprint(["yosif", "pimc:samples=2", "yosif", "heuristic"], [2]) == "4eee06062b6db8bd"
+    assert fingerprint(["yosif", "pimc:samples=2", "yosif", "heuristic"], [2]) == "4cc139ad74b413de"
 
 
 def test_search_plays_exactly_like_its_old_name_yosif():

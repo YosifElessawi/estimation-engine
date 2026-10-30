@@ -311,11 +311,11 @@ def stakes(obs: Observation, seat: int, rules: RulesConfig) -> tuple[int, int]:
             lose -= 1
     elif called and b >= rules.super_call_min and rules.super_call_scoring:  # SCR-6
         win, lose = b * b, -(b * b // 2)
-    else:  # SCR-1
+    else:  # SCR-1 and SCR-3
         win, lose = rules.win_base + b, -1
-    if called:  # SCR-3
-        win += rules.caller_with_bonus
-        lose -= rules.caller_with_bonus
+        if called:
+            win += rules.caller_with_bonus
+            lose -= rules.caller_with_bonus
     if seat == obs.last_estimator and obs.risks:  # SCR-4
         win += rules.risk_points * obs.risks
         lose -= rules.risk_points * obs.risks

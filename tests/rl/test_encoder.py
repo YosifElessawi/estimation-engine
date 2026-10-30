@@ -328,13 +328,13 @@ def test_stakes_of_a_dash_call_in_an_over_round_follow_G3(rules: RulesConfig, da
 
 @pytest.mark.parametrize(
     ("rules", "caller"),
-    [(RulesConfig(), (74, -42)), (RulesConfig(super_call_scoring=False), (28, -11))],
+    [(RulesConfig(), (64, -32)), (RulesConfig(super_call_scoring=False), (28, -11))],
 )
 def test_stakes_of_a_super_call_follow_G5(rules: RulesConfig, caller: tuple[int, int]):
     hands, _ = build_play(SPADES, leader=0, targets=(8, 2, 1, 2))
     rnd = run(Round.new(1, hands, config=rules), *NO_DASH_ROUND)
     run(rnd, bid(8, SPADES), PASS, PASS, PASS, PASS, est(2), est(1), est(3))
-    # G5: 64 for the super call (or 10 + 8 without SCR-6) and 10 for the Caller.
+    # G5: 64 for the super call (or 10 + 8 + 10 for the Caller without SCR-6).
     assert stakes(rnd.observation(1), 0, rules) == caller
 
 

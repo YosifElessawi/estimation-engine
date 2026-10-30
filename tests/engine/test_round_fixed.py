@@ -253,7 +253,7 @@ def test_G9_super_call_in_a_fixed_trump_round_full_round():
     assert rnd.current_player == 0
     play_cards(rnd, cards)
     result = rnd.result()
-    assert result.scores == (74, 12, -11, 13)
+    assert result.scores == (64, 12, -11, 13)
     assert result.trump_changed
     assert result.seats[0].is_super
 
