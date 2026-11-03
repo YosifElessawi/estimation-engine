@@ -1,0 +1,60 @@
+# Hybrid plan step 1 (docs/rl/hybrid-iteration-plan.md): RL v2's nets retrained under the current
+# rules (the 2026-10-30 super-call scoring fix and With from any call, AUC-4 and EST-2), on
+# encoder v3 (each seat's last call in every trump), with the guess head learning who holds each
+# unseen card. About 1,500 loops (about 6 h) after a fresh PIMC-30 recording for the card anchor
+# (about 30 min). Copy RL v2 from the main checkout to runs/rl-v3/reference/rl-v2.pt, then:
+#   uv run python -m estimation.rl.train run --config configs/rl-v3.toml --out runs/rl-v3
+# and watch it with:
+#   uv run python -m estimation.rl.watch runs/rl-v3
+seed = 0
+workers = 5
+
+[reward]
+ahead_weight = 1.0
+behind_weight = 0.5
+tie_weight = 1.0
+normalize_weights = true
+win_blend = 0.5
+win_points = 100.0
+
+[record]
+games = 1000
+pimc_samples = 30
+
+[opponents]
+self_play = 0.70
+heuristic = 0.15
+pimc = 0.15
+pimc_samples = [4, 5, 6, 7, 8]
+
+[selfplay]
+start_from = "runs/rl-v3/reference/rl-v2.pt"
+iterations = 1500
+games = 240
+eval_games = 32
+# BiddingNet first adapts alone to the new With rules and inputs, with RL v2's card play.
+card_frozen_iterations = 10
+# Gentler than RL v2's restart at 1e-4, which cost about 1,500 loops of dip before any gain
+# (docs/rl/next-steps.md, item 2): start at half that and fall to 1e-5, where RL v2 ended.
+bid_lr = 5e-5
+card_lr = 5e-5
+lr_end_factor = 0.2
+# The PIMC anchor starts a little above where RL v2 ended (0.03), for the fresh recording.
+card_anchor_weight = 0.05
+card_anchor_end_factor = 0.6
+# Both nets' guess heads: about the size of the value losses at the start (ln 3 = 1.1 times 0.1).
+guess_weight = 0.1
+checkpoint_every = 25
+overlap = true
+balance = true
+chunk = 8
+# Every 50 loops: 40 sets against PIMC with 8 deals and 40 against RL v2.
+yardstick_every = 50
+yardstick_sets = 40
+yardstick_seed = 0
+yardstick_pimc_samples = 8
+yardstick_reference = "runs/rl-v3/reference/rl-v2.pt"
+
+[nets]
+hidden = 384
+device = "auto"

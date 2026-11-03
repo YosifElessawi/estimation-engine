@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from estimation.engine import RulesConfig
 from estimation.rl.config import (
     TrainConfig,
     config_from_dict,
@@ -56,6 +57,7 @@ def test_a_file_sets_values_in_any_section_and_the_seed_can_be_overridden(tmp_pa
         ({"selfplay": {"lr_end_factor": -0.1}}, "lr_end_factor"),
         ({"selfplay": {"yardstick_sets": 0}}, "yardstick_sets"),
         ({"selfplay": {"overlap": 1}}, "must be true or false"),
+        ({"selfplay": {"guess_weight": -0.1}}, "guess_weight"),
     ],
 )
 def test_bad_configs_are_refused(data: dict[str, object], message: str):
@@ -116,3 +118,21 @@ def test_the_staged_config_keeps_the_m4_design_and_changes_only_the_schedules_an
     assert (staged["seed"], staged["workers"]) == (m4["seed"], m4["workers"])
     assert staged["selfplay"]["card_anchor_end_factor"] == 0.1
     assert staged["selfplay"]["lr_end_factor"] == 0.1
+
+
+def test_the_rl_v3_config_continues_rl_v2_under_the_current_rules_with_guesses():
+    """Hybrid plan step 1: RL v2's run, continued from RL v2 under the default (current) rules,
+    with a fresh recording, a gentler learning rate and the guess head on."""
+    configs = Path(__file__).resolve().parents[2] / "configs"
+    v2 = config_to_dict(load_config(configs / "m4-rules-v2.toml"))
+    v3 = load_config(configs / "rl-v3.toml")
+    assert v3.rules == RulesConfig()  # the 2026-10-30 rules: super calls, With from any call
+    data = config_to_dict(v3)
+    for section in ("reward", "record", "imitation", "opponents", "nets"):
+        assert data[section] == v2[section], section
+    play = v3.selfplay
+    assert play.start_from == play.yardstick_reference == "runs/rl-v3/reference/rl-v2.pt"
+    assert play.guess_weight > 0
+    assert play.bid_lr < v2["selfplay"]["bid_lr"]
+    assert play.card_lr < v2["selfplay"]["card_lr"]
+    assert play.bid_lr * play.lr_end_factor == pytest.approx(1e-5)  # where RL v2 ended
