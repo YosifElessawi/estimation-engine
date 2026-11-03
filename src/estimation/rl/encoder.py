@@ -22,11 +22,17 @@ scores        13  game scores, gap to first place, standings weights, open round
                   trumps left, replays, own match-win probability
 shape          9  suit lengths and HeuristicBot's expected tricks under each trump
 announced      4  per seat: announced void at the deal (TBL-7)
+calls         20  per seat and trump: its last call in that trump this round (4 x 5)
 ==========  ====  ===========================================================================
 
-Version 2 appended the ``announced`` block; the 452 features before it are version 1's, in the
-same places, so a version 1 checkpoint loads with zero weights for the new inputs
-(``networks.load_policy``).
+Each version only appends blocks: version 2 the ``announced`` block (after version 1's 452
+features), version 3 the ``calls`` block (after version 2's 456). An older checkpoint loads with
+zero weights for the new inputs (``networks.load_policy``).
+
+The ``calls`` block is what the With rule needs (AUC-4): any call in the round's trump makes a
+player With, so a bidder needs each player's last call (a bid, or the bid it said With to) in
+every trump, not only in the top bid's. It holds the call's trick count over 13, 0 for none,
+rebuilt from the public log as the engine keeps it (estimates are not calls).
 
 ``points_if_win`` and ``points_if_lose`` come from the RulesConfig, so a rule change shows up in
 the inputs instead of needing a retrain from scratch. The standings weights and the match-win
@@ -41,12 +47,12 @@ import numpy.typing as npt
 
 from estimation.bots.hand_eval import trump_values
 from estimation.engine import Observation, Phase, RulesConfig
-from estimation.engine.actions import FIRST_BID
+from estimation.engine.actions import FIRST_BID, LAST_BID, PLAY_BASE, WITH
 from estimation.engine.config import DEFAULT_CONFIG
 
 from .standings import ROUND_SD, rounds_remaining, standings_weights, win_probabilities
 
-ENCODER_VERSION = 2
+ENCODER_VERSION = 3
 
 _BLOCKS = (
     ("hand", 52),
@@ -61,6 +67,7 @@ _BLOCKS = (
     ("scores", 13),
     ("shape", 9),
     ("announced", 4),
+    ("calls", 20),
 )
 OFFSETS: dict[str, int] = {}
 _offset = 0
@@ -79,6 +86,7 @@ PLAYERS = OFFSETS["players"]
 SCORES = OFFSETS["scores"]
 SHAPE = OFFSETS["shape"]
 ANNOUNCED = OFFSETS["announced"]
+CALLS = OFFSETS["calls"]
 
 STAKES_SCALE = 100.0  # points_if_win and points_if_lose are given in hundreds of points
 CLIP = 5.0  # stakes, scores and multipliers are clipped to +-5 (random play stacks carries)
@@ -258,6 +266,34 @@ def encode_into(out: npt.NDArray[np.float32], obs: Observation, rules: RulesConf
     # Seats announced void at the deal (TBL-7), counted from the acting seat.
     for seat in obs.void_announced:
         out[ANNOUNCED + ((seat - me) & 3)] = 1.0
+
+    # Each seat's last call in each trump (AUC-4), counted from the acting seat.
+    for seat, by_trump in last_calls(obs.log).items():
+        base = CALLS + 5 * ((seat - me) & 3)
+        for trump_id, tricks in enumerate(by_trump):
+            if tricks:
+                out[base + trump_id] = tricks / 13.0
+
+
+def last_calls(log: tuple[tuple[int, int], ...]) -> dict[int, list[int]]:
+    """Each seat's last call in each trump this round, from the public log: per seat that made a
+    call, the trick counts by trump (0 for none). A bid is a call in its trump; With joins the top
+    bid at its number (AUC-2, AUC-3). In a fixed-trump round the first bid is the super call that
+    opens the auction (FIX-4); the estimates before it are not calls."""
+    calls: dict[int, list[int]] = {}
+    top = -1
+    for seat, action in log:
+        if action >= PLAY_BASE:
+            break
+        if FIRST_BID <= action <= LAST_BID:
+            call = top = action
+        elif action == WITH and top >= 0:
+            call = top
+        else:
+            continue
+        tricks, trump_id = divmod(call - FIRST_BID, 5)
+        calls.setdefault(seat, [0, 0, 0, 0, 0])[trump_id] = tricks + 4
+    return calls
 
 
 def _clip(value: float) -> float:

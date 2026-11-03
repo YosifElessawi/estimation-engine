@@ -23,6 +23,7 @@ ladder run's ``ladder.json``.
 """
 
 import argparse
+import dataclasses
 import json
 import multiprocessing
 import shutil
@@ -483,6 +484,11 @@ def selfplay_stage(
             "card_value_loss": update.card_value_loss,
             "card_q_loss": update.card_q_loss,
             "anchor_loss": update.anchor_loss,
+            "guess": {
+                name: dataclasses.asdict(report)
+                for name, report in (("bid", update.bid_guess), ("card", update.card_guess))
+                if report is not None
+            },
             "memory_mb": {
                 "trainer_peak": peak_rss_mb(),
                 "trainer_gpu": gpu_mb(device),
@@ -503,6 +509,11 @@ def selfplay_stage(
             f"skipped {100 * s['skipped']:.0f}%"
             for kind, s in summary.items()
         ]
+        if update.card_guess is not None:
+            guess = update.card_guess
+            parts.append(
+                f"guesses {100 * guess.accuracy:.1f}% right (blind {100 * guess.blind:.1f}%)"
+            )
         if measured is not None:
             parts += [
                 f"yardstick vs {name}: won {100 * m['won']['mean']:.0f}% "

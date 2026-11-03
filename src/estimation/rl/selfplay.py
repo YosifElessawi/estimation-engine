@@ -12,6 +12,10 @@ pilot's policy flipped between never opening the auction and opening almost ever
 because whichever choice it was avoiding got too few samples to be valued well. Card play is
 greedy. Both also take a uniformly random legal action with a small probability (epsilon).
 
+Each recorded decision also keeps who held each unseen card at that moment (``guesses``), the
+guess head's training target, read from the real deal: the trainer knows it, the nets never see
+it.
+
 Trainer code: it holds real Bolas, but every player and net sees only the acting seat's own
 Observation (through the state encoder), exactly as in the arena.
 """
@@ -32,6 +36,7 @@ from estimation.engine.actions import PLAY_BASE
 from .config import TrainConfig
 from .encoder import NUM_FEATURES, encode
 from .games import RewardedBola
+from .guesses import guess_labels
 from .memory import peak_rss_mb
 from .networks import BiddingNet, CardPlayNet
 from .standings import RewardConfig, first_place_shares
@@ -89,12 +94,13 @@ class ChunkTask:
 
 @dataclass(slots=True)
 class Samples:
-    """Recorded decisions: encoded Observation, action id (card id for card play) and the
-    reward of the round it was made in."""
+    """Recorded decisions: encoded Observation, action id (card id for card play), the reward
+    of the round it was made in and the guess labels (``guesses.guess_labels``)."""
 
     features: npt.NDArray[np.float16]
     actions: npt.NDArray[np.int16]
     rewards: npt.NDArray[np.float32]
+    guesses: npt.NDArray[np.int8]
 
     def __len__(self) -> int:
         return len(self.actions)
@@ -102,7 +108,10 @@ class Samples:
 
 def empty_samples() -> Samples:
     return Samples(
-        np.zeros((0, NUM_FEATURES), np.float16), np.zeros(0, np.int16), np.zeros(0, np.float32)
+        np.zeros((0, NUM_FEATURES), np.float16),
+        np.zeros(0, np.int16),
+        np.zeros(0, np.float32),
+        np.zeros((0, 52), np.int8),
     )
 
 
@@ -114,6 +123,7 @@ def concat_samples(parts: Sequence[Samples]) -> Samples:
         np.concatenate([p.features for p in parts]),
         np.concatenate([p.actions for p in parts]),
         np.concatenate([p.rewards for p in parts]),
+        np.concatenate([p.guesses for p in parts]),
     )
 
 
@@ -167,6 +177,10 @@ def _scripted(plan: SeatPlan, seed: int, rules: RulesConfig) -> Bot:
     raise ValueError(f"seat kind {plan.kind!r} is not a scripted bot")
 
 
+type _Open = tuple[bool, npt.NDArray[np.float32], int, npt.NDArray[np.int8]]
+type _Row = tuple[npt.NDArray[np.float32], int, float, npt.NDArray[np.int8]]
+
+
 class _Game:
     """One game of a chunk and the learner decisions waiting for their round's reward."""
 
@@ -188,18 +202,19 @@ class _Game:
             else:
                 self.bots.append(_scripted(seat_plan, plan.seed * 4 + seat + 1, task.rules))
                 self.net_of.append(None)
-        # Per seat, this round's learner decisions: (is card play, features, action).
-        self.open: list[list[tuple[bool, npt.NDArray[np.float32], int]]] = [[], [], [], []]
-        self.out_bid: list[tuple[npt.NDArray[np.float32], int, float]] = []
-        self.out_card: list[tuple[npt.NDArray[np.float32], int, float]] = []
+        # Per seat, this round's learner decisions: (is card play, features, action, guesses).
+        self.open: list[list[_Open]] = [[], [], [], []]
+        self.out_bid: list[_Row] = []
+        self.out_card: list[_Row] = []
 
     def step(self, action: int) -> None:
         rewards = self.game.step(action)
         if rewards is None:
             return
         for seat in range(4):
-            for is_card, features, act in self.open[seat]:
-                (self.out_card if is_card else self.out_bid).append((features, act, rewards[seat]))
+            for is_card, features, act, guesses in self.open[seat]:
+                row = (features, act, rewards[seat], guesses)
+                (self.out_card if is_card else self.out_bid).append(row)
             self.open[seat].clear()
 
 
@@ -209,6 +224,7 @@ class _Request:
     seat: int
     features: npt.NDArray[np.float32]
     legal: list[int]
+    guesses: npt.NDArray[np.int8] | None  # the learner's guess labels; None for snapshots
 
 
 def play_chunk(task: ChunkTask) -> ChunkResult:
@@ -266,7 +282,11 @@ def _advance(game: _Game, rules: RulesConfig) -> _Request | None:
         if len(legal) == 1:
             game.step(legal[0])
             continue
-        return _Request(game, seat, encode(bola.observation(seat), rules), legal)
+        features = encode(bola.observation(seat), rules)
+        guesses = (
+            guess_labels(features, bola.round.hands, seat) if game.net_of[seat] == -1 else None
+        )
+        return _Request(game, seat, features, legal, guesses)
     return None
 
 
@@ -302,8 +322,10 @@ def _apply(
             action = _softmax_choice(legal, values, task.bid_temperature, game.rng.random())
         else:
             action = max(legal, key=lambda a: values[a - offset])
-        if task.record_card if is_card else task.record_bid:
-            game.open[request.seat].append((is_card, request.features, action - offset))
+        if (task.record_card if is_card else task.record_bid) and request.guesses is not None:
+            game.open[request.seat].append(
+                (is_card, request.features, action - offset, request.guesses)
+            )
     else:
         action = max(legal, key=lambda a: values[a - offset])
     game.step(action)
@@ -323,14 +345,15 @@ def _softmax_choice(
     return legal[index]
 
 
-def _samples(per_game: list[list[tuple[npt.NDArray[np.float32], int, float]]]) -> Samples:
+def _samples(per_game: list[list[_Row]]) -> Samples:
     rows = [row for game in per_game for row in game]
     if not rows:
         return empty_samples()
     return Samples(
-        np.stack([features for features, _, _ in rows]).astype(np.float16),
-        np.array([action for _, action, _ in rows], np.int16),
-        np.array([reward for _, _, reward in rows], np.float32),
+        np.stack([features for features, _, _, _ in rows]).astype(np.float16),
+        np.array([action for _, action, _, _ in rows], np.int16),
+        np.array([reward for _, _, reward, _ in rows], np.float32),
+        np.stack([guesses for _, _, _, guesses in rows]),
     )
 
 

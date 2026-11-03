@@ -15,6 +15,13 @@ trump and the hand's expected tricks in that trump. Sharing that head lets what 
 teaches carry over to the others (with one independent output per card, imitating PIMC
 generalised badly to new games).
 
+Both nets also guess who holds each unseen card (``guess``): a linear output on the trunk with,
+for each of the 52 cards, a logit for each of the other three seats, counted from the acting seat
+(the next seat counterclockwise first). It is trained on the real hands, which training games
+know, and only shapes the trunk: no action value reads it, and the inputs stay the acting seat's
+Observation. A checkpoint saved before the guess head loads with it at zero (every guess even),
+so its action values are exactly as before.
+
 Rewards are predicted in units of ``REWARD_SCALE`` points.
 """
 
@@ -60,6 +67,8 @@ CHECKPOINT_FORMAT = 2
 UNSEEN = OFFSETS["unseen"]
 CARD_FEATURES = 15
 BID_FEATURES = 17
+GUESS_SEATS = 3  # the three other seats, counted from the acting seat
+GUESS_KEYS = ("guess.weight", "guess.bias")
 
 
 def _trunk(hidden: int) -> nn.Sequential:
@@ -87,6 +96,15 @@ class ActionHead(nn.Module):
     def forward(self, h: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
         joint = torch.relu(self.state(h)[:, None, :] + self.action(phi))
         return self.per_action(h) + self.out(joint)[:, :, 0]
+
+
+def _guess_layer(hidden: int) -> nn.Linear:
+    return nn.Linear(hidden, CARDS * GUESS_SEATS)
+
+
+def _guess_logits(layer: nn.Module, h: torch.Tensor) -> torch.Tensor:
+    """``(batch, 52, 3)`` logits of which other seat holds each card."""
+    return cast(torch.Tensor, layer(h)).view(-1, CARDS, GUESS_SEATS)
 
 
 def _card_tables() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -214,6 +232,7 @@ class BiddingNet(nn.Module):
         self.hidden = hidden
         self.trunk = _trunk(hidden)
         self.head = ActionHead(hidden, BID_ACTIONS, BID_FEATURES)
+        self.guess = _guess_layer(hidden)
         kind, tricks, trump, estimate = _bid_tables()
         self.register_buffer("kind", kind, persistent=False)
         self.register_buffer("tricks", tricks, persistent=False)
@@ -221,7 +240,14 @@ class BiddingNet(nn.Module):
         self.register_buffer("estimate", estimate, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._values(x, cast(torch.Tensor, self.trunk(x)))
+
+    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """The action values and the guess logits, from one pass through the trunk."""
         h = cast(torch.Tensor, self.trunk(x))
+        return self._values(x, h), _guess_logits(self.guess, h)
+
+    def _values(self, x: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
         phi = bid_features(
             x,
             cast(torch.Tensor, self.kind),
@@ -242,6 +268,7 @@ class CardPlayNet(nn.Module):
         self.trunk = _trunk(hidden)
         self.critic = nn.Linear(hidden, 1)
         self.head = ActionHead(hidden, CARDS, CARD_FEATURES)
+        self.guess = _guess_layer(hidden)
         rank, suit, higher, lower = _card_tables()
         self.register_buffer("rank", rank, persistent=False)
         self.register_buffer("suit", suit, persistent=False)
@@ -249,7 +276,15 @@ class CardPlayNet(nn.Module):
         self.register_buffer("lower", lower, persistent=False)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._values(x, cast(torch.Tensor, self.trunk(x)))
+
+    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """The critic, the advantages and the guess logits, from one pass through the trunk."""
         h = cast(torch.Tensor, self.trunk(x))
+        value, advantage = self._values(x, h)
+        return value, advantage, _guess_logits(self.guess, h)
+
+    def _values(self, x: torch.Tensor, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         phi = card_features(
             x,
             cast(torch.Tensor, self.rank),
@@ -268,11 +303,13 @@ def parameter_count(net: nn.Module) -> int:
 @dataclass(slots=True)
 class Policy:
     """A saved bot: CardPlayNet, and BiddingNet unless it was never trained, with the
-    checkpoint's metadata. Runs on the CPU in inference mode."""
+    checkpoint's metadata. Runs on the CPU in inference mode. ``guess_head`` says whether the
+    checkpoint holds guess weights (a checkpoint from before the guess head guesses evenly)."""
 
     card: CardPlayNet
     bidding: BiddingNet | None
     meta: dict[str, Any]
+    guess_head: bool = True
 
     def card_values(self, features: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
         """The advantage of each of the 52 cards for a batch of encoded positions."""
@@ -287,6 +324,13 @@ class Policy:
         with torch.inference_mode():
             values = self.bidding(torch.as_tensor(features))
         return values.numpy()
+
+    def card_guesses(self, features: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        """CardPlayNet's guess, ``(batch, 52, 3)``: for each card, the chance that each other
+        seat holds it, counted from the acting seat. Meaningful for the unseen cards only."""
+        with torch.inference_mode():
+            _, _, logits = self.card.forward_all(torch.as_tensor(features))
+        return torch.softmax(logits, dim=2).numpy()
 
 
 def state_dict_of(net: nn.Module) -> dict[str, torch.Tensor]:
@@ -317,7 +361,7 @@ def save_checkpoint(
 
 
 FIRST_LAYER = "trunk.0.weight"  # (hidden, features): the only weights that see the inputs
-UPGRADABLE = {1: 452}  # older encoder versions whose features begin this version's, by count
+UPGRADABLE = {1: 452, 2: 456}  # older encoder versions whose features begin this version's
 
 
 def widen(state: Mapping[str, torch.Tensor], features: int) -> dict[str, torch.Tensor]:
@@ -329,10 +373,28 @@ def widen(state: Mapping[str, torch.Tensor], features: int) -> dict[str, torch.T
     return {**state, FIRST_LAYER: torch.cat([weight, extra], dim=1)}
 
 
+def with_guess_head(
+    state: Mapping[str, torch.Tensor], hidden: int
+) -> tuple[dict[str, torch.Tensor], bool]:
+    """``state`` and whether it holds guess weights. A state saved before the guess head gets
+    zero guess weights: even guesses, and every other output exactly as before."""
+    present = [key in state for key in GUESS_KEYS]
+    if all(present):
+        return dict(state), True
+    if any(present):
+        raise ValueError("a checkpoint holds only part of the guess head")
+    zeros = {
+        "guess.weight": torch.zeros(CARDS * GUESS_SEATS, hidden),
+        "guess.bias": torch.zeros(CARDS * GUESS_SEATS),
+    }
+    return {**state, **zeros}, False
+
+
 def load_policy(path: Path) -> Policy:
     """Load a checkpoint saved by ``save_checkpoint`` for play on the CPU. A checkpoint of an
     older encoder whose features this one only appends to (``UPGRADABLE``) is widened by
-    ``widen``, and its meta records ``upgraded_from_encoder``."""
+    ``widen``, and its meta records ``upgraded_from_encoder``. A checkpoint from before the
+    guess head gets an even one (``with_guess_head``)."""
     payload = cast(dict[str, Any], torch.load(path, map_location="cpu", weights_only=True))
     if payload.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"{path} is not an M4 checkpoint (format {payload.get('format')})")
@@ -351,12 +413,14 @@ def load_policy(path: Path) -> Policy:
             bidding_state = widen(bidding_state, features)
         meta["upgraded_from_encoder"] = encoder
     hidden = int(payload["hidden"])
+    card_state, guess_head = with_guess_head(card_state, hidden)
     card = CardPlayNet(hidden)
     card.load_state_dict(card_state)
     card.eval()
     bidding = None
     if bidding_state is not None:
+        bidding_state, _ = with_guess_head(bidding_state, hidden)
         bidding = BiddingNet(hidden)
         bidding.load_state_dict(bidding_state)
         bidding.eval()
-    return Policy(card, bidding, meta)
+    return Policy(card, bidding, meta, guess_head)

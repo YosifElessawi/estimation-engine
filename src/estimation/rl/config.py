@@ -76,6 +76,7 @@ class SelfPlayConfig:
     augment_cards: bool = True  # relabel suits at random in card-play batches
     card_anchor_weight: float = 1.0  # keep the PIMC imitation loss in card-play updates
     card_anchor_batch: int = 1024  # recorded PIMC decisions per card-play step
+    guess_weight: float = 0.0  # both nets' guess head loss (who holds each unseen card); 0 is off
     eval_games: int = 16  # greedy games against three HeuristicBots per iteration, for the log
     snapshot_every: int = 5  # iterations between snapshots joining the opponent pool
     snapshots_kept: int = 5
@@ -129,6 +130,8 @@ class TrainConfig:
         play = self.selfplay
         if play.lr_end_factor < 0 or play.card_anchor_end_factor < 0:
             raise ValueError("lr_end_factor and card_anchor_end_factor must be 0 or more")
+        if play.guess_weight < 0:
+            raise ValueError("guess_weight must be 0 or more")
         if play.yardstick_every < 0 or play.yardstick_sets < 1:
             raise ValueError("yardstick_every must be 0 or more and yardstick_sets at least 1")
 

@@ -12,7 +12,7 @@ from estimation.bots import make_bot
 from estimation.rl.config import TrainConfig, config_from_dict
 from estimation.rl.networks import load_policy
 from estimation.rl.train import main, record_elo, train
-from tests.rl.test_networks import as_version_1
+from tests.rl.test_networks import as_version, without_guess_head
 
 TINY: dict[str, Any] = {
     "seed": 3,
@@ -256,11 +256,13 @@ def test_the_command_line_trains_from_a_config_file(
 
 def test_a_run_can_continue_from_a_trained_checkpoint(first_run: Path, tmp_path: Path):
     """selfplay.start_from: no imitation stage, and both nets start as the checkpoint's, here a
-    version 1 checkpoint widened for the void announcements. Held still (card play frozen, no
-    bidding steps), they come out exactly as they went in."""
+    version 2 checkpoint from before the guess head (as RL v2 was saved), widened for each seat's
+    calls by trump. Held still (card play frozen, no bidding steps), they come out exactly as they
+    went in."""
     start = tmp_path / "start.pt"
     shutil.copy(first_run / "checkpoints" / "final.pt", start)
-    as_version_1(start)
+    as_version(start, 2, 456)  # RL v2's encoder
+    without_guess_head(start)  # and from before the guess head
     out = tmp_path / "run"
     reuse_records(first_run, out)
     config = tiny_play(start_from=str(start), iterations=1, card_frozen_iterations=1, bid_lr=0.0)
