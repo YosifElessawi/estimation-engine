@@ -15,7 +15,7 @@ start_from = "runs/rl-v3/checkpoints/final.pt"
 rounds = 3
 games = 2000
 part_games = 25
-label_share = 0.25
+label_share = 0.5
 # The playing Hybrid as on the tables; the teacher searches 4x the deals and every legal card.
 play_samples = 16
 play_top_k = 3
