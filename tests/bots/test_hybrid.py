@@ -10,7 +10,7 @@ import pytest
 from estimation.bots import HeuristicBot, HybridBot, HybridConfig, make_bot
 from estimation.bots.hybrid import BOTH, GUESSES
 from estimation.bots.hybrid.beliefs import (
-    _PublicBidding,
+    PublicBidding,
     bidding_history,
     log_likelihoods,
 )
@@ -43,7 +43,7 @@ from tests.rl.helpers import make_checkpoint
 
 
 def test_public_bidding_reproduces_every_non_card_observation_and_legal_list():
-    """``_PublicBidding`` rebuilds the exact legal actions and empty-hand Observation of every
+    """``PublicBidding`` rebuilds the exact legal actions and empty-hand Observation of every
     non-card step from ``obs.log`` alone, without touching a Round or any seat's cards."""
     configs = (
         RulesConfig(),
@@ -74,7 +74,7 @@ def test_public_bidding_reproduces_every_non_card_observation_and_legal_list():
                 )
                 rnd.step(action)
             obs = rnd.observation(0)
-            state = _PublicBidding(obs, rules)
+            state = PublicBidding(obs, rules)
             for seat, action, expected_legal, expected_obs in steps:
                 assert state.legal_actions() == expected_legal
                 assert state.observation(seat) == expected_obs
@@ -106,7 +106,7 @@ def test_public_bidding_follows_L12_an_earlier_call_in_the_winning_trump(rules: 
         rnd.step(rnd.legal_actions()[-1])
     log = list(rnd.log)
     replayed = Round.new(10, deal(5, 10), config=rules)
-    state = _PublicBidding(replayed.observation(0), rules)
+    state = PublicBidding(replayed.observation(0), rules)
     for seat, action in log:
         assert state.legal_actions() == replayed.legal_actions()
         assert state.observation(seat) == replace(replayed.observation(seat), hand=0)

@@ -11,6 +11,10 @@ per-seat template holds everything that stays fixed during card play (the auctio
 scores, announcements), and each step writes only the parts that change (cards, voids, the trick,
 tricks won and who is still alive) and the seat's hand shape. The tests check every step's
 features and every card against the engine's observations and ``RLBot``.
+
+``play_rounds`` plays whole rounds from their first card whose auctions differ, game by game (the
+bid search imagines a different auction on every deal): each game has its own templates, leader,
+trump and estimates.
 """
 
 from collections.abc import Callable, Sequence
@@ -130,23 +134,89 @@ def play_out(
     ``RLBot`` does. ``hands``, ``played`` and ``voids`` are used up: pass copies.
     """
     games = hands.shape[0]
-    ar = np.arange(games, dtype=np.int64)
-    trump = start.trump  # Sans (4) is no suit, so then no card is trump
-    tlen = len(start.trick)
-    tricks_done = start.tricks_done
     trick_cards = np.zeros((games, 4), np.int64)
     best_card, best_at = -1, 0
     for i, c in enumerate(start.trick):
         trick_cards[:, i] = c
-        if i == 0 or _beats(c, best_card, trump):
+        if i == 0 or _beats(c, best_card, start.trump):
             best_card, best_at = c, i
-    best = np.full(games, best_card, np.int64)
-    best_pos = np.full(games, best_at, np.int64)
-    leaders = np.full(games, start.leader, np.int64)
-    won = np.tile(np.asarray(start.won, np.int64), (games, 1))
-    est = np.asarray(start.estimates, np.int64)
+    return _play(
+        net,
+        np.broadcast_to(templates, (games, 4, NUM_FEATURES)),
+        np.full(games, start.trump, np.int64),
+        np.tile(np.asarray(start.estimates, np.int64), (games, 1)),
+        np.full(games, start.leader, np.int64),
+        np.tile(np.asarray(start.won, np.int64), (games, 1)),
+        start.tricks_done,
+        trick_cards,
+        len(start.trick),
+        np.full(games, best_card, np.int64),
+        np.full(games, best_at, np.int64),
+        hands,
+        played,
+        voids,
+        shapes,
+        first_cards.astype(np.int64),
+    )
+
+
+def play_rounds(
+    net: CardNet,
+    templates: Floats,
+    leaders: Ints,
+    trumps: Ints,
+    estimates: Ints,
+    hands: Masks,
+    shapes: Floats,
+) -> Ints:
+    """Play every game's round from its first card to the end and return each game's tricks won,
+    ``(B, 4)``. Game ``b`` has its own ``templates[b]`` (``(B, 4, NUM_FEATURES)``, as
+    ``seat_templates``), leader, trump and ``estimates[b]``, the dealt hands ``hands[b]`` and
+    their shape blocks ``shapes[b]``; every seat plays as ``RLBot`` does. ``hands`` is used up."""
+    games = hands.shape[0]
+    return _play(
+        net,
+        templates,
+        trumps.astype(np.int64),
+        estimates.astype(np.int64),
+        leaders.astype(np.int64),
+        np.zeros((games, 4), np.int64),
+        0,
+        np.zeros((games, 4), np.int64),
+        0,
+        np.full(games, -1, np.int64),
+        np.zeros(games, np.int64),
+        hands,
+        np.zeros((games, 4), np.uint64),
+        np.zeros((games, 4), np.uint8),
+        shapes,
+        None,
+    )
+
+
+def _play(
+    net: CardNet,
+    templates: Floats,
+    trump: Ints,
+    est: Ints,
+    leaders: Ints,
+    won: Ints,
+    tricks_done: int,
+    trick_cards: Ints,
+    tlen: int,
+    best: Ints,
+    best_pos: Ints,
+    hands: Masks,
+    played: Masks,
+    voids: npt.NDArray[np.uint8],
+    shapes: Floats,
+    card: Ints | None,
+) -> Ints:
+    """``play_out`` and ``play_rounds``: every game's own ``templates`` (``(B, 4, F)``), trump
+    (Sans, 4, makes no card trump), estimates and position, played to the end of the round."""
+    games = hands.shape[0]
+    ar = np.arange(games, dtype=np.int64)
     buf = np.empty((games, NUM_FEATURES), np.float32)
-    card: Ints | None = first_cards.astype(np.int64)
     while True:
         acting = (leaders + tlen) & 3
         hand = hands[ar, acting]
@@ -161,7 +231,7 @@ def play_out(
             if choice.all():
                 _features(
                     buf, templates, played, voids, shapes, acting, hand, trick_cards, tlen,
-                    leaders, best, best_pos, won, est, tricks_done, trump,
+                    leaders, best, best_pos, won, est, tricks_done, trump, ar,
                 )  # fmt: skip
                 values = np.where(bits(legal).astype(bool), net(buf), -np.inf)
                 card = values.argmax(axis=1).astype(np.int64)
@@ -173,7 +243,7 @@ def play_out(
                     _features(
                         sub, templates, played[rows], voids[rows], shapes[rows], acting[rows],
                         hand[rows], trick_cards[rows], tlen, leaders[rows], best[rows],
-                        best_pos[rows], won[rows], est, tricks_done, trump,
+                        best_pos[rows], won[rows], est[rows], tricks_done, trump[rows], rows,
                     )  # fmt: skip
                     values = np.where(bits(legal[rows]).astype(bool), net(sub), -np.inf)
                     card[rows] = values.argmax(axis=1)
@@ -226,12 +296,15 @@ def _features(
     won: Ints,
     est: Ints,
     tricks_done: int,
-    trump: int,
+    trump: Ints,
+    games_of: Ints,
 ) -> None:
-    """Write each game's acting seat's features into ``x``, exactly as ``encode`` would."""
+    """Write each game's acting seat's features into ``x``, exactly as ``encode`` would. Row
+    ``i`` is game ``games_of[i]``: its templates are ``templates[games_of[i]]``; every other
+    array is already the rows'."""
     games = x.shape[0]
     ar = np.arange(games, dtype=np.int64)
-    np.take(templates, acting, axis=0, out=x)
+    x[:] = templates[games_of, acting]
     everyone = played[:, 0] | played[:, 1] | played[:, 2] | played[:, 3]
     table = np.zeros(games, np.uint64)
     for i in range(tlen):
@@ -267,7 +340,7 @@ def _features(
         seat = (acting + r) & 3
         base = PLAYERS + PLAYER_FEATURES * r
         w = won[ar, seat]
-        e = est[seat]
+        e = est[ar, seat]
         alive = (w <= e) & (e <= w + left)
         x[:, base + 2] = w / 13.0
         x[:, base + 3] = (e - w) / 13.0
