@@ -34,11 +34,17 @@ games = 240
 eval_games = 32
 # BiddingNet first adapts alone to the new With rules and inputs, with RL v2's card play.
 card_frozen_iterations = 10
-# Gentler than RL v2's restart at 1e-4, which cost about 1,500 loops of dip before any gain
-# (docs/rl/next-steps.md, item 2): start at half that and fall to 1e-5, where RL v2 ended.
-bid_lr = 5e-5
-card_lr = 5e-5
-lr_end_factor = 0.2
+# A continuation, not a fresh start: bidding explores as little as at the end of RL v2's run.
+# Restarting at the from-scratch 0.2 and 5% sank the nets from 92% to 45% of sets against PIMC-8
+# within 50 loops (the dip RL v2's own run took 2,000 loops to climb out of).
+epsilon_bid_start = 0.01
+epsilon_bid_end = 0.01
+bid_temperature_start = 0.05
+bid_temperature_end = 0.05
+# Gentle steps from RL v2 (its restart at 1e-4 also fed that dip), falling to 1e-5 where it ended.
+bid_lr = 3e-5
+card_lr = 3e-5
+lr_end_factor = 0.33333333
 # The PIMC anchor starts a little above where RL v2 ended (0.03), for the fresh recording.
 card_anchor_weight = 0.05
 card_anchor_end_factor = 0.6

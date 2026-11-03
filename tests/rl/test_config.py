@@ -136,3 +136,6 @@ def test_the_rl_v3_config_continues_rl_v2_under_the_current_rules_with_guesses()
     assert play.bid_lr < v2["selfplay"]["bid_lr"]
     assert play.card_lr < v2["selfplay"]["card_lr"]
     assert play.bid_lr * play.lr_end_factor == pytest.approx(1e-5)  # where RL v2 ended
+    # Exploration where RL v2's run ended, not where a fresh run starts.
+    assert play.bid_temperature_start == v2["selfplay"]["bid_temperature_end"] == 0.05
+    assert play.epsilon_bid_start == v2["selfplay"]["epsilon_bid_end"] == 0.01
