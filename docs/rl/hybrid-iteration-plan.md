@@ -144,4 +144,36 @@ Runs only on Yosif's yes; its compute is sized after step 4.
 
 Each step adds its result here.
 
+### Step 1 (done 2026-11-04): RL v3 and Hybrid v2 kept
+
+**The run** (`configs/rl-v3.toml`, git-ignored `runs/rl-v3/`): a fresh 1,000-game PIMC-30 recording
+under the current rules (20 min), then 1,500 self-play loops from RL v2 (6.9 h, about 17 s a
+loop on 5 workers). Two restarts on the way, both fixed in this PR:
+
+- A guess output on the play nets never learned (its loss stayed at ln 3 for 30 loops). A probe
+  showed RL v2's trunk keeps almost nothing about who holds which card (a head on it scored 34%,
+  a blind guess 35%), so the guesses moved to GuessNet, a separate net.
+- Restarting bidding exploration at the from-scratch settings (temperature 0.2, 5% random) sank
+  the nets from RL v2's 92% of sets against PIMC-8 to 45% within 50 loops. Continuing at RL v2's
+  last settings (0.05, 1%) and 3e-5 falling to 1e-5 kept them at 90-98% throughout.
+
+**Guesses:** GuessNet's top guess names the holder of 47% of unseen cards (a blind guess among
+the players not shown out: 35%), climbing fast in the first 100 loops.
+
+**Matches** (200 duplicate sets each, seed 2026, current rules, 5 workers):
+
+| Match | Sets | First place (fair 25%) | Points per game (95% CI) |
+|---|---|---|---|
+| RL v3 vs RL v2 | 129-71 | 29.0% vs 21.0% | +18.2 (+11.5 to +25.0) |
+| Hybrid v2 vs Hybrid | 110-90 | 26.6% vs 23.4% | +5.4 (+0.6 to +10.3) |
+| Hybrid v2 vs Search bot | 194-6 | 41.2% vs 8.8% | +69.5 (+64.4 to +74.7) |
+
+**Evaluators** (on the Hybrid v2 vs Hybrid games, 300 decisions or cards each): points lost per
+bidding decision 4.3 (Hybrid v2) vs 4.5 (Hybrid); per card 2.38 +- 0.40 vs 2.21 +- 0.27, best
+card 53% vs 48%. Both within noise: a 5-point edge per game spreads over hundreds of decisions.
+
+**Reading:** better nets helped the bare RL bot a lot and the Hybrid a little, since the search
+already covers some of the nets' mistakes. Hybrid v2 moves as fast as the Hybrid (about 14 ms a
+card). Both changes are kept; the tables switch to Hybrid v2 only on Yosif's approval.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
