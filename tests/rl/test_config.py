@@ -57,7 +57,7 @@ def test_a_file_sets_values_in_any_section_and_the_seed_can_be_overridden(tmp_pa
         ({"selfplay": {"lr_end_factor": -0.1}}, "lr_end_factor"),
         ({"selfplay": {"yardstick_sets": 0}}, "yardstick_sets"),
         ({"selfplay": {"overlap": 1}}, "must be true or false"),
-        ({"selfplay": {"guess_weight": -0.1}}, "guess_weight"),
+        ({"selfplay": {"guess_lr": -0.1}}, "guess_lr"),
     ],
 )
 def test_bad_configs_are_refused(data: dict[str, object], message: str):
@@ -132,7 +132,7 @@ def test_the_rl_v3_config_continues_rl_v2_under_the_current_rules_with_guesses()
         assert data[section] == v2[section], section
     play = v3.selfplay
     assert play.start_from == play.yardstick_reference == "runs/rl-v3/reference/rl-v2.pt"
-    assert play.guess_weight > 0
+    assert play.guess_lr > 0  # GuessNet trains
     assert play.bid_lr < v2["selfplay"]["bid_lr"]
     assert play.card_lr < v2["selfplay"]["card_lr"]
     assert play.bid_lr * play.lr_end_factor == pytest.approx(1e-5)  # where RL v2 ended

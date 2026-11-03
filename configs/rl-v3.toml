@@ -1,6 +1,6 @@
 # Hybrid plan step 1 (docs/rl/hybrid-iteration-plan.md): RL v2's nets retrained under the current
 # rules (the 2026-10-30 super-call scoring fix and With from any call, AUC-4 and EST-2), on
-# encoder v3 (each seat's last call in every trump), with the guess head learning who holds each
+# encoder v3 (each seat's last call in every trump), with GuessNet learning who holds each
 # unseen card. About 1,500 loops (about 6 h) after a fresh PIMC-30 recording for the card anchor
 # (about 30 min). Copy RL v2 from the main checkout to runs/rl-v3/reference/rl-v2.pt, then:
 #   uv run python -m estimation.rl.train run --config configs/rl-v3.toml --out runs/rl-v3
@@ -42,8 +42,9 @@ lr_end_factor = 0.2
 # The PIMC anchor starts a little above where RL v2 ended (0.03), for the fresh recording.
 card_anchor_weight = 0.05
 card_anchor_end_factor = 0.6
-# Both nets' guess heads: about the size of the value losses at the start (ln 3 = 1.1 times 0.1).
-guess_weight = 0.1
+# GuessNet, a separate net that learns who holds each unseen card from every decision's real
+# holders. A fresh net, so a learning rate of its own (it falls with the others' to a fifth).
+guess_lr = 1e-3
 checkpoint_every = 25
 overlap = true
 balance = true

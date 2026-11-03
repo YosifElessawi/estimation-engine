@@ -53,7 +53,7 @@ from .config import (
 from .imitation import ImitationData, train_imitation, training_rows
 from .learner import Learner, UpdateReport
 from .memory import gpu_mb, peak_rss_mb
-from .networks import BiddingNet, CardPlayNet, load_policy, save_checkpoint
+from .networks import BiddingNet, CardPlayNet, GuessNet, load_policy, save_checkpoint
 from .record import CardRecords, concat_records, load_records, record_game, save_records
 from .selfplay import (
     LEARNER,
@@ -144,11 +144,16 @@ class Run:
         self.index_path.write_text(json.dumps({"checkpoints": entries}, indent=1) + "\n")
 
     def save(
-        self, name: str, card: CardPlayNet, bidding: BiddingNet | None, meta: dict[str, Any]
+        self,
+        name: str,
+        card: CardPlayNet,
+        bidding: BiddingNet | None,
+        meta: dict[str, Any],
+        guess: GuessNet | None = None,
     ) -> Path:
         path = self.checkpoints / f"{name}.pt"
         full = {"name": name, "seed": self.config.seed, **meta}
-        save_checkpoint(path, card, bidding, full)
+        save_checkpoint(path, card, bidding, full, guess)
         self.add_to_index({"name": name, "file": path.name, "elo": {}, **meta})
         return path
 
@@ -399,7 +404,7 @@ def selfplay_stage(
     anchor = None
     if cfg.card_anchor_weight > 0:
         anchor = ImitationData(records, training_rows(records, config), device)
-    learner = Learner(card, bidding, config, device, anchor)
+    learner = Learner(card, bidding, config, device, anchor, start.guess)
     state_path = run.out / "selfplay" / "state.pt"
     snapshots: dict[int, NetWeights] = {}
     start_iteration = 0
@@ -456,7 +461,7 @@ def selfplay_stage(
                 "bid_samples": totals["bid_samples"] + len(bid),
                 "card_samples": totals["card_samples"] + len(card_samples),
             }
-            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta)
+            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta, learner.guess)
         if not cfg.overlap and done < cfg.iterations:
             view = ActorView(learner.weights(), dict(snapshots))
             pending = submit_iteration(config, done, view, pool)
@@ -492,11 +497,7 @@ def selfplay_stage(
             "card_value_loss": update.card_value_loss,
             "card_q_loss": update.card_q_loss,
             "anchor_loss": update.anchor_loss,
-            "guess": {
-                name: dataclasses.asdict(report)
-                for name, report in (("bid", update.bid_guess), ("card", update.card_guess))
-                if report is not None
-            },
+            **({} if update.guess is None else {"guess": dataclasses.asdict(update.guess)}),
             "memory_mb": {
                 "trainer_peak": peak_rss_mb(),
                 "trainer_gpu": gpu_mb(device),
@@ -517,8 +518,8 @@ def selfplay_stage(
             f"skipped {100 * s['skipped']:.0f}%"
             for kind, s in summary.items()
         ]
-        if update.card_guess is not None:
-            guess = update.card_guess
+        if update.guess is not None:
+            guess = update.guess
             parts.append(
                 f"guesses {100 * guess.accuracy:.1f}% right (blind {100 * guess.blind:.1f}%)"
             )

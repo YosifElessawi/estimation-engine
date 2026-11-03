@@ -15,12 +15,12 @@ trump and the hand's expected tricks in that trump. Sharing that head lets what 
 teaches carry over to the others (with one independent output per card, imitating PIMC
 generalised badly to new games).
 
-Both nets also guess who holds each unseen card (``guess``): a linear output on the trunk with,
-for each of the 52 cards, a logit for each of the other three seats, counted from the acting seat
-(the next seat counterclockwise first). It is trained on the real hands, which training games
-know, and only shapes the trunk: no action value reads it, and the inputs stay the acting seat's
-Observation. A checkpoint saved before the guess head loads with it at zero (every guess even),
-so its action values are exactly as before.
+A third, smaller job has a net of its own: **GuessNet** guesses who holds each unseen card. For
+each of the 52 cards it gives a logit for each of the other three seats, counted from the acting
+seat (the next seat counterclockwise first). It is trained on the real hands, which training
+games know, from the same encoded Observation; no action value reads it, so it cannot change how
+the bot plays, and the Hybrid can use it to imagine deals. It is a separate net because the play
+nets keep little of that information: a guess head on RL v2's trunk could not beat a blind guess.
 
 Rewards are predicted in units of ``REWARD_SCALE`` points.
 """
@@ -68,7 +68,6 @@ UNSEEN = OFFSETS["unseen"]
 CARD_FEATURES = 15
 BID_FEATURES = 17
 GUESS_SEATS = 3  # the three other seats, counted from the acting seat
-GUESS_KEYS = ("guess.weight", "guess.bias")
 
 
 def _trunk(hidden: int) -> nn.Sequential:
@@ -96,15 +95,6 @@ class ActionHead(nn.Module):
     def forward(self, h: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
         joint = torch.relu(self.state(h)[:, None, :] + self.action(phi))
         return self.per_action(h) + self.out(joint)[:, :, 0]
-
-
-def _guess_layer(hidden: int) -> nn.Linear:
-    return nn.Linear(hidden, CARDS * GUESS_SEATS)
-
-
-def _guess_logits(layer: nn.Module, h: torch.Tensor) -> torch.Tensor:
-    """``(batch, 52, 3)`` logits of which other seat holds each card."""
-    return cast(torch.Tensor, layer(h)).view(-1, CARDS, GUESS_SEATS)
 
 
 def _card_tables() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -232,7 +222,6 @@ class BiddingNet(nn.Module):
         self.hidden = hidden
         self.trunk = _trunk(hidden)
         self.head = ActionHead(hidden, BID_ACTIONS, BID_FEATURES)
-        self.guess = _guess_layer(hidden)
         kind, tricks, trump, estimate = _bid_tables()
         self.register_buffer("kind", kind, persistent=False)
         self.register_buffer("tricks", tricks, persistent=False)
@@ -240,14 +229,7 @@ class BiddingNet(nn.Module):
         self.register_buffer("estimate", estimate, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self._values(x, cast(torch.Tensor, self.trunk(x)))
-
-    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """The action values and the guess logits, from one pass through the trunk."""
         h = cast(torch.Tensor, self.trunk(x))
-        return self._values(x, h), _guess_logits(self.guess, h)
-
-    def _values(self, x: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
         phi = bid_features(
             x,
             cast(torch.Tensor, self.kind),
@@ -268,7 +250,6 @@ class CardPlayNet(nn.Module):
         self.trunk = _trunk(hidden)
         self.critic = nn.Linear(hidden, 1)
         self.head = ActionHead(hidden, CARDS, CARD_FEATURES)
-        self.guess = _guess_layer(hidden)
         rank, suit, higher, lower = _card_tables()
         self.register_buffer("rank", rank, persistent=False)
         self.register_buffer("suit", suit, persistent=False)
@@ -276,15 +257,7 @@ class CardPlayNet(nn.Module):
         self.register_buffer("lower", lower, persistent=False)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self._values(x, cast(torch.Tensor, self.trunk(x)))
-
-    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """The critic, the advantages and the guess logits, from one pass through the trunk."""
         h = cast(torch.Tensor, self.trunk(x))
-        value, advantage = self._values(x, h)
-        return value, advantage, _guess_logits(self.guess, h)
-
-    def _values(self, x: torch.Tensor, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         phi = card_features(
             x,
             cast(torch.Tensor, self.rank),
@@ -296,20 +269,33 @@ class CardPlayNet(nn.Module):
         return value, cast(torch.Tensor, self.head(h, phi))
 
 
+class GuessNet(nn.Module):
+    """Logits ``(batch, 52, 3)`` of which other seat holds each card."""
+
+    def __init__(self, hidden: int = HIDDEN) -> None:
+        super().__init__()
+        self.hidden = hidden
+        self.trunk = _trunk(hidden)
+        self.out = nn.Linear(hidden, CARDS * GUESS_SEATS)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = cast(torch.Tensor, self.trunk(x))
+        return cast(torch.Tensor, self.out(h)).view(-1, CARDS, GUESS_SEATS)
+
+
 def parameter_count(net: nn.Module) -> int:
     return sum(p.numel() for p in net.parameters())
 
 
 @dataclass(slots=True)
 class Policy:
-    """A saved bot: CardPlayNet, and BiddingNet unless it was never trained, with the
-    checkpoint's metadata. Runs on the CPU in inference mode. ``guess_head`` says whether the
-    checkpoint holds guess weights (a checkpoint from before the guess head guesses evenly)."""
+    """A saved bot: CardPlayNet, BiddingNet unless it was never trained, GuessNet if one was,
+    and the checkpoint's metadata. Runs on the CPU in inference mode."""
 
     card: CardPlayNet
     bidding: BiddingNet | None
     meta: dict[str, Any]
-    guess_head: bool = True
+    guess: GuessNet | None = None
 
     def card_values(self, features: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
         """The advantage of each of the 52 cards for a batch of encoded positions."""
@@ -326,10 +312,12 @@ class Policy:
         return values.numpy()
 
     def card_guesses(self, features: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-        """CardPlayNet's guess, ``(batch, 52, 3)``: for each card, the chance that each other
-        seat holds it, counted from the acting seat. Meaningful for the unseen cards only."""
+        """GuessNet's guess, ``(batch, 52, 3)``: for each card, the chance that each other seat
+        holds it, counted from the acting seat. Meaningful for the unseen cards only."""
+        if self.guess is None:
+            raise ValueError("this checkpoint has no trained GuessNet")
         with torch.inference_mode():
-            _, _, logits = self.card.forward_all(torch.as_tensor(features))
+            logits = self.guess(torch.as_tensor(features))
         return torch.softmax(logits, dim=2).numpy()
 
 
@@ -343,8 +331,9 @@ def save_checkpoint(
     card: CardPlayNet,
     bidding: BiddingNet | None,
     meta: Mapping[str, Any],
+    guess: GuessNet | None = None,
 ) -> None:
-    """Save a bot: both nets' weights, the encoder it reads and JSON-like ``meta``."""
+    """Save a bot: its nets' weights, the encoder it reads and JSON-like ``meta``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "format": CHECKPOINT_FORMAT,
@@ -353,6 +342,7 @@ def save_checkpoint(
         "hidden": card.hidden,
         "card": state_dict_of(card),
         "bidding": None if bidding is None else state_dict_of(bidding),
+        "guess": None if guess is None else state_dict_of(guess),
         "meta": dict(meta),
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -373,34 +363,17 @@ def widen(state: Mapping[str, torch.Tensor], features: int) -> dict[str, torch.T
     return {**state, FIRST_LAYER: torch.cat([weight, extra], dim=1)}
 
 
-def with_guess_head(
-    state: Mapping[str, torch.Tensor], hidden: int
-) -> tuple[dict[str, torch.Tensor], bool]:
-    """``state`` and whether it holds guess weights. A state saved before the guess head gets
-    zero guess weights: even guesses, and every other output exactly as before."""
-    present = [key in state for key in GUESS_KEYS]
-    if all(present):
-        return dict(state), True
-    if any(present):
-        raise ValueError("a checkpoint holds only part of the guess head")
-    zeros = {
-        "guess.weight": torch.zeros(CARDS * GUESS_SEATS, hidden),
-        "guess.bias": torch.zeros(CARDS * GUESS_SEATS),
-    }
-    return {**state, **zeros}, False
-
-
 def load_policy(path: Path) -> Policy:
     """Load a checkpoint saved by ``save_checkpoint`` for play on the CPU. A checkpoint of an
     older encoder whose features this one only appends to (``UPGRADABLE``) is widened by
-    ``widen``, and its meta records ``upgraded_from_encoder``. A checkpoint from before the
-    guess head gets an even one (``with_guess_head``)."""
+    ``widen``, and its meta records ``upgraded_from_encoder``."""
     payload = cast(dict[str, Any], torch.load(path, map_location="cpu", weights_only=True))
     if payload.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"{path} is not an M4 checkpoint (format {payload.get('format')})")
     encoder, features = int(payload["encoder"]), int(payload["num_features"])
     card_state = cast(dict[str, torch.Tensor], payload["card"])
     bidding_state = cast(dict[str, torch.Tensor] | None, payload["bidding"])
+    guess_state = cast(dict[str, torch.Tensor] | None, payload.get("guess"))
     meta = dict(payload["meta"])
     if (encoder, features) != (ENCODER_VERSION, NUM_FEATURES):
         if UPGRADABLE.get(encoder) != features:
@@ -411,16 +384,21 @@ def load_policy(path: Path) -> Policy:
         card_state = widen(card_state, features)
         if bidding_state is not None:
             bidding_state = widen(bidding_state, features)
+        if guess_state is not None:
+            guess_state = widen(guess_state, features)
         meta["upgraded_from_encoder"] = encoder
     hidden = int(payload["hidden"])
-    card_state, guess_head = with_guess_head(card_state, hidden)
     card = CardPlayNet(hidden)
     card.load_state_dict(card_state)
     card.eval()
     bidding = None
     if bidding_state is not None:
-        bidding_state, _ = with_guess_head(bidding_state, hidden)
         bidding = BiddingNet(hidden)
         bidding.load_state_dict(bidding_state)
         bidding.eval()
-    return Policy(card, bidding, meta, guess_head)
+    guess = None
+    if guess_state is not None:
+        guess = GuessNet(int(guess_state["out.weight"].shape[1]))
+        guess.load_state_dict(guess_state)
+        guess.eval()
+    return Policy(card, bidding, meta, guess)

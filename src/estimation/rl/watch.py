@@ -295,13 +295,13 @@ def _training(state: RunState) -> RenderableType:
         speed.append(f", learning {last['learn_seconds']:.1f} s")
     speed.append(")")
     lines = [kinds, learning, speed]
-    guesses = [e["guess"]["card"] for e in state.entries if "card" in e.get("guess", {})]
+    guesses = [e["guess"] for e in state.entries if "accuracy" in e.get("guess", {})]
     if guesses:
         recent_guesses = guesses[-RECENT:]
         accuracy = [float(g["accuracy"]) for g in guesses]
         lines.append(
             Text(
-                "Hidden-card guesses (card net, last loops): "
+                "Hidden-card guesses (GuessNet, last loops): "
                 f"{100 * _mean([g['accuracy'] for g in recent_guesses]):.1f}% right, blind guess "
                 f"{100 * _mean([g['blind'] for g in recent_guesses]):.1f}%; over the run "
                 f"{sparkline(accuracy)}"

@@ -12,7 +12,7 @@ from estimation.bots import make_bot
 from estimation.rl.config import TrainConfig, config_from_dict
 from estimation.rl.networks import load_policy
 from estimation.rl.train import main, record_elo, train
-from tests.rl.test_networks import as_version, without_guess_head
+from tests.rl.test_networks import as_version
 
 TINY: dict[str, Any] = {
     "seed": 3,
@@ -256,13 +256,11 @@ def test_the_command_line_trains_from_a_config_file(
 
 def test_a_run_can_continue_from_a_trained_checkpoint(first_run: Path, tmp_path: Path):
     """selfplay.start_from: no imitation stage, and both nets start as the checkpoint's, here a
-    version 2 checkpoint from before the guess head (as RL v2 was saved), widened for each seat's
-    calls by trump. Held still (card play frozen, no bidding steps), they come out exactly as they
-    went in."""
+    version 2 checkpoint (as RL v2 was saved), widened for each seat's calls by trump. Held still
+    (card play frozen, no bidding steps), they come out exactly as they went in."""
     start = tmp_path / "start.pt"
     shutil.copy(first_run / "checkpoints" / "final.pt", start)
     as_version(start, 2, 456)  # RL v2's encoder
-    without_guess_head(start)  # and from before the guess head
     out = tmp_path / "run"
     reuse_records(first_run, out)
     config = tiny_play(start_from=str(start), iterations=1, card_frozen_iterations=1, bid_lr=0.0)
@@ -274,6 +272,20 @@ def test_a_run_can_continue_from_a_trained_checkpoint(first_run: Path, tmp_path:
     for net, before in ((final.card, begun.card), (final.bidding, begun.bidding)):
         after = net.state_dict()
         assert all(torch.equal(after[key], value) for key, value in before.state_dict().items())
+
+
+def test_a_run_with_guess_lr_trains_and_saves_a_guess_net(first_run: Path, tmp_path: Path):
+    start = tmp_path / "start.pt"
+    shutil.copy(first_run / "checkpoints" / "final.pt", start)
+    out = tmp_path / "guess"
+    reuse_records(first_run, out)
+    config = tiny_play(start_from=str(start), iterations=2, card_frozen_iterations=0, guess_lr=1e-3)
+    train(config, out)
+    assert load_policy(start).guess is None
+    final = load_policy(out / "checkpoints" / "final.pt")
+    assert final.guess is not None
+    log = [json.loads(line) for line in (out / "selfplay/log.jsonl").read_text().splitlines()]
+    assert all(0 < entry["guess"]["accuracy"] < 1 for entry in log)
 
 
 def test_a_missing_start_checkpoint_stops_the_run_before_any_games(tmp_path: Path):

@@ -14,8 +14,9 @@ imitation loss (``card_anchor_weight``). Without that anchor, a pilot's card pla
 points of RSA against HeuristicBots in 36 self-play iterations: it forgot PIMC-like play while
 training on the early, chaotic rounds of a bidder that starts from scratch.
 
-With ``guess_weight``, both nets also learn who holds each unseen card (``guesses``): their guess
-head's cross-entropy against the recorded real holders joins each step's loss at that weight.
+With ``guess_lr``, GuessNet learns who holds each unseen card from every recorded decision (bidding
+and card play) and its real holders (``guesses``), at its own learning rate; the play nets never
+see it.
 
 Optional linear schedules loosen the anchor (``card_anchor_end_factor``) and lower both learning
 rates (``lr_end_factor``) over the run, so a long run can drift further from PIMC once its
@@ -33,7 +34,7 @@ from torch import nn
 from .config import SELFPLAY_STAGE, TrainConfig, derive_seed, linear_schedule
 from .guesses import blind_right, guess_loss
 from .imitation import ImitationData, imitation_losses
-from .networks import REWARD_SCALE, BiddingNet, CardPlayNet, state_dict_of
+from .networks import REWARD_SCALE, BiddingNet, CardPlayNet, GuessNet, state_dict_of
 from .selfplay import NetWeights, Samples
 from .symmetry import SuitAugmenter
 from .torch_typing import backward, seeded_generator, step
@@ -42,6 +43,7 @@ BID_SHUFFLE = 1
 CARD_SHUFFLE = 2
 CARD_RELABEL = 3
 ANCHOR_ROWS = 4
+GUESS_SHUFFLE = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,47 +54,24 @@ class UpdateReport:
     anchor_loss: float
     bid_steps: int
     card_steps: int
-    lr_factor: float  # both learning rates' share of their configured value this iteration
+    lr_factor: float  # the learning rates' share of their configured value this iteration
     anchor_weight: float  # card_anchor_weight this iteration
-    bid_guess: "GuessReport | None" = None  # BiddingNet's guess head, with guess_weight
-    card_guess: "GuessReport | None" = None  # CardPlayNet's guess head, with guess_weight
+    guess: "GuessReport | None" = None  # GuessNet's training, with guess_lr
 
 
 @dataclass(frozen=True, slots=True)
 class GuessReport:
-    """A guess head's training this iteration: mean loss, the share of labelled cards its top
-    guess got right, and the share an even guess among the seats not shown void would."""
+    """GuessNet's training this iteration: mean loss, the share of labelled cards its top guess
+    got right, and the share an even guess among the seats not shown out of the suit would."""
 
     loss: float
     accuracy: float
     blind: float
 
 
-class _GuessTally:
-    __slots__ = ("blind", "count", "loss", "right", "steps")
-
-    def __init__(self) -> None:
-        self.loss = self.right = self.blind = self.count = 0.0
-        self.steps = 0
-
-    def add(
-        self, loss: torch.Tensor, right: torch.Tensor, blind: torch.Tensor, count: torch.Tensor
-    ) -> None:
-        self.loss += float(loss.detach())
-        self.right += float(right)
-        self.blind += float(blind)
-        self.count += float(count)
-        self.steps += 1
-
-    def report(self) -> GuessReport | None:
-        if not self.steps:
-            return None
-        count = max(1.0, self.count)
-        return GuessReport(self.loss / self.steps, self.right / count, self.blind / count)
-
-
 class Learner:
-    """Both nets and their optimizers on the training device."""
+    """The nets and their optimizers on the training device: both play nets, and GuessNet with
+    ``guess_lr`` (``guess``, or a fresh one)."""
 
     def __init__(
         self,
@@ -101,6 +80,7 @@ class Learner:
         config: TrainConfig,
         device: torch.device,
         anchor: ImitationData | None = None,
+        guess: GuessNet | None = None,
     ) -> None:
         cfg = config.selfplay
         self.config = config
@@ -111,6 +91,11 @@ class Learner:
         self.bid_optimizer = torch.optim.Adam(self.bidding.parameters(), lr=cfg.bid_lr)
         self.augmenter = SuitAugmenter(device) if cfg.augment_cards else None
         self.anchor = anchor if cfg.card_anchor_weight > 0 else None
+        self.guess: GuessNet | None = None
+        self.guess_optimizer: torch.optim.Adam | None = None
+        if cfg.guess_lr > 0:
+            self.guess = (GuessNet(card.hidden) if guess is None else guess).to(device)
+            self.guess_optimizer = torch.optim.Adam(self.guess.parameters(), lr=cfg.guess_lr)
 
     def weights(self) -> NetWeights:
         """The current nets as CPU state dicts, for the actors."""
@@ -122,34 +107,43 @@ class Learner:
 
     def state(self) -> dict[str, Any]:
         """Everything needed to resume training exactly: weights and optimizer states."""
-        return {
+        state = {
             "card": state_dict_of(self.card),
             "bidding": state_dict_of(self.bidding),
             "card_optimizer": copy.deepcopy(self.card_optimizer.state_dict()),
             "bid_optimizer": copy.deepcopy(self.bid_optimizer.state_dict()),
         }
+        if self.guess is not None and self.guess_optimizer is not None:
+            state["guess"] = state_dict_of(self.guess)
+            state["guess_optimizer"] = copy.deepcopy(self.guess_optimizer.state_dict())
+        return state
 
     def load_state(self, state: dict[str, Any]) -> None:
         self.card.load_state_dict(state["card"])
         self.bidding.load_state_dict(state["bidding"])
         self.card_optimizer.load_state_dict(state["card_optimizer"])
         self.bid_optimizer.load_state_dict(state["bid_optimizer"])
+        if self.guess is not None and self.guess_optimizer is not None:
+            self.guess.load_state_dict(state["guess"])
+            self.guess_optimizer.load_state_dict(state["guess_optimizer"])
 
     def update(self, bid: Samples, card: Samples, iteration: int, train_card: bool) -> UpdateReport:
         seed = self.config.seed
         cfg = self.config.selfplay
         lr_factor = linear_schedule(cfg.iterations, iteration, 1.0, cfg.lr_end_factor)
-        for optimizer, lr in ((self.bid_optimizer, cfg.bid_lr), (self.card_optimizer, cfg.card_lr)):
+        rates = [(self.bid_optimizer, cfg.bid_lr), (self.card_optimizer, cfg.card_lr)]
+        if self.guess_optimizer is not None:
+            rates.append((self.guess_optimizer, cfg.guess_lr))
+        for optimizer, lr in rates:
             for group in optimizer.param_groups:
                 group["lr"] = lr * lr_factor
         anchor_weight = cfg.card_anchor_weight * linear_schedule(
             cfg.iterations, iteration, 1.0, cfg.card_anchor_end_factor
         )
         bid_loss, bid_steps = 0.0, 0
-        bid_guess, card_guess = _GuessTally(), _GuessTally()
         if len(bid):
             rng = np.random.default_rng(derive_seed(seed, SELFPLAY_STAGE, iteration, BID_SHUFFLE))
-            bid_loss, bid_steps = self._fit_bidding(bid, rng, bid_guess)
+            bid_loss, bid_steps = self._fit_bidding(bid, rng)
         value_loss = q_loss = anchor_loss = 0.0
         card_steps = 0
         if train_card and len(card):
@@ -159,8 +153,12 @@ class Learner:
                 derive_seed(seed, SELFPLAY_STAGE, iteration, ANCHOR_ROWS)
             )
             value_loss, q_loss, anchor_loss, card_steps = self._fit_card(
-                card, rng, relabel, anchor_rng, anchor_weight, card_guess
+                card, rng, relabel, anchor_rng, anchor_weight
             )
+        guess = None
+        if self.guess is not None and (len(bid) or len(card)):
+            rng = np.random.default_rng(derive_seed(seed, SELFPLAY_STAGE, iteration, GUESS_SHUFFLE))
+            guess = self._fit_guess(bid, card, rng)
         return UpdateReport(
             bid_loss,
             value_loss,
@@ -170,19 +168,42 @@ class Learner:
             card_steps,
             lr_factor,
             anchor_weight,
-            bid_guess.report(),
-            card_guess.report(),
+            guess,
         )
 
-    def _tensors(
-        self, samples: Samples
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _fit_guess(self, bid: Samples, card: Samples, rng: np.random.Generator) -> GuessReport:
+        """GuessNet on every decision of the iteration, bidding and card play, with its real
+        holders."""
+        net, optimizer = self.guess, self.guess_optimizer
+        if net is None or optimizer is None:
+            raise RuntimeError("no GuessNet to train")
+        device = self.device
+        x = torch.cat([torch.as_tensor(bid.features), torch.as_tensor(card.features)]).to(device)
+        labels = torch.cat([torch.as_tensor(bid.guesses), torch.as_tensor(card.guesses)]).to(device)
+        net.train()
+        loss_total = right = blind = count = 0.0
+        batches = self._batches(len(x), rng)
+        for idx in batches:
+            features = x[idx].float()
+            batch_labels = labels[idx]
+            loss, hits, labelled = guess_loss(net(features), batch_labels)
+            optimizer.zero_grad(set_to_none=True)
+            backward(loss)
+            step(optimizer)
+            loss_total += float(loss.detach())
+            right += float(hits)
+            blind += float(blind_right(features, batch_labels))
+            count += float(labelled)
+        net.eval()
+        count = max(1.0, count)
+        return GuessReport(loss_total / max(1, len(batches)), right / count, blind / count)
+
+    def _tensors(self, samples: Samples) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         device = self.device
         x = torch.as_tensor(samples.features).to(device)
         actions = torch.as_tensor(samples.actions.astype(np.int64)).to(device)
         rewards = torch.as_tensor(samples.rewards).to(device) / REWARD_SCALE
-        guesses = torch.as_tensor(samples.guesses).to(device)
-        return x, actions, rewards, guesses
+        return x, actions, rewards
 
     def _batches(self, n: int, rng: np.random.Generator) -> list[torch.Tensor]:
         cfg = self.config.selfplay
@@ -192,25 +213,16 @@ class Learner:
             batches += [order[i : i + cfg.batch] for i in range(0, n, cfg.batch)]
         return batches
 
-    def _fit_bidding(
-        self, samples: Samples, rng: np.random.Generator, tally: _GuessTally
-    ) -> tuple[float, int]:
+    def _fit_bidding(self, samples: Samples, rng: np.random.Generator) -> tuple[float, int]:
         cfg = self.config.selfplay
-        x, actions, rewards, guesses = self._tensors(samples)
+        x, actions, rewards = self._tensors(samples)
         net, optimizer = self.bidding, self.bid_optimizer
         net.train()
         total = 0.0
         batches = self._batches(len(samples), rng)
         for idx in batches:
-            features = x[idx].float()
-            values, logits = net.forward_all(features)
-            q = values.gather(1, actions[idx, None])[:, 0]
+            q = net(x[idx].float()).gather(1, actions[idx, None])[:, 0]
             loss = nn.functional.huber_loss(q, rewards[idx], delta=cfg.huber)
-            if cfg.guess_weight > 0:
-                labels = guesses[idx]
-                guess, right, count = guess_loss(logits, labels)
-                loss = loss + cfg.guess_weight * guess
-                tally.add(guess, right, blind_right(features, labels), count)
             optimizer.zero_grad(set_to_none=True)
             backward(loss)
             nn.utils.clip_grad_norm_(net.parameters(), cfg.grad_clip)
@@ -226,11 +238,10 @@ class Learner:
         relabel: torch.Generator,
         anchor_rng: np.random.Generator,
         anchor_weight: float,
-        tally: _GuessTally,
     ) -> tuple[float, float, float, int]:
         cfg = self.config.selfplay
         imitation = self.config.imitation
-        x, actions, rewards, guesses = self._tensors(samples)
+        x, actions, rewards = self._tensors(samples)
         net, optimizer = self.card, self.card_optimizer
         net.train()
         value_total = q_total = anchor_total = 0.0
@@ -238,22 +249,16 @@ class Learner:
         for idx in batches:
             features = x[idx].float()
             cards = actions[idx]
-            labels = guesses[idx]
             if self.augmenter is not None:
                 perms = self.augmenter.draw(len(idx), relabel)
                 features = self.augmenter.relabel_features(features, perms)
                 cards = self.augmenter.relabel_cards(cards, perms)
-                labels = self.augmenter.relabel_card_rows(labels, perms)
-            value, advantage, logits = net.forward_all(features)
+            value, advantage = net(features)
             target = rewards[idx]
             q = value.detach() + advantage.gather(1, cards[:, None])[:, 0]
             value_loss = nn.functional.huber_loss(value, target, delta=cfg.huber)
             q_loss = nn.functional.huber_loss(q, target, delta=cfg.huber)
             loss = value_loss + q_loss
-            if cfg.guess_weight > 0:
-                guess, right, count = guess_loss(logits, labels)
-                loss = loss + cfg.guess_weight * guess
-                tally.add(guess, right, blind_right(features, labels), count)
             if self.anchor is not None:
                 rows = torch.as_tensor(
                     anchor_rng.integers(0, self.anchor.n, cfg.card_anchor_batch)

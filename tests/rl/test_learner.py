@@ -170,33 +170,31 @@ def guess_samples(n: int, seed: int) -> Samples:
     return Samples(features, base.actions, base.rewards, labels)
 
 
-def test_with_guess_weight_both_nets_learn_who_holds_the_cards():
-    config = config_from_dict(
-        {
-            "seed": 1,
-            "selfplay": {"batch": 64, "epochs": 1, "guess_weight": 1.0, "augment_cards": False},
-        }
-    )
+def test_with_guess_lr_the_guess_net_learns_who_holds_the_cards():
+    config = config_from_dict({"seed": 1, "selfplay": {"batch": 64, "epochs": 1, "guess_lr": 1e-3}})
     torch.manual_seed(0)
     model = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    assert model.guess is not None
     data = guess_samples(512, 4)
     first = model.update(data, data, 0, train_card=True)
     last = first
-    for iteration in range(1, 40):
+    for iteration in range(1, 30):
         last = model.update(data, data, iteration, train_card=True)
-    assert first.card_guess is not None
-    assert last.card_guess is not None
-    assert last.bid_guess is not None
-    assert last.card_guess.loss < first.card_guess.loss / 3
-    assert last.card_guess.accuracy > 0.8  # most of the way, from about 1 in 3
-    assert last.bid_guess.accuracy > 0.8
-    assert last.card_guess.blind == pytest.approx(1 / 3, abs=0.01)  # nobody has shown out
+    assert first.guess is not None
+    assert last.guess is not None
+    assert last.guess.loss < first.guess.loss / 3
+    assert last.guess.accuracy > 0.95
+    assert last.guess.blind == pytest.approx(1 / 3, abs=0.01)  # nobody has shown out
+    state = model.state()
+    again = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    again.load_state(state)
+    assert again.guess is not None
+    assert torch.equal(again.guess.out.weight, model.guess.out.weight)  # resumes exactly
 
 
-def test_without_guess_weight_the_guess_head_does_not_train():
+def test_without_guess_lr_there_is_no_guess_net():
     model = learner()
-    before = model.card.guess.weight.clone()
+    assert model.guess is None
     report = model.update(samples(128, 4, 0), samples(128, 3, 1), 0, train_card=True)
-    assert report.card_guess is None
-    assert report.bid_guess is None
-    assert torch.equal(before, model.card.guess.weight)
+    assert report.guess is None
+    assert "guess" not in model.state()
