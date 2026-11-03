@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from estimation.bots import HeuristicBot, HybridBot, HybridConfig, make_bot
+from estimation.bots.hybrid import BOTH, GUESSES
 from estimation.bots.hybrid.beliefs import (
     _PublicBidding,
     bidding_history,
@@ -339,6 +340,56 @@ def test_invalid_hybrid_configs_are_rejected(tmp_path: Path):
         HybridBot(0, HybridConfig(checkpoint=valid, samples=2, oversample=1)), HybridBot
     )
     assert FIRST_BID < ESTIMATE_BASE
+
+
+def test_dealing_by_guesses_needs_a_guess_net_and_a_valid_setting(tmp_path: Path):
+    plain = str(make_checkpoint(tmp_path / "plain.pt"))
+    with pytest.raises(ValueError, match="no GuessNet"):
+        HybridBot(0, HybridConfig(checkpoint=plain, deals=GUESSES))
+    guessing = str(make_checkpoint(tmp_path / "guess.pt", guess=True))
+    for bad in (
+        HybridConfig(checkpoint=guessing, deals="random"),
+        HybridConfig(checkpoint=guessing, deals=GUESSES, guess_temperature=0.0),
+    ):
+        with pytest.raises(ValueError, match=r"deals|guess_temperature"):
+            HybridBot(0, bad)
+
+
+def test_guess_chances_are_the_guess_nets_from_the_bots_own_view(tmp_path: Path):
+    path = make_checkpoint(tmp_path / "guess.pt", guess=True)
+    bot = HybridBot(0, HybridConfig(checkpoint=str(path), deals=GUESSES))
+    bola = Bola(5)
+    while bola.phase is not Phase.PLAY:
+        bola.step(
+            HeuristicBot().act(bola.observation(bola.current_player or 0), bola.legal_actions())
+        )
+    obs = bola.observation(bola.current_player or 0)
+    expected = policy_at(str(path)).card_guesses(encode(obs)[np.newaxis])[0]
+    assert np.allclose(bot.guess_chances(obs), expected)
+    sharp = HybridBot(0, HybridConfig(checkpoint=str(path), deals=GUESSES, guess_temperature=0.5))
+    assert np.allclose(sharp.guess_chances(obs), expected**2)
+
+
+@pytest.mark.parametrize("deals", [GUESSES, BOTH])
+def test_a_hybrid_dealing_by_guesses_plays_legal_seeded_games(tmp_path: Path, deals: str):
+    path = make_checkpoint(tmp_path / "guess.pt", seed=3, guess=True)
+    spec = f"hybrid:checkpoint={path}:samples=3:oversample=2:deals={deals}"
+    runs: list[list[int]] = [[], []]
+    for out in runs:
+        bot = make_bot(spec, 4)
+        other = HeuristicBot()
+        bola = Bola(8)
+        while not bola.is_over and bola.round.round_no <= 2:
+            seat = bola.current_player or 0
+            obs = bola.observation(seat)
+            legal = bola.legal_actions()
+            action = bot.act(obs, legal) if seat == 0 else other.act(obs, legal)
+            assert action in legal
+            if seat == 0:
+                out.append(action)
+            bola.step(action)
+    assert len(runs[0]) >= 26
+    assert runs[0] == runs[1]
 
 
 def test_shapes_of_and_merge_equivalent():

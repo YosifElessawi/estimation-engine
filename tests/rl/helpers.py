@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from estimation.rl.networks import ActionHead, BiddingNet, CardPlayNet, save_checkpoint
+from estimation.rl.networks import ActionHead, BiddingNet, CardPlayNet, GuessNet, save_checkpoint
 
 
 def rig(head: ActionHead, favourite: int) -> None:
@@ -25,11 +25,12 @@ def make_checkpoint(
     bidding: bool = True,
     favourite_card: int | None = None,
     favourite_action: int | None = None,
+    guess: bool = False,
 ) -> Path:
     """Save a checkpoint with random weights. ``favourite_card`` (a card id) gets the highest
     advantage in every position and ``favourite_action`` (an action id 0-67) the highest
     bidding value, then lower ids, by silencing the shared action head and giving the
-    per-action outputs fixed values."""
+    per-action outputs fixed values. With ``guess`` it also holds a random GuessNet."""
     torch.manual_seed(seed)
     card = CardPlayNet(hidden)
     bid_net = BiddingNet(hidden) if bidding else None
@@ -38,5 +39,6 @@ def make_checkpoint(
             rig(card.head, favourite_card)
         if favourite_action is not None and bid_net is not None:
             rig(bid_net.head, favourite_action)
-    save_checkpoint(path, card, bid_net, {"name": path.stem})
+    guess_net = GuessNet(hidden) if guess else None
+    save_checkpoint(path, card, bid_net, {"name": path.stem}, guess_net)
     return path

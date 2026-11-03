@@ -2,11 +2,14 @@
 
 - **Bidding:** Dash Calls, bids, With, Pass, estimates and super calls take the legal action with
   the highest BiddingNet value, exactly as the RL bot plays them.
-- **Which deals to imagine:** at a card decision with more than one choice it draws
-  ``samples * oversample`` deals of the unseen cards that fit the hand sizes, voids, played cards
-  and void announcements, as PIMC does, and keeps ``samples`` of them by weighted sampling without
-  replacement, weighted by how well each deal explains the other seats' bidding under BiddingNet
-  (``beliefs``).
+- **Which deals to imagine** (``deals``): at a card decision with more than one choice it deals
+  the unseen cards so they fit the hand sizes, voids, played cards and void announcements.
+  ``bidding`` (the M5 Hybrid) draws ``samples * oversample`` deals at random, as PIMC does, and
+  keeps ``samples`` of them by weighted sampling without replacement, weighted by how well each
+  deal explains the other seats' bidding under BiddingNet (``beliefs``). ``guesses`` places each
+  card where the checkpoint's GuessNet thinks it is (``guess_temperature`` flattens or sharpens
+  its chances), and ``both`` draws ``samples * oversample`` such deals and keeps them by the
+  bidding as ``bidding`` does.
 - **Judging each card:** for each legal card (or the net's ``top_k`` favourites) and each kept
   deal, it plays the card and then the rest of the round with CardPlayNet's greedy card play for
   all four seats (``rollout``), and scores the result by SPEC §3 like the Search bot: own round
@@ -35,12 +38,13 @@ from estimation.rl.networks import REWARD_SCALE, Policy
 from ..knowledge import read_knowledge
 from ..pimc import MAX_REDEALS, best_index, fits_announcements
 from ..rl import policy_at
-from ..sampling import deal_unseen
+from ..sampling import deal_by_guesses, deal_unseen
 from ..scoring import RoundScorer, estimates_of, standings_weights
 from .beliefs import BiddingHistory, bidding_history, log_likelihoods
 from .rollout import Start, play_out, seat_templates, shapes_of
 
 RL_V2_CHECKPOINT = "runs/m4-rules-v2/checkpoints/final.pt"
+BIDDING, GUESSES, BOTH = "bidding", "guesses", "both"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +56,8 @@ class HybridConfig:
     belief_temperature: float = 0.1  # BiddingNet softmax temperature, in units of 50 points
     belief_floor: float = 0.1  # share of each choice's probability spread over its options
     top_k: int = 3  # cards searched: CardPlayNet's k favourites, 0 for every candidate card
+    deals: str = BIDDING  # how deals are imagined: BIDDING, GUESSES or BOTH (see the module)
+    guess_temperature: float = 1.0  # GuessNet's chances are raised to 1 / this before dealing
     merge_equivalent: bool = True  # search one card per run of touching equivalent cards
     leader_weight: bool = True  # count players ahead in the game double (standings_weights)
     threads: int = 1  # PyTorch threads: the batches are small, one thread avoids contention
@@ -92,12 +98,20 @@ class HybridBot:
             raise ValueError("the hybrid needs belief_temperature > 0 and 0 < belief_floor <= 1")
         if config.top_k < 0:
             raise ValueError("top_k must be 0 (every card) or more")
+        if config.deals not in (BIDDING, GUESSES, BOTH):
+            raise ValueError(f"deals must be {BIDDING}, {GUESSES} or {BOTH}, not {config.deals!r}")
+        if config.guess_temperature <= 0:
+            raise ValueError("guess_temperature must be above 0")
         _set_threads(config.threads)
         self.seed = seed
         self.config = config
         self._policy = policy_at(config.checkpoint)
         if self._policy.bidding is None:
             raise ValueError(f"{config.checkpoint} has no trained BiddingNet")
+        if config.deals != BIDDING and self._policy.guess is None:
+            raise ValueError(
+                f"{config.checkpoint} has no GuessNet to deal by (deals={config.deals})"
+            )
         self._rng = random.Random(seed)
         self._history: BiddingHistory | None = None
         self._history_key: tuple[Any, ...] | None = None
@@ -147,8 +161,9 @@ class HybridBot:
 
     def sample_deals(self, obs: Observation) -> list[list[int]]:
         """``samples`` deals (the four remaining hands, own hand included) that fit the hand
-        sizes, voids, played cards and void announcements, picked from ``samples * oversample``
-        drawn by BiddingNet's likelihood of the other seats' bidding."""
+        sizes, voids, played cards and void announcements, imagined as ``deals`` says: drawn at
+        random or by GuessNet, and with ``bidding`` or ``both`` kept from ``samples *
+        oversample`` drawn by BiddingNet's likelihood of the other seats' bidding."""
         config = self.config
         rng = self._rng
         know = read_knowledge(obs)
@@ -158,20 +173,28 @@ class HybridBot:
         voids = [know.voids[seat] for seat in others]
         unseen = know.unseen
         announced = obs.void_announced
-        drawn = config.samples * (config.oversample if config.beliefs else 1)
+        weigh = config.deals != GUESSES and config.beliefs and config.oversample > 1
+        drawn = config.samples * (config.oversample if weigh else 1)
+        chances = self.guess_chances(obs) if config.deals != BIDDING else None
+
+        def draw() -> list[int]:
+            if chances is None:
+                return deal_unseen(unseen, sizes, voids, rng)
+            return deal_by_guesses(unseen, sizes, voids, chances, rng)
+
         deals: list[list[int]] = []
         for _ in range(drawn):
-            three = deal_unseen(unseen, sizes, voids, rng)
+            three = draw()
             for _ in range(MAX_REDEALS):  # TBL-7: re-deal until the announcements fit
                 if fits_announcements(three, others, know.played_by, announced):
                     break
-                three = deal_unseen(unseen, sizes, voids, rng)
+                three = draw()
             hands = [0, 0, 0, 0]
             hands[me] = know.hand
             for i, seat in enumerate(others):
                 hands[seat] = three[i]
             deals.append(hands)
-        if not config.beliefs or config.oversample == 1:
+        if not weigh:
             return deals
         history = self._bidding_history(obs)
         if not len(history):
@@ -192,6 +215,15 @@ class HybridBot:
         keys = [math.log(1.0 - rng.random()) * math.exp(min(top - float(lp), 700.0)) for lp in logp]
         kept = sorted(range(len(deals)), key=keys.__getitem__, reverse=True)[: config.samples]
         return [deals[k] for k in sorted(kept)]
+
+    def guess_chances(self, obs: Observation) -> list[list[float]]:
+        """GuessNet's chance of each other seat (the next one counterclockwise first) holding
+        each card, from ``obs`` alone, raised to ``1 / guess_temperature``."""
+        x = encode(obs, self.config.rules)[np.newaxis]
+        chances = self._policy.card_guesses(x)[0].astype(np.float64)
+        if self.config.guess_temperature != 1.0:
+            chances = chances ** (1.0 / self.config.guess_temperature)
+        return chances.tolist()
 
     def _bidding_history(self, obs: Observation) -> BiddingHistory:
         """The other seats' bidding this round, rebuilt once per round."""

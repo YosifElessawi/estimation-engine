@@ -7,6 +7,10 @@ proportion to its free places. That keeps every fitting deal possible and is exa
 at most one suit is limited by voids. With two or more it leans away from uniform: late in a
 round, by 0.1 to 0.3 in total variation. A Hall-condition check before each placement keeps every
 partial deal completable, so sampling never dead-ends.
+
+``deal_by_guesses`` deals the same way, but places every card, one at a time, with the chances a
+guess model gives each hand of holding it (the Hybrid's GuessNet), among the hands that keep a
+fitting deal possible.
 """
 
 import random
@@ -66,6 +70,69 @@ def deal_unseen(
         for card in shuffled[start : start + free[i]]:
             hands[i] |= 1 << card
         start += free[i]
+    return hands
+
+
+def deal_by_guesses(
+    unseen: int,
+    sizes: Sequence[int],
+    voids: Sequence[int],
+    chances: Sequence[Sequence[float]],
+    rng: random.Random,
+) -> list[int]:
+    """Three hands holding exactly the ``unseen`` cards, of ``sizes`` cards each, with no card of
+    a suit in hand ``i``'s 4-bit ``voids[i]`` mask, each card placed in proportion to
+    ``chances[card][i]`` among the hands that keep the rest of the deal possible (Hall), or in
+    proportion to their free places when every such chance is 0. Cards of suits some hand is void
+    in go first, most limited first, then the rest in a random order."""
+    if sum(sizes) != unseen.bit_count():
+        raise ValueError("hand sizes must add up to the unseen cards")
+    hands = [0, 0, 0]
+    free = [sizes[0], sizes[1], sizes[2]]
+    open_cards: list[int] = []
+    constrained: list[tuple[int, int]] = []
+    for suit in range(4):
+        cards = unseen & SUIT_MASKS[suit]
+        if not cards:
+            continue
+        allowed = sum(1 << i for i in range(3) if not voids[i] >> suit & 1)
+        if allowed == _ALL:
+            open_cards += cards_of(cards)
+        elif allowed:
+            constrained.append((allowed, cards))
+        else:
+            raise ValueError("every hand is void in a suit that still has unseen cards")
+    slack = _slack(free, constrained, len(open_cards))
+    constrained.sort(key=lambda entry: entry[0].bit_count())  # most constrained first
+    order: list[tuple[int, int]] = []
+    for allowed, cards in constrained:
+        group = cards_of(cards)
+        rng.shuffle(group)
+        order += [(allowed, card) for card in group]
+    rng.shuffle(open_cards)
+    order += [(_ALL, card) for card in open_cards]
+    for allowed, card in order:
+        options = [
+            i
+            for i in range(3)
+            if allowed >> i & 1 and free[i] and all(slack[s] > 0 for s in _SPENDS[(allowed, i)])
+        ]
+        if not options:
+            raise ValueError("no deal fits these hand sizes and voids")
+        weights = [max(0.0, float(chances[card][i])) for i in options]
+        if not sum(weights):
+            weights = [float(free[i]) for i in options]
+        pick = rng.random() * sum(weights)
+        hand = options[-1]
+        for i, weight in zip(options, weights, strict=True):
+            pick -= weight
+            if pick < 0:
+                hand = i
+                break
+        hands[hand] |= 1 << card
+        free[hand] -= 1
+        for s in _SPENDS[(allowed, hand)]:
+            slack[s] -= 1
     return hands
 
 
