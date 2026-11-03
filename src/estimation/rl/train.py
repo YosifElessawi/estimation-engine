@@ -74,6 +74,7 @@ from .selfplay import (
 from .torch_typing import seed_torch
 
 WARM_START = "warm-start"
+RECORD_PROGRESS = "progress.json"  # in <out>/warmstart/, for the watch view
 FINAL = "final"
 
 
@@ -161,8 +162,15 @@ def record_stage(run: Run, pool: ProcessPoolExecutor) -> CardRecords:
     start = time.perf_counter()
     parts: list[CardRecords] = []
     task = partial(record_game, config=run.config)
+    progress = path.parent / RECORD_PROGRESS
+    progress.parent.mkdir(parents=True, exist_ok=True)
     for done, part in enumerate(pool.map(task, range(games)), 1):
         parts.append(part)
+        if done % 5 == 0 or done == games:
+            elapsed = time.perf_counter() - start
+            rows = sum(map(len, parts))
+            data = {"done": done, "games": games, "rows": rows, "seconds": elapsed}
+            progress.write_text(json.dumps(data) + "\n")
         if done % 20 == 0 or done == games:
             elapsed = time.perf_counter() - start
             left = elapsed / done * (games - done)
