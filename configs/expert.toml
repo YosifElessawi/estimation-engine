@@ -36,11 +36,23 @@ normalize_weights = true
 win_blend = 0.5
 win_points = 100.0
 
+# The refit's opponents (Yosif, 2026-11-03): strong bots of different styles instead of
+# HeuristicBot and plain PIMC, at half the dose first since each Hybrid seat is slow. Hybrid
+# tables seat two light Hybrids on RL v3's nets; mixed tables draw each seat on its own.
 [opponents]
-self_play = 0.70
-heuristic = 0.15
-pimc = 0.15
-pimc_samples = [4, 5, 6, 7, 8]
+self_play = 0.80
+heuristic = 0.0
+pimc = 0.0
+hybrid = 0.06
+mixed = 0.14
+hybrid_spec = "hybrid:checkpoint=runs/rl-v3/checkpoints/final.pt:samples=4:top_k=2"
+hybrid_seats = 2
+mixed_pool = [
+    "snapshot",
+    "search:samples=8",
+    "rl:checkpoint=runs/m4-rules-v2/checkpoints/final.pt",
+    "hybrid:checkpoint=runs/rl-v3/checkpoints/final.pt:samples=4:top_k=2",
+]
 
 # The bidding refit after each copy: card play frozen, only BiddingNet learns, about 45 min.
 [selfplay]

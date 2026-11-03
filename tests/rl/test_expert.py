@@ -84,6 +84,11 @@ def test_the_committed_config_starts_from_rl_v3_and_refits_bidding_only():
     assert refit.card_anchor_weight == 0.0
     assert refit.yardstick_every == 0
     assert refit.guess_lr > 0  # GuessNet keeps learning
+    mix = config.train.opponents  # strong, varied opponents (Yosif, 2026-11-03)
+    assert (mix.heuristic, mix.pimc) == (0.0, 0.0)
+    assert mix.hybrid > 0
+    assert mix.mixed > 0
+    assert mix.hybrid_spec.startswith("hybrid:")
 
 
 @pytest.mark.parametrize(
