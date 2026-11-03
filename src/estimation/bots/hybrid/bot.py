@@ -30,7 +30,7 @@ from estimation.engine import Observation, Phase, RulesConfig, play_action
 from estimation.engine.actions import PLAY_BASE
 from estimation.engine.config import DEFAULT_CONFIG
 from estimation.rl.encoder import encode
-from estimation.rl.networks import REWARD_SCALE
+from estimation.rl.networks import REWARD_SCALE, Policy
 
 from ..knowledge import read_knowledge
 from ..pimc import MAX_REDEALS, best_index, fits_announcements
@@ -105,6 +105,11 @@ class HybridBot:
 
     def __repr__(self) -> str:
         return f"HybridBot(seed={self.seed}, {self.config})"
+
+    @property
+    def policy(self) -> Policy:
+        """The checkpoint's nets this bot plays with."""
+        return self._policy
 
     def act(self, obs: Observation, legal: list[int]) -> int:
         if len(legal) == 1:
@@ -236,12 +241,9 @@ class HybridBot:
         return totals
 
 
-def _merge_equivalent(
-    cards: list[int], advantages: list[float], out: int
-) -> tuple[list[int], list[float]]:
-    """One card from each run of touching cards (where ``out`` holds no card ranked between them),
-    keeping the card with the highest advantage in each run (the lowest card id on a tie)."""
-    by_adv = dict(zip(cards, advantages, strict=True))
+def equivalent_runs(cards: list[int], out: int) -> list[list[int]]:
+    """``cards`` split into runs of touching cards: same suit, and ``out`` (the cards still in
+    other hands) holds no card ranked between them, so they take the same tricks."""
     runs: list[list[int]] = []
     for card in sorted(cards):
         if runs:
@@ -251,5 +253,14 @@ def _merge_equivalent(
                 runs[-1].append(card)
                 continue
         runs.append([card])
-    kept = [max(run, key=lambda c: (by_adv[c], -c)) for run in runs]
+    return runs
+
+
+def _merge_equivalent(
+    cards: list[int], advantages: list[float], out: int
+) -> tuple[list[int], list[float]]:
+    """One card from each run of touching cards (``equivalent_runs``), keeping the card with the
+    highest advantage in each run (the lowest card id on a tie)."""
+    by_adv = dict(zip(cards, advantages, strict=True))
+    kept = [max(run, key=lambda c: (by_adv[c], -c)) for run in equivalent_runs(cards, out)]
     return kept, [by_adv[c] for c in kept]

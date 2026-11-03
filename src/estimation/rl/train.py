@@ -2,7 +2,8 @@
 
     uv run python -m estimation.rl.train run --config configs/m4.toml --out runs/m4
 
-Three stages, each skipped when its output already exists, so an interrupted run resumes:
+Three stages, each skipped when its output already exists, so an interrupted run resumes (the
+recording also when nothing needs it: a run that continues a checkpoint without the card anchor):
 
 1. **record:** whole Bolas of four PIMC bots, every card decision recorded
    (``<out>/warmstart/pimc.npz``).
@@ -54,7 +55,14 @@ from .imitation import ImitationData, train_imitation, training_rows
 from .learner import Learner, UpdateReport
 from .memory import gpu_mb, peak_rss_mb
 from .networks import BiddingNet, CardPlayNet, GuessNet, load_policy, save_checkpoint
-from .record import CardRecords, concat_records, load_records, record_game, save_records
+from .record import (
+    CardRecords,
+    concat_records,
+    empty_records,
+    load_records,
+    record_game,
+    save_records,
+)
 from .selfplay import (
     LEARNER,
     SNAPSHOT,
@@ -573,7 +581,11 @@ def train(
         raise SystemExit(f"selfplay.start_from {start_from} is not a file")  # before any games
     device = resolve_device(config.nets.device)
     with worker_pool(config.workers) as pool:
-        records = record_stage(run, pool)
+        # The recording feeds the warm start and the card anchor; a run with neither skips it.
+        needs_records = (
+            not start_from or config.selfplay.card_anchor_weight > 0 or until == "record"
+        )
+        records = record_stage(run, pool) if needs_records else empty_records()
         if until == "record":
             return out / "warmstart" / "pimc.npz"
         warm_start = Path(start_from) if start_from else imitation_stage(run, records, device)

@@ -142,6 +142,7 @@ _SECTIONS = ("rules", "reward", "record", "imitation", "opponents", "selfplay", 
 RECORD_STAGE = 1
 IMITATION_STAGE = 2
 SELFPLAY_STAGE = 3
+EXPERT_STAGE = 4
 
 
 def linear_schedule(iterations: int, iteration: int, start: float, end: float) -> float:
@@ -177,6 +178,12 @@ def config_from_dict(data: Mapping[str, Any]) -> TrainConfig:
         else:
             raise ValueError(f"unknown config key {key!r}")
     return dataclasses.replace(top, **changes)
+
+
+def section_from[T](current: T, values: Mapping[str, Any], section: str) -> T:
+    """``current`` (a config dataclass) with the keys of a TOML ``[section]`` replaced, each
+    checked against its field's type; unknown keys are errors."""
+    return cast(T, _replace(current, values, section))
 
 
 def config_to_dict(config: TrainConfig) -> dict[str, Any]:
