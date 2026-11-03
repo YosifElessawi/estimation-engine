@@ -15,6 +15,7 @@ from estimation.rl.encoder import OFFSETS
 from estimation.rl.guesses import NO_GUESS
 from estimation.rl.networks import BiddingNet, CardPlayNet, save_checkpoint, state_dict_of
 from estimation.rl.selfplay import (
+    BOT,
     HEURISTIC,
     LEARNER,
     PIMC,
@@ -201,3 +202,72 @@ def test_games_against_pimc_are_estimated_slowest():
     plans = plan_games(CONFIG, 3, [5], SeedFn(2, SELFPLAY_STAGE, 4))
     cost = {plan.kind: estimated_seconds([plan]) for plan in plans}
     assert cost["pimc"] > cost["self"] > cost["heuristic"] > 0
+
+
+TABLES = config_from_dict(
+    {
+        "seed": 2,
+        "selfplay": {"games": 100},
+        "opponents": {
+            "self_play": 0.5,
+            "heuristic": 0.0,
+            "pimc": 0.0,
+            "hybrid": 0.2,
+            "mixed": 0.3,
+            "mixed_pool": ["snapshot", "search:samples=2", "hybrid:samples=2:top_k=2", "heuristic"],
+        },
+    }
+)
+
+
+def test_hybrid_tables_seat_the_hybrids_and_recent_versions():
+    plans = plan_games(TABLES, 0, [5, 10], SeedFn(2, SELFPLAY_STAGE, 1))
+    hybrid = [plan for plan in plans if plan.kind == "hybrid"]
+    assert len(hybrid) == 20
+    for plan in hybrid:
+        kinds = sorted(seat.kind for seat in plan.seats)
+        assert kinds == [BOT, BOT, LEARNER, SNAPSHOT]
+        assert {seat.spec for seat in plan.seats if seat.kind == BOT} == {
+            "hybrid:samples=4:top_k=2"
+        }
+
+
+def test_mixed_tables_draw_each_seat_with_at_most_one_hybrid():
+    plans = plan_games(TABLES, 0, [5, 10], SeedFn(2, SELFPLAY_STAGE, 1))
+    mixed = [plan for plan in plans if plan.kind == "mixed"]
+    assert len(mixed) == 30
+    seen: set[str] = set()
+    for plan in mixed:
+        assert [seat.kind for seat in plan.seats].count(LEARNER) >= 1
+        specs = [seat.spec for seat in plan.seats if seat.kind == BOT]
+        assert sum(spec.startswith("hybrid") for spec in specs) <= 1
+        seen.update(specs)
+        seen.update(SNAPSHOT for seat in plan.seats if seat.kind == SNAPSHOT)
+    assert seen == {SNAPSHOT, "search:samples=2", "hybrid:samples=2:top_k=2", "heuristic"}
+
+
+def test_without_snapshots_recent_versions_are_the_learner():
+    plans = plan_games(TABLES, 0, [], SeedFn(2, SELFPLAY_STAGE, 1))
+    assert all(seat.kind != SNAPSHOT for plan in plans for seat in plan.seats)
+
+
+def test_a_bot_seat_plays_by_its_spec():
+    plan = GamePlan(
+        index=0,
+        kind="mixed",
+        deal_seed=61,
+        seed=62,
+        seats=(
+            SeatPlan(LEARNER),
+            SeatPlan(BOT, spec="search:samples=2"),
+            SeatPlan(BOT, spec="heuristic:noise=0.1"),
+            SeatPlan(LEARNER),
+        ),
+    )
+    result = play_chunk(task([plan], tiny_weights(8)))
+    (stats,) = result.games
+    assert stats.learner_seats == 2
+    assert len(result.card) > 0
+    assert estimated_seconds([plan]) > estimated_seconds(
+        [dataclasses.replace(plan, seats=(SeatPlan(LEARNER),) * 4)]
+    )

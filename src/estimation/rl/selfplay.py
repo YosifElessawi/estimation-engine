@@ -1,5 +1,6 @@
 """Training games (SPEC §6 M4): the current nets against themselves, recent snapshots,
-HeuristicBot and a lighter PIMC, played in lockstep for batched inference.
+HeuristicBot and a lighter PIMC, and (Hybrid plan) Hybrid tables and mixed tables of any bots,
+played in lockstep for batched inference.
 
 A chunk of games advances together: each game runs its scripted players until a net has to
 decide, then every pending net decision of the chunk goes through one forward pass per net. The
@@ -28,12 +29,12 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from estimation.bots import Bot, HeuristicBot, NoisyBot, PIMCBot, PIMCConfig
+from estimation.bots import Bot, HeuristicBot, NoisyBot, PIMCBot, PIMCConfig, make_bot
 from estimation.bots.heuristic import HeuristicConfig
 from estimation.engine import Phase, RulesConfig
 from estimation.engine.actions import PLAY_BASE
 
-from .config import TrainConfig
+from .config import OpponentConfig, TrainConfig
 from .encoder import NUM_FEATURES, encode
 from .games import RewardedBola
 from .guesses import guess_labels
@@ -45,19 +46,21 @@ LEARNER = "learner"
 SNAPSHOT = "snapshot"
 HEURISTIC = "heuristic"
 PIMC = "pimc"
+BOT = "bot"  # any bot by its spec (estimation.bots.make_bot)
 
 StateDict = dict[str, torch.Tensor]
 
 
 @dataclass(frozen=True, slots=True)
 class SeatPlan:
-    """Who plays one seat: the learner, snapshot ``snapshot``, HeuristicBot with ``noise`` or
-    PIMC with ``samples`` deals."""
+    """Who plays one seat: the learner, snapshot ``snapshot``, HeuristicBot with ``noise``, PIMC
+    with ``samples`` deals, or the bot ``spec``."""
 
     kind: str
     snapshot: int = -1
     noise: float = 0.0
     samples: int = 0
+    spec: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +171,8 @@ def build_nets(weights: NetWeights) -> _Nets:
 
 
 def _scripted(plan: SeatPlan, seed: int, rules: RulesConfig) -> Bot:
+    if plan.kind == BOT:
+        return make_bot(plan.spec, seed, rules)
     heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
     if plan.kind == HEURISTIC:
         bot: Bot = HeuristicBot(heuristic)
@@ -389,6 +394,7 @@ def plan_games(
     n_heuristic = round(mix.heuristic * total)
     n_pimc = round(mix.pimc * total)
     kinds = ["heuristic"] * n_heuristic + ["pimc"] * n_pimc
+    kinds += ["hybrid"] * round(mix.hybrid * total) + ["mixed"] * round(mix.mixed * total)
     kinds += ["self"] * (total - len(kinds))
     rng = random.Random(seed_of(0))
     rng.shuffle(kinds)
@@ -403,6 +409,8 @@ def plan_games(
                     seats.append(SeatPlan(LEARNER))
                 else:
                     seats.append(SeatPlan(SNAPSHOT, snapshot=game_rng.choice(list(snapshot_ids))))
+        elif kind in ("hybrid", "mixed"):
+            seats = _outside_table(kind, mix, snapshot_ids, game_rng)
         else:
             learner_seat = game_rng.randrange(4)
             for seat in range(4):
@@ -422,6 +430,47 @@ def plan_games(
             )
         )
     return plans
+
+
+def _is_hybrid(spec: str) -> bool:
+    return spec.partition(":")[0] == "hybrid"
+
+
+def _recent(snapshot_ids: Sequence[int], rng: random.Random) -> SeatPlan:
+    """A recent version of the learner: a snapshot, or the learner itself before there is one."""
+    if not snapshot_ids:
+        return SeatPlan(LEARNER)
+    return SeatPlan(SNAPSHOT, snapshot=rng.choice(list(snapshot_ids)))
+
+
+def _outside_table(
+    kind: str, mix: OpponentConfig, snapshot_ids: Sequence[int], rng: random.Random
+) -> list[SeatPlan]:
+    """A hybrid table (the learner, ``hybrid_seats`` Hybrids and recent versions) or a mixed table
+    (the learner and three seats drawn on their own from ``mixed_pool``, at most one Hybrid)."""
+    learner_seat = rng.randrange(4)
+    others = [(learner_seat + k) & 3 for k in (1, 2, 3)]
+    seats: list[SeatPlan] = [SeatPlan(LEARNER)] * 4
+    if kind == "hybrid":
+        hybrids = set(rng.sample(others, mix.hybrid_seats))
+        for seat in others:
+            seats[seat] = (
+                SeatPlan(BOT, spec=mix.hybrid_spec)
+                if seat in hybrids
+                else _recent(snapshot_ids, rng)
+            )
+        return seats
+    has_hybrid = False
+    choices = list(mix.mixed_pool)
+    for seat in others:
+        allowed = [c for c in choices if not (has_hybrid and _is_hybrid(c))] or choices
+        spec = rng.choice(allowed)
+        if spec == SNAPSHOT:
+            seats[seat] = _recent(snapshot_ids, rng)
+        else:
+            has_hybrid = has_hybrid or _is_hybrid(spec)
+            seats[seat] = SeatPlan(BOT, spec=spec)
+    return seats
 
 
 def plan_eval_games(config: TrainConfig, seed_of: "SeedFn") -> list[GamePlan]:
@@ -461,6 +510,7 @@ def chunk_plans(
 _GAME_SECONDS = 0.04
 _NET_SEAT_SECONDS = 0.03
 _PIMC_DEAL_SECONDS = 0.04
+_BOT_SECONDS = {"hybrid": 3.0, "search": 0.5, "pimc": 0.5}  # rough, for a light setting
 
 
 def estimated_seconds(plans: Sequence[GamePlan]) -> float:
@@ -473,6 +523,8 @@ def estimated_seconds(plans: Sequence[GamePlan]) -> float:
                 total += _NET_SEAT_SECONDS
             elif seat.kind == PIMC:
                 total += _PIMC_DEAL_SECONDS * seat.samples
+            elif seat.kind == BOT:
+                total += _BOT_SECONDS.get(seat.spec.partition(":")[0], _NET_SEAT_SECONDS)
     return total
 
 
