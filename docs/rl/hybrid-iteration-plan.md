@@ -108,6 +108,23 @@ Why this order: steps 2 and 3 both use the step-1 head. Doing 2 before 4 improve
 first; once 4 exists, one more round of step 2 also teaches BiddingNet to bid like the searched
 bidding. Step 4's code can be written while step 1 trains; only its measuring waits for the Mac.
 
+### Step 5 (candidate, after step 4): one net for the whole game
+
+Added 2026-11-03 at Yosif's question (a friend's pointer to Sutton's "The Bitter Lesson"): three
+nets (bidding, card play, guesses) are there for history and speed, not because they are known to
+be better. One net with three outputs, trained on every part of the game together, may learn
+shared understanding (where the cards are helps bidding and card play alike).
+
+- **Copy:** the single net learns from the best Hybrid's games, as step 2 does (its bids, its
+  search's value of every card, the real hidden hands), so it starts near the Hybrid's level
+  instead of from zero.
+- **Self-play:** then it improves as RL v2 did, against itself, recent versions, PIMC and the
+  Search bot.
+- **Judged as a Hybrid:** the Hybrid rebuilt on it plays the best three-net Hybrid; strength and
+  time per move both count. Keep whichever wins.
+
+Runs only on Yosif's yes; its compute is sized after step 4.
+
 ## Parked net changes
 
 - **Suit symmetry built into the net:** an efficiency gain (the bot already learns symmetry from
