@@ -224,8 +224,9 @@ def test_a_round_records_copies_refits_and_resumes(checkpoint: Path, tmp_path: P
     shown = Console(file=io.StringIO(), width=120, color_system=None)
     shown.print(render(out))
     text = shown.file.getvalue()  # pyright: ignore[reportAttributeAccessIssue]  # a StringIO, set above
-    assert "done" in text
-    assert "before" in text
+    assert "✓ Match vs previous Hybrid" not in text  # the driver script plays the match
+    assert "✓ Refit bidding" in text
+    assert "points a move" in text
     stamp = final.stat().st_mtime_ns
     assert run(config, out) == final  # resumed: nothing is redone
     assert final.stat().st_mtime_ns == stamp
@@ -234,19 +235,22 @@ def test_a_round_records_copies_refits_and_resumes(checkpoint: Path, tmp_path: P
         run(changed, out)
 
 
-def test_the_watch_shows_the_running_stage(tmp_path: Path):
+def test_the_watch_counts_every_recorded_game(tmp_path: Path):
     out = tmp_path / "expert"
-    (out / "round-1").mkdir(parents=True)
+    (out / "round-1" / "records").mkdir(parents=True)
     expert = dataclasses.asdict(ExpertConfig(start_from="x.pt", rounds=2))
     (out / "config.json").write_text(json.dumps({"expert": expert, "train": {}}))
-    progress = {"stage": "record", "done": 500, "games": 2000, "seconds": 600.0, "left": 1800.0}
+    progress = {"stage": "record", "done": 500, "resumed_at": 0, "games": 2000, "started": 0.0}
     (out / "round-1" / "progress.json").write_text(json.dumps(progress))
-    shown = Console(file=io.StringIO(), width=120, color_system=None)
-    shown.print(render(out))
+    (out / "round-1" / "records" / "part-00500.games").write_text("20\n")  # a part under way
+    shown = Console(file=io.StringIO(), width=140, color_system=None)
+    shown.print(render(out, now=600.0))
     text = shown.file.getvalue()  # pyright: ignore[reportAttributeAccessIssue]  # a StringIO, set above
-    assert "Recording Hybrid games: 500 of 2,000  (25%)" in text
-    assert "about 30 min left" in text
-    assert "running" in text
+    assert "520 of 2,000 games (26%), 10 min so far, about 28 min left" in text
+    assert "▸ Record Hybrid games" in text
+    assert "· Copy into the card net" in text
+    assert "━" in text  # the bar
+    assert "Round 2" in text
 
 
 def test_records_with_and_without_guess_labels_do_not_mix(recorded: Any):

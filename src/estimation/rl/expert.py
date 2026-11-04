@@ -180,6 +180,7 @@ class PartTask:
     count: int
     checkpoint: str
     config: RunConfig
+    progress: str = ""  # a file the part keeps its finished game count in, for ``watch``
 
 
 def hybrids(task: PartTask, game: int) -> tuple[list[HybridBot], list[HybridBot]]:
@@ -299,9 +300,24 @@ def record_game(task: PartTask, game: int) -> CardRecords:
 
 
 def record_part(task: PartTask) -> CardRecords:
-    """Every game of ``task``, in order."""
-    games = range(task.first, task.first + task.count)
-    return concat_records([record_game(task, game) for game in games])
+    """Every game of ``task``, in order, counting finished games in ``task.progress``."""
+    parts: list[CardRecords] = []
+    for done, game in enumerate(range(task.first, task.first + task.count), 1):
+        parts.append(record_game(task, game))
+        if task.progress:
+            Path(task.progress).write_text(f"{done}\n")
+    return concat_records(parts)
+
+
+def games_in_progress(folder: Path) -> int:
+    """Games finished in parts still being recorded in round ``folder``."""
+    total = 0
+    for path in (folder / "records").glob("part-*.games"):
+        try:
+            total += int(path.read_text())
+        except (OSError, ValueError):
+            continue  # being written or just removed; the next look counts it
+    return total
 
 
 def part_starts(expert: ExpertConfig) -> list[tuple[int, int]]:
@@ -328,13 +344,23 @@ def record_stage(config: RunConfig, round_no: int, folder: Path, checkpoint: Pat
     if missing:
         _say("record", f"round {round_no}: {len(missing)} of {len(parts)} parts to record")
         done = expert.games - sum(count for _, count in missing)
-        resumed_at = done
         start = time.perf_counter()
-        write_progress(folder, {"stage": "record", "done": done, "games": expert.games})
+        resumed_at = done
+        started = time.time()
+        progress = {"stage": "record", "resumed_at": done, "games": expert.games}
+        write_progress(folder, {**progress, "done": done, "started": started})
         with worker_pool(config.train.workers) as pool:
             futures = {
                 pool.submit(
-                    record_part, PartTask(round_no, first, count, str(checkpoint), config)
+                    record_part,
+                    PartTask(
+                        round_no,
+                        first,
+                        count,
+                        str(checkpoint),
+                        config,
+                        str(parts_dir / f"part-{first:05d}.games"),
+                    ),
                 ): (first, count)
                 for first, count in missing
             }
@@ -343,19 +369,11 @@ def record_stage(config: RunConfig, round_no: int, folder: Path, checkpoint: Pat
                 tmp = parts_dir / f"part-{first:05d}.tmp.npz"
                 save_records(str(tmp), future.result())
                 tmp.replace(path_of[first])
+                (parts_dir / f"part-{first:05d}.games").unlink(missing_ok=True)
                 done += count
                 elapsed = time.perf_counter() - start
                 left = elapsed / (done - resumed_at) * (expert.games - done)
-                write_progress(
-                    folder,
-                    {
-                        "stage": "record",
-                        "done": done,
-                        "games": expert.games,
-                        "seconds": elapsed,
-                        "left": left,
-                    },
-                )
+                write_progress(folder, {**progress, "done": done, "started": started})
                 _say(
                     "record",
                     f"round {round_no}: {done}/{expert.games} games, {elapsed / 60:.1f} min, "
@@ -433,6 +451,16 @@ def copy_stage(
         order = torch.as_tensor(rng.permutation(data.n)).to(device)
         sums = dict.fromkeys(("loss", "advantage", "choice", "value"), 0.0)
         for k in range(steps_per_epoch):
+            if progress is not None and k % 100 == 0:
+                write_progress(
+                    progress,
+                    {
+                        "stage": "copy",
+                        "done": epoch + k / steps_per_epoch,
+                        "epochs": expert.copy_epochs,
+                        "seconds": time.perf_counter() - begin,
+                    },
+                )
             idx = order[k * expert.copy_batch : (k + 1) * expert.copy_batch]
             batch = data.batch(idx, augmenter, relabel)
             adv_loss, choice_loss, value_loss = imitation_losses(net, batch, imitation.temperature)
