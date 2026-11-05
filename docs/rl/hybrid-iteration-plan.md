@@ -108,6 +108,23 @@ Why this order: steps 2 and 3 both use the step-1 head. Doing 2 before 4 improve
 first; once 4 exists, one more round of step 2 also teaches BiddingNet to bid like the searched
 bidding. Step 4's code can be written while step 1 trains; only its measuring waits for the Mac.
 
+### Play for King (after step 4, Yosif's choice 2026-11-05)
+
+Today's reward plays each open round for points against the table (opponents ahead weigh double)
+and blends in the chance of finishing first only in rounds 14-18, from a simple formula
+(`win_blend`, a 20-point spread per round). Winning a Bola needs a risk attitude from the score
+situation: gamble when far behind, play safe when far ahead, which costs some average score.
+
+- **A learned King chance:** a net output that predicts the chance of finishing first (King) from
+  here, trained on how real Bolas ended, replacing the formula.
+- **The reward in every round** becomes the change in that King chance, instead of the
+  fixed-trump-only blend.
+- **The Hybrid's search** scores its imagined rounds by the King chance too, not only by points.
+- **Judged by Bolas won:** Win Elo and first-place share, with points per game only as a side
+  note (a bot playing for King may score less on average).
+
+Nothing runs for it yet.
+
 ### Step 5 (candidate, after step 4): one net for the whole game
 
 Added 2026-11-03 at Yosif's question (a friend's pointer to Sutton's "The Bitter Lesson"): three
@@ -199,5 +216,16 @@ its match was a tie, so step 2 stopped there, as the rule says.
 0.31 points a card, Hybrid v2 1.68 +- 0.29. Within the noise, and not better: the +19 may come
 mostly from the bidding refit against the stronger opponents, or from card play a PIMC-8 judge
 cannot see. A swap match (v3's bidding with v2's card net, and the reverse) would tell which.
+
+**Swap match** (2026-11-05, 200 sets each against Hybrid v2, seed 2030): v3's bidding with v2's
+card net won 110-90, +7.1 (+2.3 to +11.8), first place 26.6% vs 23.4%; v2's bidding with v3's
+card net won 135-65, +13.4 (+9.1 to +17.7), first place 28.8% vs 21.2%. Both parts earned their
+place and add up to about Hybrid v3's +19: the copied card net about two thirds, the bidding refit
+against stronger opponents about one third. The card-play evaluator missed the card net's gain:
+its judge plays the rest of the round as PIMC-8, now weaker than the bots it judges, so its card
+verdicts are not reliable at this level.
+
+**On the tables** since 2026-11-05 (PR #6): Hybrid v3 is the Hybrid on the full table and in every
+B-Tig seat; the M5 Hybrid stays in the roster as Hybrid v1.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
