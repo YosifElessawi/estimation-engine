@@ -228,4 +228,24 @@ verdicts are not reliable at this level.
 **On the tables** since 2026-11-05 (PR #6): Hybrid v3 is the Hybrid on the full table and in every
 B-Tig seat; the M5 Hybrid stays in the roster as Hybrid v1.
 
+### Step 3 (done 2026-11-06): Hybrid v4, the same nets with a better search
+
+No training: Hybrid v3's nets with new search settings, each played against plain Hybrid v3 over
+200 duplicate sets (seed 2031), then the best three together against the best single one (seed
+2032).
+
+| Setting (against Hybrid v3) | Sets | First place | Points per game | Time per card |
+|---|---|---|---|---|
+| Deals placed by GuessNet's guesses (`deals=guesses`) | 134-66 | 27.4% vs 22.6% | +11.2 (+7.2 to +15.1) | 12 ms |
+| Guessed deals, kept by the bidding (`deals=both`) | 154-46 | 27.9% vs 22.1% | +19.6 (+15.5 to +23.6) | 14 ms |
+| Top 2 cards searched instead of 3 (`top_k=2`) | 123-77 | 26.2% vs 23.8% | +8.6 (+4.6 to +12.6) | 12 ms |
+| 32 deals instead of 16 (`samples=32`) | 140-60 | 29.2% vs 20.8% | +14.7 (+10.7 to +18.6) | 23 ms |
+| All three of `deals=both`, `top_k=2`, `samples=32`, against `deals=both` alone | 143-57 | 28.3% vs 21.7% | +14.2 (+10.4 to +18.0) | 24 ms |
+
+**Hybrid v4** (`hybrid:checkpoint=runs/expert/round-1/hybrid.pt:deals=both:top_k=2:samples=32`) is
+kept: the guesses make the imagined deals more realistic, the sharper card net lets the search
+skip its third card, and the saved time pays for twice the deals. About 24 ms a card (p99 about
+90 ms), against 14 ms for Hybrid v3: still quick at the table. Together the step is worth about
++30 points a game over Hybrid v3 (the two matches chained, not one match).
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

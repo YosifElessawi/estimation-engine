@@ -23,6 +23,7 @@ RL_V3_FILE = "runs/rl-v3/checkpoints/final.pt"
 RL_V3 = "rl:checkpoint=" + RL_V3_FILE  # Hybrid plan step 1 (docs/rl/hybrid-iteration-plan.md)
 HYBRID_V2 = "hybrid:checkpoint=" + RL_V3_FILE  # the Hybrid on RL v3's nets
 HYBRID_V3 = "hybrid:checkpoint=runs/expert/round-1/hybrid.pt"  # plan step 2, round 1
+HYBRID_V4 = HYBRID_V3 + ":deals=both:top_k=2:samples=32"  # plan step 3: v3 with a better search
 SEARCH_BOT = "search"
 RL_BOT = RULES_V2 + "final.pt"  # the best RL checkpoint (RL v2), the RL bot players meet
 HYBRID_V1 = "hybrid"  # the M5 Hybrid on RL v2's nets
@@ -65,6 +66,12 @@ _KNOWN = {
             "Hybrid",
             (LEADERBOARD,),
             "Hybrid v3: nets that copied a deeper search; searches 16 deals per card",
+        ),
+        _entry(
+            HYBRID_V4,
+            "Hybrid v4",
+            (CHECKPOINTS,),
+            "Hybrid v3's nets; deals placed by guesses and the bidding, top 2 cards, 32 deals",
         ),
         _entry(
             HYBRID_V1,
