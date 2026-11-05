@@ -1,0 +1,77 @@
+# Hybrid plan step 2 (docs/rl/hybrid-iteration-plan.md): expert iteration from RL v3's nets.
+# Each round records Hybrid games labelled by a deeper search, copies the search's card values
+# into CardPlayNet and refits BiddingNet to the new card play by self-play. Size games and
+# label_share with:
+#   uv run python -m estimation.rl.expert time --config configs/expert.toml
+# then run one round at a time (each needs Yosif's yes):
+#   uv run python -m estimation.rl.expert run --config configs/expert.toml --out runs/expert --rounds 1
+# and watch it with:
+#   uv run python -m estimation.rl.expert watch runs/expert
+seed = 0
+workers = 5
+
+[expert]
+start_from = "runs/rl-v3/checkpoints/final.pt"
+rounds = 3
+games = 2000
+part_games = 25
+label_share = 0.5
+# The playing Hybrid as on the tables; the teacher searches 4x the deals and every legal card.
+play_samples = 16
+play_top_k = 3
+teacher_samples = 64
+copy_epochs = 4
+copy_batch = 1024
+copy_lr = 1e-4
+replay_rounds = 2
+holdout = 0.05
+# GuessNet also learns the recorded positions' real hands, then keeps learning in the refit.
+guess_lr = 3e-4
+
+[reward]
+ahead_weight = 1.0
+behind_weight = 0.5
+tie_weight = 1.0
+normalize_weights = true
+win_blend = 0.5
+win_points = 100.0
+
+# The refit's opponents (Yosif, 2026-11-03): strong bots of different styles instead of
+# HeuristicBot and plain PIMC, at half the dose first since each Hybrid seat is slow. Hybrid
+# tables seat two light Hybrids on RL v3's nets; mixed tables draw each seat on its own.
+[opponents]
+self_play = 0.80
+heuristic = 0.0
+pimc = 0.0
+hybrid = 0.06
+mixed = 0.14
+hybrid_spec = "hybrid:checkpoint=runs/rl-v3/checkpoints/final.pt:samples=4:top_k=2"
+hybrid_seats = 2
+mixed_pool = [
+    "snapshot",
+    "search:samples=8",
+    "rl:checkpoint=runs/m4-rules-v2/checkpoints/final.pt",
+    "hybrid:checkpoint=runs/rl-v3/checkpoints/final.pt:samples=4:top_k=2",
+]
+
+# The bidding refit after each copy: card play frozen, only BiddingNet learns, about 45 min.
+[selfplay]
+iterations = 250
+games = 240
+eval_games = 32
+bid_lr = 2e-5
+card_lr = 2e-5
+lr_end_factor = 0.5
+epsilon_bid_start = 0.01
+epsilon_bid_end = 0.01
+bid_temperature_start = 0.05
+bid_temperature_end = 0.05
+guess_lr = 3e-4
+checkpoint_every = 25
+overlap = true
+balance = true
+chunk = 8
+
+[nets]
+hidden = 384
+device = "auto"

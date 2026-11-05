@@ -2,7 +2,8 @@
 
     uv run python -m estimation.rl.train run --config configs/m4.toml --out runs/m4
 
-Three stages, each skipped when its output already exists, so an interrupted run resumes:
+Three stages, each skipped when its output already exists, so an interrupted run resumes (the
+recording also when nothing needs it: a run that continues a checkpoint without the card anchor):
 
 1. **record:** whole Bolas of four PIMC bots, every card decision recorded
    (``<out>/warmstart/pimc.npz``).
@@ -23,6 +24,7 @@ ladder run's ``ladder.json``.
 """
 
 import argparse
+import dataclasses
 import json
 import multiprocessing
 import shutil
@@ -52,8 +54,15 @@ from .config import (
 from .imitation import ImitationData, train_imitation, training_rows
 from .learner import Learner, UpdateReport
 from .memory import gpu_mb, peak_rss_mb
-from .networks import BiddingNet, CardPlayNet, load_policy, save_checkpoint
-from .record import CardRecords, concat_records, load_records, record_game, save_records
+from .networks import BiddingNet, CardPlayNet, GuessNet, load_policy, save_checkpoint
+from .record import (
+    CardRecords,
+    concat_records,
+    empty_records,
+    load_records,
+    record_game,
+    save_records,
+)
 from .selfplay import (
     LEARNER,
     SNAPSHOT,
@@ -73,6 +82,7 @@ from .selfplay import (
 from .torch_typing import seed_torch
 
 WARM_START = "warm-start"
+RECORD_PROGRESS = "progress.json"  # in <out>/warmstart/, for the watch view
 FINAL = "final"
 
 
@@ -142,11 +152,16 @@ class Run:
         self.index_path.write_text(json.dumps({"checkpoints": entries}, indent=1) + "\n")
 
     def save(
-        self, name: str, card: CardPlayNet, bidding: BiddingNet | None, meta: dict[str, Any]
+        self,
+        name: str,
+        card: CardPlayNet,
+        bidding: BiddingNet | None,
+        meta: dict[str, Any],
+        guess: GuessNet | None = None,
     ) -> Path:
         path = self.checkpoints / f"{name}.pt"
         full = {"name": name, "seed": self.config.seed, **meta}
-        save_checkpoint(path, card, bidding, full)
+        save_checkpoint(path, card, bidding, full, guess)
         self.add_to_index({"name": name, "file": path.name, "elo": {}, **meta})
         return path
 
@@ -160,8 +175,15 @@ def record_stage(run: Run, pool: ProcessPoolExecutor) -> CardRecords:
     start = time.perf_counter()
     parts: list[CardRecords] = []
     task = partial(record_game, config=run.config)
+    progress = path.parent / RECORD_PROGRESS
+    progress.parent.mkdir(parents=True, exist_ok=True)
     for done, part in enumerate(pool.map(task, range(games)), 1):
         parts.append(part)
+        if done % 5 == 0 or done == games:
+            elapsed = time.perf_counter() - start
+            rows = sum(map(len, parts))
+            data = {"done": done, "games": games, "rows": rows, "seconds": elapsed}
+            progress.write_text(json.dumps(data) + "\n")
         if done % 20 == 0 or done == games:
             elapsed = time.perf_counter() - start
             left = elapsed / done * (games - done)
@@ -390,7 +412,7 @@ def selfplay_stage(
     anchor = None
     if cfg.card_anchor_weight > 0:
         anchor = ImitationData(records, training_rows(records, config), device)
-    learner = Learner(card, bidding, config, device, anchor)
+    learner = Learner(card, bidding, config, device, anchor, start.guess)
     state_path = run.out / "selfplay" / "state.pt"
     snapshots: dict[int, NetWeights] = {}
     start_iteration = 0
@@ -447,7 +469,7 @@ def selfplay_stage(
                 "bid_samples": totals["bid_samples"] + len(bid),
                 "card_samples": totals["card_samples"] + len(card_samples),
             }
-            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta)
+            path = run.save(f"iter-{done:04d}", learner.card, learner.bidding, meta, learner.guess)
         if not cfg.overlap and done < cfg.iterations:
             view = ActorView(learner.weights(), dict(snapshots))
             pending = submit_iteration(config, done, view, pool)
@@ -483,6 +505,7 @@ def selfplay_stage(
             "card_value_loss": update.card_value_loss,
             "card_q_loss": update.card_q_loss,
             "anchor_loss": update.anchor_loss,
+            **({} if update.guess is None else {"guess": dataclasses.asdict(update.guess)}),
             "memory_mb": {
                 "trainer_peak": peak_rss_mb(),
                 "trainer_gpu": gpu_mb(device),
@@ -503,6 +526,11 @@ def selfplay_stage(
             f"skipped {100 * s['skipped']:.0f}%"
             for kind, s in summary.items()
         ]
+        if update.guess is not None:
+            guess = update.guess
+            parts.append(
+                f"guesses {100 * guess.accuracy:.1f}% right (blind {100 * guess.blind:.1f}%)"
+            )
         if measured is not None:
             parts += [
                 f"yardstick vs {name}: won {100 * m['won']['mean']:.0f}% "
@@ -553,7 +581,11 @@ def train(
         raise SystemExit(f"selfplay.start_from {start_from} is not a file")  # before any games
     device = resolve_device(config.nets.device)
     with worker_pool(config.workers) as pool:
-        records = record_stage(run, pool)
+        # The recording feeds the warm start and the card anchor; a run with neither skips it.
+        needs_records = (
+            not start_from or config.selfplay.card_anchor_weight > 0 or until == "record"
+        )
+        records = record_stage(run, pool) if needs_records else empty_records()
         if until == "record":
             return out / "warmstart" / "pimc.npz"
         warm_start = Path(start_from) if start_from else imitation_stage(run, records, device)

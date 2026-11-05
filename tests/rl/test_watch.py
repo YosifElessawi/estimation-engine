@@ -102,3 +102,33 @@ def test_sparklines_scale_to_the_range_and_width():
     assert sparkline([0, 1]) == "▁█"
     assert len(sparkline(list(range(100)), width=40)) == 40
     assert sparkline([5, 5, 5]) == "▁▁▁"
+
+
+def starting_run(tmp_path: Path) -> Path:
+    (tmp_path / "config.json").write_text(json.dumps({"selfplay": {"iterations": 100}}))
+    return tmp_path
+
+
+def test_the_recording_shows_its_own_progress_bar(tmp_path: Path):
+    run = starting_run(tmp_path)
+    (run / "warmstart").mkdir()
+    progress = {"done": 250, "games": 1000, "rows": 190000, "seconds": 300.0}
+    (run / "warmstart/progress.json").write_text(json.dumps(progress))
+    shown = text_of(run)
+    assert "recording PIMC games" in shown
+    assert "Recording: game 250 of 1,000  (25%)" in shown
+    assert "190,000 card decisions" in shown
+    assert "about 15 min left" in shown  # 250 games in 5 min
+    assert "Loop 0 of 100" in shown
+
+
+def test_a_run_from_before_the_progress_file_reads_its_log(tmp_path: Path):
+    run = starting_run(tmp_path)
+    (run / "train.log").write_text(
+        "[record] 20/1000 PIMC games, 15,120 card decisions, 0.5 min elapsed, about 23.9 min left\n"
+        "[record] 40/1000 PIMC games, 30,262 card decisions, 0.9 min elapsed, about 20.6 min left\n"
+    )
+    assert "Recording: game 40 of 1,000  (4%)" in text_of(run)
+    (run / "warmstart").mkdir()
+    (run / "warmstart/pimc.npz").write_bytes(b"")  # saved: the recording is over
+    assert "Recording:" not in text_of(run)

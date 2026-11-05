@@ -22,10 +22,12 @@ from estimation.engine import (
     RoundResult,
     RulesConfig,
 )
-from estimation.engine.cards import cards_of
+from estimation.engine.cards import SANS, cards_of
+from estimation.engine.random_play import RandomPolicy
 from estimation.rl.encoder import (
     ANNOUNCED,
     AUCTION,
+    CALLS,
     CONTEXT,
     HAND,
     NUM_FEATURES,
@@ -37,6 +39,7 @@ from estimation.rl.encoder import (
     TRICK,
     VOIDS,
     encode,
+    last_calls,
     stakes,
 )
 from tests.engine.helpers import NO_DASH_ROUND, bid, build_play, est, new_round, run
@@ -67,8 +70,8 @@ def g1_round() -> tuple[Round, list[int]]:
 
 
 def test_about_420_features_in_the_spec_blocks():
-    assert sum((52, 156, 52, 52, 12, 14, 23, 13, 56, 13, 9, 4)) == NUM_FEATURES
-    assert 400 <= NUM_FEATURES <= 460
+    assert sum((52, 156, 52, 52, 12, 14, 23, 13, 56, 13, 9, 4, 20)) == NUM_FEATURES
+    assert 400 <= NUM_FEATURES <= 480
     assert list(OFFSETS) == [
         "hand",
         "played",
@@ -82,6 +85,7 @@ def test_about_420_features_in_the_spec_blocks():
         "scores",
         "shape",
         "announced",
+        "calls",
     ]
 
 
@@ -400,5 +404,54 @@ def test_the_announced_block_marks_who_was_announced_void_from_the_acting_seat()
         expected = [0.0, 0.0, 0.0, 0.0]
         expected[(2 - seat) & 3] = 1.0
         assert block.tolist() == expected
-    assert ANNOUNCED + 4 == NUM_FEATURES  # appended last, so version 1's features keep their place
-    assert OFFSETS["shape"] + 9 == ANNOUNCED
+    assert OFFSETS["shape"] + 9 == ANNOUNCED  # appended, so version 1's features keep their place
+    assert ANNOUNCED + 4 == CALLS  # appended after it, so version 2's features keep theirs
+
+
+def calls_block(features: np.ndarray, relative: int) -> list[float]:
+    base = CALLS + 5 * relative
+    return [round(float(v) * 13, 3) for v in features[base : base + 5]]
+
+
+def test_AUC_4_the_calls_block_shows_each_seats_last_call_in_every_trump_L12():
+    """L12: seat 3 bids 5 Sans, seat 0 says With, seat 3 raises to 6 Hearts and seat 0 outbids
+    with 6 Sans. Seat 3's latest call is in Hearts, but its 5 Sans still shows, so a bidder can
+    see that it would be With if Sans wins."""
+    rnd = new_round(10)  # F = seat 1
+    run(rnd, *NO_DASH_ROUND, PASS, PASS, bid(5, SANS), WITH, bid(6, HEARTS), bid(6, SANS), PASS)
+    features = encode(rnd.observation(0))  # seat 0's final turn
+    assert calls_block(features, 0) == [0, 0, 0, 0, 6]  # seat 0: With at 5 Sans, then 6 Sans
+    assert calls_block(features, 1) == [0, 0, 0, 0, 0]  # seats 1 and 2 passed
+    assert calls_block(features, 2) == [0, 0, 0, 0, 0]
+    assert calls_block(features, 3) == [0, 0, 6, 0, 5]  # seat 3: 6 Hearts, and 5 Sans before it
+    from_seat_3 = encode(rnd.observation(3))
+    assert calls_block(from_seat_3, 0) == [0, 0, 6, 0, 5]  # counted from the acting seat
+    assert calls_block(from_seat_3, 1) == [0, 0, 0, 0, 6]
+
+
+def test_FIX_4_estimates_before_a_super_call_are_not_calls():
+    """L9: in round 16 (Hearts) seat 3 estimates 2, seat 0 super-calls 8 Spades and seat 1
+    answers 9 Hearts."""
+    rnd = run(new_round(16, HEARTS), est(2), bid(8, SPADES), bid(9, HEARTS))
+    log = rnd.observation(2).log
+    assert last_calls(log) == {0: [0, 0, 0, 8, 0], 1: [0, 0, 9, 0, 0]}
+
+
+@pytest.mark.parametrize("rules", [RulesConfig(), RulesConfig(with_any_call=False)])
+def test_AUC_4_the_calls_block_matches_the_engines_own_record(rules: RulesConfig):
+    """At every decision of random Bolas, the block equals the engine's private record of each
+    seat's last call in each trump (the record AUC-4 reads)."""
+    for seed in range(12):
+        bola = Bola(seed, rules)
+        policy = RandomPolicy(seed)
+        while not bola.is_over:
+            seat = bola.current_player or 0
+            features = encode(bola.observation(seat), rules)
+            engine = bola.round._calls  # pyright: ignore[reportPrivateUsage]  # the engine's own record, to check against
+            for other in range(4):
+                expected = [
+                    0 if call < 0 else (call - 2) // 5 + 4
+                    for call in engine[other * 5 : other * 5 + 5]
+                ]
+                assert calls_block(features, (other - seat) & 3) == expected
+            bola.step(policy(bola.legal_actions()))

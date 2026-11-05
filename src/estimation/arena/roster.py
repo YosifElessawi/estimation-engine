@@ -19,6 +19,10 @@ GROUPS = (LEADERBOARD, CHECKPOINTS, STICKS)
 M4 = "rl:checkpoint=runs/m4/checkpoints/"
 STAGED = "rl:checkpoint=runs/m4-staged/checkpoints/"
 RULES_V2 = "rl:checkpoint=runs/m4-rules-v2/checkpoints/"
+RL_V3_FILE = "runs/rl-v3/checkpoints/final.pt"
+RL_V3 = "rl:checkpoint=" + RL_V3_FILE  # Hybrid plan step 1 (docs/rl/hybrid-iteration-plan.md)
+HYBRID_V2 = "hybrid:checkpoint=" + RL_V3_FILE  # the Hybrid on RL v3's nets
+HYBRID_V3 = "hybrid:checkpoint=runs/expert/round-1/hybrid.pt"  # plan step 2, round 1
 SEARCH_BOT = "search"
 RL_BOT = RULES_V2 + "final.pt"  # the best RL checkpoint (RL v2), the RL bot players meet
 HYBRID_BOT = "hybrid"
@@ -60,6 +64,24 @@ _KNOWN = {
             "Hybrid",
             (LEADERBOARD,),
             "RL v2 bidding and deal weights; searches 16 deals per card with CardPlayNet",
+        ),
+        _entry(
+            RL_V3,
+            "RL v3",
+            (CHECKPOINTS,),
+            "RL v2 retrained under the 2026-10-30 rules, guessing who holds each unseen card",
+        ),
+        _entry(
+            HYBRID_V2,
+            "Hybrid v2",
+            (CHECKPOINTS,),
+            "The Hybrid on RL v3's nets; searches 16 deals per card with CardPlayNet",
+        ),
+        _entry(
+            HYBRID_V3,
+            "Hybrid v3",
+            (CHECKPOINTS,),
+            "Hybrid v2 after one round of copying a deeper search, bidding refit to match",
         ),
         _entry(
             STAGED + "staged-final.pt",

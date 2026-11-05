@@ -15,7 +15,7 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from .encoder import AUCTION, CONTEXT, NUM_FEATURES, OFFSETS, SHAPE, TRICK, VOIDS
+from .encoder import AUCTION, CALLS, CONTEXT, NUM_FEATURES, OFFSETS, SHAPE, TRICK, VOIDS
 
 SUIT_PERMUTATIONS: tuple[tuple[int, ...], ...] = tuple(itertools.permutations(range(4)))
 _CARD_BLOCKS = ("hand", "played", "played", "played", "table", "unseen")
@@ -48,7 +48,8 @@ def feature_source(perm: tuple[int, ...]) -> npt.NDArray[np.int64]:
     trumps = np.array([*perm, 4], np.int64)  # Sans stays Sans
     for base in (VOIDS, VOIDS + 4, VOIDS + 8, TRICK, SHAPE):
         destination[base : base + 4] = base + suits
-    for base in (CONTEXT + 5, CONTEXT + 12, AUCTION + 2, SHAPE + 4):
+    calls = tuple(CALLS + 5 * seat for seat in range(4))
+    for base in (CONTEXT + 5, CONTEXT + 12, AUCTION + 2, SHAPE + 4, *calls):
         destination[base : base + 5] = base + trumps
     source = np.zeros(NUM_FEATURES, np.int64)
     source[destination] = np.arange(NUM_FEATURES)

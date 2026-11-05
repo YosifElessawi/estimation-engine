@@ -33,6 +33,8 @@ class CardRecords:
     values: npt.NDArray[np.float32]  # (n, 52) PIMC's search value per legal card, 0 elsewhere
     reward: npt.NDArray[np.float32]  # (n,) the seat's reward for the round
     game: npt.NDArray[np.int32]  # (n,) the game it came from
+    # (n, 52) who held each unseen card (``guesses.guess_labels``), when the recorder kept it
+    guesses: npt.NDArray[np.int8] | None = None
 
     def __len__(self) -> int:
         return len(self.choice)
@@ -50,8 +52,12 @@ def empty_records() -> CardRecords:
 
 
 def concat_records(parts: Sequence[CardRecords]) -> CardRecords:
+    """``parts`` as one set of records. Guess labels are kept when every part has them."""
     if not parts:
         return empty_records()
+    labelled = [p.guesses for p in parts if p.guesses is not None]
+    if labelled and len(labelled) != len(parts):
+        raise ValueError("some records have guess labels and some do not")
     return CardRecords(
         features=np.concatenate([p.features for p in parts]),
         legal=np.concatenate([p.legal for p in parts]),
@@ -59,6 +65,7 @@ def concat_records(parts: Sequence[CardRecords]) -> CardRecords:
         values=np.concatenate([p.values for p in parts]),
         reward=np.concatenate([p.reward for p in parts]),
         game=np.concatenate([p.game for p in parts]),
+        guesses=np.concatenate(labelled) if labelled else None,
     )
 
 
@@ -132,6 +139,17 @@ def record_game(index: int, config: TrainConfig) -> CardRecords:
 
 
 def save_records(path: str, records: CardRecords) -> None:
+    if records.guesses is None:
+        np.savez(
+            path,
+            features=records.features,
+            legal=records.legal,
+            choice=records.choice,
+            values=records.values,
+            reward=records.reward,
+            game=records.game,
+        )
+        return
     np.savez(
         path,
         features=records.features,
@@ -140,6 +158,7 @@ def save_records(path: str, records: CardRecords) -> None:
         values=records.values,
         reward=records.reward,
         game=records.game,
+        guesses=records.guesses,
     )
 
 
@@ -161,4 +180,5 @@ def load_records(path: str) -> CardRecords:
             values=data["values"],
             reward=data["reward"],
             game=data["game"],
+            guesses=data["guesses"] if "guesses" in data.files else None,
         )

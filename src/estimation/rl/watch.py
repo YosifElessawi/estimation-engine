@@ -2,7 +2,9 @@
 
 Redraws every few seconds from the run's ``config.json``, ``selfplay/log.jsonl`` and
 ``selfplay/yardstick-reference.json``: the loop and the time left, the yardstick so far, how the
-greedy nets do against three HeuristicBots, the learning numbers, loop time and memory. It only
+greedy nets do against three HeuristicBots, the learning numbers, loop time and memory. While the
+run first records PIMC games, a progress bar for that, from ``warmstart/progress.json`` (or the
+last ``[record]`` line of ``<run>/train.log``, for runs started before that file existed). It only
 reads files, so it can be started and stopped at any time without touching the run. ``--once``
 prints one frame and exits.
 """
@@ -10,6 +12,7 @@ prints one frame and exits.
 import argparse
 import json
 import math
+import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +31,42 @@ SPEED_WINDOW = 25  # loops averaged for the time per loop
 STALLED_AFTER = 300.0  # seconds without a new loop before the run is called stalled
 
 
+_RECORD_LINE = re.compile(
+    r"\[record\] (\d+)/(\d+) PIMC games, ([\d,]+) card decisions, ([\d.]+) min elapsed"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Recording:
+    """The PIMC recording that starts a run: games done of all, card decisions, seconds."""
+
+    done: int
+    games: int
+    rows: int
+    seconds: float
+
+
+def recording_of(path: Path) -> Recording | None:
+    """The recording's progress while it runs, or None once it is saved or before it starts."""
+    if (path / "warmstart" / "pimc.npz").exists():
+        return None
+    progress = path / "warmstart" / "progress.json"
+    if progress.exists():
+        data = json.loads(progress.read_text())
+        return Recording(int(data["done"]), int(data["games"]), int(data["rows"]), data["seconds"])
+    log = path / "train.log"
+    if not log.exists():
+        return None
+    with log.open("rb") as handle:
+        handle.seek(max(0, log.stat().st_size - 8192))
+        tail = handle.read().decode(errors="replace")
+    found = _RECORD_LINE.findall(tail)
+    if not found:
+        return None
+    done, games, rows, minutes = found[-1]
+    return Recording(int(done), int(games), int(rows.replace(",", "")), float(minutes) * 60)
+
+
 @dataclass(frozen=True, slots=True)
 class RunState:
     """What a run's files say right now."""
@@ -38,6 +77,7 @@ class RunState:
     reference: dict[str, Any] | None
     log_age: float | None  # seconds since the log last changed
     finished: bool
+    recording: Recording | None = None  # the PIMC recording, while it runs
 
 
 def load(path: Path, now: float | None = None) -> RunState | None:
@@ -63,6 +103,7 @@ def load(path: Path, now: float | None = None) -> RunState | None:
         reference=reference,
         log_age=log_age,
         finished=(path / "checkpoints" / "final.pt").exists(),
+        recording=None if entries else recording_of(path),
     )
 
 
@@ -119,6 +160,8 @@ def _header(state: RunState) -> Text:
         status, style = f"no new loop for {duration(state.log_age)}", "yellow"
     elif state.entries:
         status, style = "running", "cyan"
+    elif state.recording is not None:
+        status, style = "recording PIMC games for the card anchor", "cyan"
     else:
         status, style = "starting (no loop finished yet)", "cyan"
     text = Text.assemble(("Training run ", "bold"), (str(state.path), "bold"), "  ")
@@ -126,6 +169,15 @@ def _header(state: RunState) -> Text:
     if state.log_age is not None and not state.finished:
         text.append(f"  (last loop {state.log_age:.0f} s ago)", style="dim")
     return text
+
+
+def _recording(recording: Recording) -> RenderableType:
+    done, games = recording.done, recording.games
+    line = Text(f"Recording: game {done:,} of {games:,}  ({100 * done / games:.0f}%)   ")
+    line.append(f"{recording.rows:,} card decisions, {duration(recording.seconds)} so far")
+    if done:
+        line.append(f"   about {duration(recording.seconds / done * (games - done))} left")
+    return Group(line, ProgressBar(total=games, completed=done, width=60))
 
 
 def _progress(state: RunState) -> RenderableType:
@@ -243,6 +295,18 @@ def _training(state: RunState) -> RenderableType:
         speed.append(f", learning {last['learn_seconds']:.1f} s")
     speed.append(")")
     lines = [kinds, learning, speed]
+    guesses = [e["guess"] for e in state.entries if "accuracy" in e.get("guess", {})]
+    if guesses:
+        recent_guesses = guesses[-RECENT:]
+        accuracy = [float(g["accuracy"]) for g in guesses]
+        lines.append(
+            Text(
+                "Hidden-card guesses (GuessNet, last loops): "
+                f"{100 * _mean([g['accuracy'] for g in recent_guesses]):.1f}% right, blind guess "
+                f"{100 * _mean([g['blind'] for g in recent_guesses]):.1f}%; over the run "
+                f"{sparkline(accuracy)}"
+            )
+        )
     if memory:
         lines.append(
             Text(
@@ -257,9 +321,13 @@ def _training(state: RunState) -> RenderableType:
 def render(state: RunState | None, path: Path) -> RenderableType:
     if state is None:
         return Text(f"No training run in {path} yet: waiting for its config.json", style="yellow")
+    recording: list[RenderableType] = []
+    if state.recording is not None:
+        recording = [_recording(state.recording), Text(""), Text("Then self-play:", style="dim")]
     return Group(
         _header(state),
         Text(""),
+        *recording,
         _progress(state),
         Text(""),
         _yardstick(state),

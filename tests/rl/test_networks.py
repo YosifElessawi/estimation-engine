@@ -10,8 +10,10 @@ from estimation.rl.encoder import NUM_FEATURES
 from estimation.rl.networks import (
     BID_ACTIONS,
     CARDS,
+    GUESS_SEATS,
     BiddingNet,
     CardPlayNet,
+    GuessNet,
     load_policy,
     parameter_count,
     save_checkpoint,
@@ -35,6 +37,11 @@ def test_bidding_values_every_non_card_action_and_card_play_has_critic_and_advan
     assert advantage.shape == (5, CARDS) == (5, 52)
 
 
+def test_guess_net_guesses_which_other_seat_holds_each_card():
+    logits = GuessNet(32)(torch.zeros(5, NUM_FEATURES))
+    assert logits.shape == (5, CARDS, GUESS_SEATS) == (5, 52, 3)
+
+
 def test_a_checkpoint_round_trips(tmp_path: Path):
     path = make_checkpoint(tmp_path / "a.pt", seed=3)
     policy = load_policy(path)
@@ -47,6 +54,28 @@ def test_a_checkpoint_round_trips(tmp_path: Path):
         expected_bids = bidding(torch.from_numpy(x)).numpy()
     assert np.allclose(policy.card_values(x), expected_cards)
     assert np.allclose(policy.bid_values(x), expected_bids)
+
+
+def test_a_checkpoint_keeps_its_guess_net_and_gives_guesses_as_chances(tmp_path: Path):
+    torch.manual_seed(5)
+    card, guess = CardPlayNet(32), GuessNet(32)
+    path = tmp_path / "g.pt"
+    save_checkpoint(path, card, BiddingNet(32), {}, guess)
+    policy = load_policy(path)
+    assert policy.guess is not None
+    x = np.random.default_rng(1).random((3, NUM_FEATURES), dtype=np.float32)
+    guesses = policy.card_guesses(x)
+    with torch.no_grad():
+        expected = torch.softmax(guess(torch.from_numpy(x)), dim=2).numpy()
+    assert np.allclose(guesses, expected)
+    assert np.allclose(guesses.sum(axis=2), 1.0)
+
+
+def test_a_checkpoint_without_a_guess_net_says_so(tmp_path: Path):
+    policy = load_policy(make_checkpoint(tmp_path / "plain.pt"))
+    assert policy.guess is None
+    with pytest.raises(ValueError, match="no trained GuessNet"):
+        policy.card_guesses(np.zeros((1, NUM_FEATURES), dtype=np.float32))
 
 
 def test_a_checkpoint_without_a_bidding_net_says_so(tmp_path: Path):
@@ -73,32 +102,35 @@ def test_a_file_that_is_not_a_checkpoint_is_refused(tmp_path: Path):
         load_policy(path)
 
 
-def as_version_1(path: Path) -> None:
-    """Rewrite a checkpoint as encoder version 1 saved it: 452 inputs, before the void
-    announcements (TBL-7) were appended."""
+def as_version(path: Path, version: int, features: int) -> None:
+    """Rewrite a checkpoint as an older encoder saved it: version 1 had 452 inputs (before the
+    void announcements, TBL-7), version 2 had 456 (before each seat's calls by trump, AUC-4)."""
     payload = torch.load(path, weights_only=True)
-    for net in ("card", "bidding"):
-        if payload[net] is not None:
-            payload[net]["trunk.0.weight"] = payload[net]["trunk.0.weight"][:, :452]
-    payload["encoder"], payload["num_features"] = 1, 452
+    for net in ("card", "bidding", "guess"):
+        if payload.get(net) is not None:
+            payload[net]["trunk.0.weight"] = payload[net]["trunk.0.weight"][:, :features]
+    payload["encoder"], payload["num_features"] = version, features
     torch.save(payload, path)
 
 
-def test_a_version_1_checkpoint_loads_and_ignores_the_new_inputs(tmp_path: Path):
-    path = make_checkpoint(tmp_path / "v1.pt")
-    as_version_1(path)
+@pytest.mark.parametrize(("version", "features"), [(1, 452), (2, 456)])
+def test_an_older_checkpoint_loads_and_ignores_the_new_inputs(
+    tmp_path: Path, version: int, features: int
+):
+    path = make_checkpoint(tmp_path / f"v{version}.pt")
+    as_version(path, version, features)
     policy = load_policy(path)
-    assert policy.meta["upgraded_from_encoder"] == 1
+    assert policy.meta["upgraded_from_encoder"] == version
     assert policy.bidding is not None
     first = policy.card.state_dict()["trunk.0.weight"]
     assert first.shape[1] == NUM_FEATURES
     rng = np.random.default_rng(0)
     x = rng.random((5, NUM_FEATURES), dtype=np.float32)
     y = x.copy()
-    y[:, 452:] = 1.0 - y[:, 452:]  # any announcement values at all
+    y[:, features:] = 1.0 - y[:, features:]  # any values at all in the appended inputs
     assert np.allclose(policy.bid_values(x), policy.bid_values(y))
     assert np.allclose(policy.card_values(x), policy.card_values(y))
-    assert not first[:, 452:].any()  # zero weights, learned from there
+    assert not first[:, features:].any()  # zero weights, learned from there
 
 
 def test_a_checkpoint_whose_inputs_cannot_be_widened_is_refused(tmp_path: Path):
@@ -108,3 +140,13 @@ def test_a_checkpoint_whose_inputs_cannot_be_widened_is_refused(tmp_path: Path):
     torch.save(payload, path)
     with pytest.raises(ValueError, match="encoder version 1 with 400 features"):
         load_policy(path)
+
+
+def test_an_older_checkpoints_guess_net_is_widened_too(tmp_path: Path):
+    torch.manual_seed(6)
+    path = tmp_path / "v2-guess.pt"
+    save_checkpoint(path, CardPlayNet(32), BiddingNet(32), {}, GuessNet(32))
+    as_version(path, 2, 456)
+    policy = load_policy(path)
+    assert policy.guess is not None
+    assert policy.guess.state_dict()["trunk.0.weight"].shape[1] == NUM_FEATURES

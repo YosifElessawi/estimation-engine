@@ -48,9 +48,15 @@ class OpponentConfig:
     self_play: float = 0.70  # against itself and recent checkpoints
     heuristic: float = 0.15  # against HeuristicBot and its noisy versions
     pimc: float = 0.15  # against a lighter PIMC
+    hybrid: float = 0.0  # tables of hybrid_seats Hybrids (hybrid_spec), the rest recent versions
+    mixed: float = 0.0  # tables whose other seats are each drawn from mixed_pool
     current_share: float = 0.5  # in self-play games, chance each other seat is the current net
     heuristic_noise: tuple[float, ...] = (0.0, 0.0, 0.02, 0.05, 0.1)
     pimc_samples: tuple[int, ...] = (4, 5, 6, 7, 8)
+    hybrid_spec: str = "hybrid:samples=4:top_k=2"  # a lighter Hybrid, as a bot spec
+    hybrid_seats: int = 2  # Hybrid seats at a hybrid table (1 to 3)
+    # Bot specs for mixed tables, SNAPSHOT for a recent version; at most one Hybrid per table.
+    mixed_pool: tuple[str, ...] = ("snapshot", "search:samples=8", "hybrid:samples=4:top_k=2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +82,7 @@ class SelfPlayConfig:
     augment_cards: bool = True  # relabel suits at random in card-play batches
     card_anchor_weight: float = 1.0  # keep the PIMC imitation loss in card-play updates
     card_anchor_batch: int = 1024  # recorded PIMC decisions per card-play step
+    guess_lr: float = 0.0  # GuessNet's learning rate (who holds each unseen card); 0 trains none
     eval_games: int = 16  # greedy games against three HeuristicBots per iteration, for the log
     snapshot_every: int = 5  # iterations between snapshots joining the opponent pool
     snapshots_kept: int = 5
@@ -118,8 +125,13 @@ class TrainConfig:
 
     def __post_init__(self) -> None:
         mix = self.opponents
-        if abs(mix.self_play + mix.heuristic + mix.pimc - 1.0) > 1e-9:
-            raise ValueError("opponent shares self_play, heuristic and pimc must add up to 1")
+        shares = (mix.self_play, mix.heuristic, mix.pimc, mix.hybrid, mix.mixed)
+        if min(shares) < 0 or abs(sum(shares) - 1.0) > 1e-9:
+            raise ValueError(
+                "opponent shares self_play, heuristic, pimc, hybrid and mixed must add up to 1"
+            )
+        if not 1 <= mix.hybrid_seats <= 3 or not mix.mixed_pool:
+            raise ValueError("hybrid_seats must be 1 to 3 and mixed_pool must not be empty")
         if not mix.heuristic_noise or not mix.pimc_samples:
             raise ValueError("opponent noise and PIMC sample lists must not be empty")
         if self.workers < 1 or self.selfplay.chunk < 1 or self.selfplay.games < 1:
@@ -129,6 +141,8 @@ class TrainConfig:
         play = self.selfplay
         if play.lr_end_factor < 0 or play.card_anchor_end_factor < 0:
             raise ValueError("lr_end_factor and card_anchor_end_factor must be 0 or more")
+        if play.guess_lr < 0:
+            raise ValueError("guess_lr must be 0 or more")
         if play.yardstick_every < 0 or play.yardstick_sets < 1:
             raise ValueError("yardstick_every must be 0 or more and yardstick_sets at least 1")
 
@@ -139,6 +153,7 @@ _SECTIONS = ("rules", "reward", "record", "imitation", "opponents", "selfplay", 
 RECORD_STAGE = 1
 IMITATION_STAGE = 2
 SELFPLAY_STAGE = 3
+EXPERT_STAGE = 4
 
 
 def linear_schedule(iterations: int, iteration: int, start: float, end: float) -> float:
@@ -174,6 +189,12 @@ def config_from_dict(data: Mapping[str, Any]) -> TrainConfig:
         else:
             raise ValueError(f"unknown config key {key!r}")
     return dataclasses.replace(top, **changes)
+
+
+def section_from[T](current: T, values: Mapping[str, Any], section: str) -> T:
+    """``current`` (a config dataclass) with the keys of a TOML ``[section]`` replaced, each
+    checked against its field's type; unknown keys are errors."""
+    return cast(T, _replace(current, values, section))
 
 
 def config_to_dict(config: TrainConfig) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import torch
 
 from estimation.rl.config import config_from_dict
 from estimation.rl.encoder import NUM_FEATURES
+from estimation.rl.guesses import NO_GUESS
 from estimation.rl.imitation import ImitationData, training_rows
 from estimation.rl.learner import Learner
 from estimation.rl.networks import REWARD_SCALE, BiddingNet, CardPlayNet
@@ -21,7 +22,7 @@ def samples(n: int, actions: int, seed: int) -> Samples:
     features = rng.random((n, NUM_FEATURES), dtype=np.float32).astype(np.float16)
     chosen = rng.integers(0, actions, n).astype(np.int16)
     rewards = np.where(chosen == 0, 40.0, -40.0).astype(np.float32)
-    return Samples(features, chosen, rewards)
+    return Samples(features, chosen, rewards, np.full((n, 52), NO_GUESS, np.int8))
 
 
 def learner(seed: int = 0) -> Learner:
@@ -151,3 +152,49 @@ def test_learning_rates_and_the_anchor_decay_linearly_over_the_run():
     # Adam's first step moves the weights in proportion to the learning rate.
     ratio = _step_size(changes, 10) / _step_size({"iterations": 11}, 10)
     assert ratio == pytest.approx(0.1, rel=0.05)
+
+
+def guess_samples(n: int, seed: int) -> Samples:
+    """Positions where the next seat holds every Club, the seat after it every Diamond and the
+    last one the rest, and the first input says whether the Hearts went to the next seat."""
+    rng = np.random.default_rng(seed)
+    base = samples(n, 3, seed)
+    flipped = rng.random(n) < 0.5
+    features = base.features.copy()
+    features[:, 0] = flipped
+    labels = np.zeros((n, 52), np.int8)
+    labels[:, 13:26] = 1
+    labels[:, 26:52] = 2
+    labels[flipped, 26:39] = 0
+    labels[:, 0] = NO_GUESS  # a card the acting seat can see
+    return Samples(features, base.actions, base.rewards, labels)
+
+
+def test_with_guess_lr_the_guess_net_learns_who_holds_the_cards():
+    config = config_from_dict({"seed": 1, "selfplay": {"batch": 64, "epochs": 1, "guess_lr": 1e-3}})
+    torch.manual_seed(0)
+    model = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    assert model.guess is not None
+    data = guess_samples(512, 4)
+    first = model.update(data, data, 0, train_card=True)
+    last = first
+    for iteration in range(1, 30):
+        last = model.update(data, data, iteration, train_card=True)
+    assert first.guess is not None
+    assert last.guess is not None
+    assert last.guess.loss < first.guess.loss / 3
+    assert last.guess.accuracy > 0.95
+    assert last.guess.blind == pytest.approx(1 / 3, abs=0.01)  # nobody has shown out
+    state = model.state()
+    again = Learner(CardPlayNet(32), BiddingNet(32), config, torch.device("cpu"))
+    again.load_state(state)
+    assert again.guess is not None
+    assert torch.equal(again.guess.out.weight, model.guess.out.weight)  # resumes exactly
+
+
+def test_without_guess_lr_there_is_no_guess_net():
+    model = learner()
+    assert model.guess is None
+    report = model.update(samples(128, 4, 0), samples(128, 3, 1), 0, train_card=True)
+    assert report.guess is None
+    assert "guess" not in model.state()

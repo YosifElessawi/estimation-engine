@@ -1,5 +1,6 @@
 """Training games (SPEC §6 M4): the current nets against themselves, recent snapshots,
-HeuristicBot and a lighter PIMC, played in lockstep for batched inference.
+HeuristicBot and a lighter PIMC, and (Hybrid plan) Hybrid tables and mixed tables of any bots,
+played in lockstep for batched inference.
 
 A chunk of games advances together: each game runs its scripted players until a net has to
 decide, then every pending net decision of the chunk goes through one forward pass per net. The
@@ -11,6 +12,10 @@ Learner bidding samples a softmax of its values (``bid_temperature``): with gree
 pilot's policy flipped between never opening the auction and opening almost every round,
 because whichever choice it was avoiding got too few samples to be valued well. Card play is
 greedy. Both also take a uniformly random legal action with a small probability (epsilon).
+
+Each recorded decision also keeps who held each unseen card at that moment (``guesses``), the
+guess head's training target, read from the real deal: the trainer knows it, the nets never see
+it.
 
 Trainer code: it holds real Bolas, but every player and net sees only the acting seat's own
 Observation (through the state encoder), exactly as in the arena.
@@ -24,14 +29,15 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from estimation.bots import Bot, HeuristicBot, NoisyBot, PIMCBot, PIMCConfig
+from estimation.bots import Bot, HeuristicBot, NoisyBot, PIMCBot, PIMCConfig, make_bot
 from estimation.bots.heuristic import HeuristicConfig
 from estimation.engine import Phase, RulesConfig
 from estimation.engine.actions import PLAY_BASE
 
-from .config import TrainConfig
+from .config import OpponentConfig, TrainConfig
 from .encoder import NUM_FEATURES, encode
 from .games import RewardedBola
+from .guesses import guess_labels
 from .memory import peak_rss_mb
 from .networks import BiddingNet, CardPlayNet
 from .standings import RewardConfig, first_place_shares
@@ -40,19 +46,21 @@ LEARNER = "learner"
 SNAPSHOT = "snapshot"
 HEURISTIC = "heuristic"
 PIMC = "pimc"
+BOT = "bot"  # any bot by its spec (estimation.bots.make_bot)
 
 StateDict = dict[str, torch.Tensor]
 
 
 @dataclass(frozen=True, slots=True)
 class SeatPlan:
-    """Who plays one seat: the learner, snapshot ``snapshot``, HeuristicBot with ``noise`` or
-    PIMC with ``samples`` deals."""
+    """Who plays one seat: the learner, snapshot ``snapshot``, HeuristicBot with ``noise``, PIMC
+    with ``samples`` deals, or the bot ``spec``."""
 
     kind: str
     snapshot: int = -1
     noise: float = 0.0
     samples: int = 0
+    spec: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,12 +97,13 @@ class ChunkTask:
 
 @dataclass(slots=True)
 class Samples:
-    """Recorded decisions: encoded Observation, action id (card id for card play) and the
-    reward of the round it was made in."""
+    """Recorded decisions: encoded Observation, action id (card id for card play), the reward
+    of the round it was made in and the guess labels (``guesses.guess_labels``)."""
 
     features: npt.NDArray[np.float16]
     actions: npt.NDArray[np.int16]
     rewards: npt.NDArray[np.float32]
+    guesses: npt.NDArray[np.int8]
 
     def __len__(self) -> int:
         return len(self.actions)
@@ -102,7 +111,10 @@ class Samples:
 
 def empty_samples() -> Samples:
     return Samples(
-        np.zeros((0, NUM_FEATURES), np.float16), np.zeros(0, np.int16), np.zeros(0, np.float32)
+        np.zeros((0, NUM_FEATURES), np.float16),
+        np.zeros(0, np.int16),
+        np.zeros(0, np.float32),
+        np.zeros((0, 52), np.int8),
     )
 
 
@@ -114,6 +126,7 @@ def concat_samples(parts: Sequence[Samples]) -> Samples:
         np.concatenate([p.features for p in parts]),
         np.concatenate([p.actions for p in parts]),
         np.concatenate([p.rewards for p in parts]),
+        np.concatenate([p.guesses for p in parts]),
     )
 
 
@@ -158,6 +171,8 @@ def build_nets(weights: NetWeights) -> _Nets:
 
 
 def _scripted(plan: SeatPlan, seed: int, rules: RulesConfig) -> Bot:
+    if plan.kind == BOT:
+        return make_bot(plan.spec, seed, rules)
     heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
     if plan.kind == HEURISTIC:
         bot: Bot = HeuristicBot(heuristic)
@@ -165,6 +180,10 @@ def _scripted(plan: SeatPlan, seed: int, rules: RulesConfig) -> Bot:
     if plan.kind == PIMC:
         return PIMCBot(seed, PIMCConfig(samples=plan.samples, heuristic=heuristic, rules=rules))
     raise ValueError(f"seat kind {plan.kind!r} is not a scripted bot")
+
+
+type _Open = tuple[bool, npt.NDArray[np.float32], int, npt.NDArray[np.int8]]
+type _Row = tuple[npt.NDArray[np.float32], int, float, npt.NDArray[np.int8]]
 
 
 class _Game:
@@ -188,18 +207,19 @@ class _Game:
             else:
                 self.bots.append(_scripted(seat_plan, plan.seed * 4 + seat + 1, task.rules))
                 self.net_of.append(None)
-        # Per seat, this round's learner decisions: (is card play, features, action).
-        self.open: list[list[tuple[bool, npt.NDArray[np.float32], int]]] = [[], [], [], []]
-        self.out_bid: list[tuple[npt.NDArray[np.float32], int, float]] = []
-        self.out_card: list[tuple[npt.NDArray[np.float32], int, float]] = []
+        # Per seat, this round's learner decisions: (is card play, features, action, guesses).
+        self.open: list[list[_Open]] = [[], [], [], []]
+        self.out_bid: list[_Row] = []
+        self.out_card: list[_Row] = []
 
     def step(self, action: int) -> None:
         rewards = self.game.step(action)
         if rewards is None:
             return
         for seat in range(4):
-            for is_card, features, act in self.open[seat]:
-                (self.out_card if is_card else self.out_bid).append((features, act, rewards[seat]))
+            for is_card, features, act, guesses in self.open[seat]:
+                row = (features, act, rewards[seat], guesses)
+                (self.out_card if is_card else self.out_bid).append(row)
             self.open[seat].clear()
 
 
@@ -209,6 +229,7 @@ class _Request:
     seat: int
     features: npt.NDArray[np.float32]
     legal: list[int]
+    guesses: npt.NDArray[np.int8] | None  # the learner's guess labels; None for snapshots
 
 
 def play_chunk(task: ChunkTask) -> ChunkResult:
@@ -266,7 +287,11 @@ def _advance(game: _Game, rules: RulesConfig) -> _Request | None:
         if len(legal) == 1:
             game.step(legal[0])
             continue
-        return _Request(game, seat, encode(bola.observation(seat), rules), legal)
+        features = encode(bola.observation(seat), rules)
+        guesses = (
+            guess_labels(features, bola.round.hands, seat) if game.net_of[seat] == -1 else None
+        )
+        return _Request(game, seat, features, legal, guesses)
     return None
 
 
@@ -302,8 +327,10 @@ def _apply(
             action = _softmax_choice(legal, values, task.bid_temperature, game.rng.random())
         else:
             action = max(legal, key=lambda a: values[a - offset])
-        if task.record_card if is_card else task.record_bid:
-            game.open[request.seat].append((is_card, request.features, action - offset))
+        if (task.record_card if is_card else task.record_bid) and request.guesses is not None:
+            game.open[request.seat].append(
+                (is_card, request.features, action - offset, request.guesses)
+            )
     else:
         action = max(legal, key=lambda a: values[a - offset])
     game.step(action)
@@ -323,14 +350,15 @@ def _softmax_choice(
     return legal[index]
 
 
-def _samples(per_game: list[list[tuple[npt.NDArray[np.float32], int, float]]]) -> Samples:
+def _samples(per_game: list[list[_Row]]) -> Samples:
     rows = [row for game in per_game for row in game]
     if not rows:
         return empty_samples()
     return Samples(
-        np.stack([features for features, _, _ in rows]).astype(np.float16),
-        np.array([action for _, action, _ in rows], np.int16),
-        np.array([reward for _, _, reward in rows], np.float32),
+        np.stack([features for features, _, _, _ in rows]).astype(np.float16),
+        np.array([action for _, action, _, _ in rows], np.int16),
+        np.array([reward for _, _, reward, _ in rows], np.float32),
+        np.stack([guesses for _, _, _, guesses in rows]),
     )
 
 
@@ -366,6 +394,7 @@ def plan_games(
     n_heuristic = round(mix.heuristic * total)
     n_pimc = round(mix.pimc * total)
     kinds = ["heuristic"] * n_heuristic + ["pimc"] * n_pimc
+    kinds += ["hybrid"] * round(mix.hybrid * total) + ["mixed"] * round(mix.mixed * total)
     kinds += ["self"] * (total - len(kinds))
     rng = random.Random(seed_of(0))
     rng.shuffle(kinds)
@@ -380,6 +409,8 @@ def plan_games(
                     seats.append(SeatPlan(LEARNER))
                 else:
                     seats.append(SeatPlan(SNAPSHOT, snapshot=game_rng.choice(list(snapshot_ids))))
+        elif kind in ("hybrid", "mixed"):
+            seats = _outside_table(kind, mix, snapshot_ids, game_rng)
         else:
             learner_seat = game_rng.randrange(4)
             for seat in range(4):
@@ -399,6 +430,47 @@ def plan_games(
             )
         )
     return plans
+
+
+def _is_hybrid(spec: str) -> bool:
+    return spec.partition(":")[0] == "hybrid"
+
+
+def _recent(snapshot_ids: Sequence[int], rng: random.Random) -> SeatPlan:
+    """A recent version of the learner: a snapshot, or the learner itself before there is one."""
+    if not snapshot_ids:
+        return SeatPlan(LEARNER)
+    return SeatPlan(SNAPSHOT, snapshot=rng.choice(list(snapshot_ids)))
+
+
+def _outside_table(
+    kind: str, mix: OpponentConfig, snapshot_ids: Sequence[int], rng: random.Random
+) -> list[SeatPlan]:
+    """A hybrid table (the learner, ``hybrid_seats`` Hybrids and recent versions) or a mixed table
+    (the learner and three seats drawn on their own from ``mixed_pool``, at most one Hybrid)."""
+    learner_seat = rng.randrange(4)
+    others = [(learner_seat + k) & 3 for k in (1, 2, 3)]
+    seats: list[SeatPlan] = [SeatPlan(LEARNER)] * 4
+    if kind == "hybrid":
+        hybrids = set(rng.sample(others, mix.hybrid_seats))
+        for seat in others:
+            seats[seat] = (
+                SeatPlan(BOT, spec=mix.hybrid_spec)
+                if seat in hybrids
+                else _recent(snapshot_ids, rng)
+            )
+        return seats
+    has_hybrid = False
+    choices = list(mix.mixed_pool)
+    for seat in others:
+        allowed = [c for c in choices if not (has_hybrid and _is_hybrid(c))] or choices
+        spec = rng.choice(allowed)
+        if spec == SNAPSHOT:
+            seats[seat] = _recent(snapshot_ids, rng)
+        else:
+            has_hybrid = has_hybrid or _is_hybrid(spec)
+            seats[seat] = SeatPlan(BOT, spec=spec)
+    return seats
 
 
 def plan_eval_games(config: TrainConfig, seed_of: "SeedFn") -> list[GamePlan]:
@@ -438,6 +510,7 @@ def chunk_plans(
 _GAME_SECONDS = 0.04
 _NET_SEAT_SECONDS = 0.03
 _PIMC_DEAL_SECONDS = 0.04
+_BOT_SECONDS = {"hybrid": 3.0, "search": 0.5, "pimc": 0.5}  # rough, for a light setting
 
 
 def estimated_seconds(plans: Sequence[GamePlan]) -> float:
@@ -450,6 +523,8 @@ def estimated_seconds(plans: Sequence[GamePlan]) -> float:
                 total += _NET_SEAT_SECONDS
             elif seat.kind == PIMC:
                 total += _PIMC_DEAL_SECONDS * seat.samples
+            elif seat.kind == BOT:
+                total += _BOT_SECONDS.get(seat.spec.partition(":")[0], _NET_SEAT_SECONDS)
     return total
 
 
