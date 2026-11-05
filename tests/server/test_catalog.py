@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from estimation.arena.ladder import DEFAULT_LADDER
-from estimation.arena.roster import RL_BOT
+from estimation.arena.roster import HYBRID_BOT, RL_BOT
 from estimation.bots import HeuristicBot, NoisyBot
 from estimation.bots.rl import RLBot
 from estimation.engine.config import DEFAULT_CONFIG
@@ -153,10 +153,13 @@ def test_a_rating_under_the_new_name_wins_over_the_old_one(tmp_path: Path):
 
 def test_the_rl_and_hybrid_bots_are_offered_when_their_checkpoint_is_on_disk(tmp_path: Path):
     assert RL_BOT not in [entry.spec for entry in Catalog.load(tmp_path).entries]
-    assert "hybrid" not in [entry.spec for entry in Catalog.load(tmp_path).entries]
+    assert HYBRID_BOT not in [entry.spec for entry in Catalog.load(tmp_path).entries]
     make_checkpoint(tmp_path / "runs" / "m4-rules-v2" / "checkpoints" / "final.pt")
     entries = {entry.spec: entry for entry in Catalog.load(tmp_path).entries}
     assert entries[RL_BOT].label == "RL v2"
     assert entries[RL_BOT].explains
-    assert entries["hybrid"].label == "Hybrid"
-    assert entries["hybrid"].explains
+    assert HYBRID_BOT not in entries  # Hybrid v3's own checkpoint is still missing
+    make_checkpoint(tmp_path / "runs" / "expert" / "round-1" / "hybrid.pt")
+    entries = {entry.spec: entry for entry in Catalog.load(tmp_path).entries}
+    assert entries[HYBRID_BOT].label == "Hybrid"
+    assert entries[HYBRID_BOT].explains

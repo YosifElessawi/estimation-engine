@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import RequestResponseEndpoint
 
 from estimation.arena.games import code_version
+from estimation.arena.roster import HYBRID_BOT
 from estimation.engine import IllegalActionError, RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
 
@@ -50,7 +51,7 @@ from .records import GameRow, Progress, Records
 logger = logging.getLogger(__name__)
 
 BOT_NAME = "B-Tig"
-BOT_SPEC = "hybrid"  # the bot behind every B-Tig seat
+BOT_SPEC = HYBRID_BOT  # the bot behind every B-Tig seat (Hybrid v3 since 2026-11-05)
 PUBLIC_SPEC = "b-tig"  # what the page is told a B-Tig seat is
 HUMAN_SEAT = 0
 NAME_MAX = 20
