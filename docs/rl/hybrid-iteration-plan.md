@@ -248,4 +248,23 @@ skip its third card, and the saved time pays for twice the deals. About 24 ms a 
 90 ms), against 14 ms for Hybrid v3: still quick at the table. Together the step is worth about
 +30 points a game over Hybrid v3 (the two matches chained, not one match).
 
+### Step 4 (done 2026-11-06): searching the bids made the Hybrid worse, not kept
+
+Hybrid v4 with bid search on (`bid_search=true`, BiddingNet's top 3 options, 16 imagined deals
+each) against plain Hybrid v4, 200 duplicate sets (seed 2033), then both through the bidding
+evaluator (300 decisions, seed 2033).
+
+| | Sets | First place | Points per game | Bidding evaluator, points lost a decision |
+|---|---|---|---|---|
+| Hybrid v4 + bid search | 65-135 | 21.9% vs 28.1% | -12.8 (-17.1 to -8.5) | 6.2 |
+| Hybrid v4 (bids by BiddingNet) | | | | 5.3 |
+
+Both measures agree: the searched bids lose points. The search picks the option with the best
+mean over a few noisy play-outs, so it tends to pick the option that got lucky; in its imagined
+rounds every other seat bids greedily by BiddingNet, which is not how real opponents bid; and it
+trusts its own play-outs on openings and super calls, where it did worst (open: best chosen 0% vs
+12%, super call 15.8 vs 10.4 points lost). Hybrid v4 stays the best Hybrid. The bid search stays
+in the code, off by default (`bid_search=false`), for a later try with more deals or a learned
+value for the rest of the auction; no roster name.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
