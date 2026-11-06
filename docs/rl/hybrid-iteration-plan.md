@@ -108,6 +108,23 @@ Why this order: steps 2 and 3 both use the step-1 head. Doing 2 before 4 improve
 first; once 4 exists, one more round of step 2 also teaches BiddingNet to bid like the searched
 bidding. Step 4's code can be written while step 1 trains; only its measuring waits for the Mac.
 
+### Play for King (after step 4, Yosif's choice 2026-11-05)
+
+Today's reward plays each open round for points against the table (opponents ahead weigh double)
+and blends in the chance of finishing first only in rounds 14-18, from a simple formula
+(`win_blend`, a 20-point spread per round). Winning a Bola needs a risk attitude from the score
+situation: gamble when far behind, play safe when far ahead, which costs some average score.
+
+- **A learned King chance:** a net output that predicts the chance of finishing first (King) from
+  here, trained on how real Bolas ended, replacing the formula.
+- **The reward in every round** becomes the change in that King chance, instead of the
+  fixed-trump-only blend.
+- **The Hybrid's search** scores its imagined rounds by the King chance too, not only by points.
+- **Judged by Bolas won:** Win Elo and first-place share, with points per game only as a side
+  note (a bot playing for King may score less on average).
+
+Nothing runs for it yet.
+
 ### Step 5 (candidate, after step 4): one net for the whole game
 
 Added 2026-11-03 at Yosif's question (a friend's pointer to Sutton's "The Bitter Lesson"): three
@@ -199,5 +216,55 @@ its match was a tie, so step 2 stopped there, as the rule says.
 0.31 points a card, Hybrid v2 1.68 +- 0.29. Within the noise, and not better: the +19 may come
 mostly from the bidding refit against the stronger opponents, or from card play a PIMC-8 judge
 cannot see. A swap match (v3's bidding with v2's card net, and the reverse) would tell which.
+
+**Swap match** (2026-11-05, 200 sets each against Hybrid v2, seed 2030): v3's bidding with v2's
+card net won 110-90, +7.1 (+2.3 to +11.8), first place 26.6% vs 23.4%; v2's bidding with v3's
+card net won 135-65, +13.4 (+9.1 to +17.7), first place 28.8% vs 21.2%. Both parts earned their
+place and add up to about Hybrid v3's +19: the copied card net about two thirds, the bidding refit
+against stronger opponents about one third. The card-play evaluator missed the card net's gain:
+its judge plays the rest of the round as PIMC-8, now weaker than the bots it judges, so its card
+verdicts are not reliable at this level.
+
+**On the tables** since 2026-11-05 (PR #6): Hybrid v3 is the Hybrid on the full table and in every
+B-Tig seat; the M5 Hybrid stays in the roster as Hybrid v1.
+
+### Step 3 (done 2026-11-06): Hybrid v4, the same nets with a better search
+
+No training: Hybrid v3's nets with new search settings, each played against plain Hybrid v3 over
+200 duplicate sets (seed 2031), then the best three together against the best single one (seed
+2032).
+
+| Setting (against Hybrid v3) | Sets | First place | Points per game | Time per card |
+|---|---|---|---|---|
+| Deals placed by GuessNet's guesses (`deals=guesses`) | 134-66 | 27.4% vs 22.6% | +11.2 (+7.2 to +15.1) | 12 ms |
+| Guessed deals, kept by the bidding (`deals=both`) | 154-46 | 27.9% vs 22.1% | +19.6 (+15.5 to +23.6) | 14 ms |
+| Top 2 cards searched instead of 3 (`top_k=2`) | 123-77 | 26.2% vs 23.8% | +8.6 (+4.6 to +12.6) | 12 ms |
+| 32 deals instead of 16 (`samples=32`) | 140-60 | 29.2% vs 20.8% | +14.7 (+10.7 to +18.6) | 23 ms |
+| All three of `deals=both`, `top_k=2`, `samples=32`, against `deals=both` alone | 143-57 | 28.3% vs 21.7% | +14.2 (+10.4 to +18.0) | 24 ms |
+
+**Hybrid v4** (`hybrid:checkpoint=runs/expert/round-1/hybrid.pt:deals=both:top_k=2:samples=32`) is
+kept: the guesses make the imagined deals more realistic, the sharper card net lets the search
+skip its third card, and the saved time pays for twice the deals. About 24 ms a card (p99 about
+90 ms), against 14 ms for Hybrid v3: still quick at the table. Together the step is worth about
++30 points a game over Hybrid v3 (the two matches chained, not one match).
+
+### Step 4 (done 2026-11-06): searching the bids made the Hybrid worse, not kept
+
+Hybrid v4 with bid search on (`bid_search=true`, BiddingNet's top 3 options, 16 imagined deals
+each) against plain Hybrid v4, 200 duplicate sets (seed 2033), then both through the bidding
+evaluator (300 decisions, seed 2033).
+
+| | Sets | First place | Points per game | Bidding evaluator, points lost a decision |
+|---|---|---|---|---|
+| Hybrid v4 + bid search | 65-135 | 21.9% vs 28.1% | -12.8 (-17.1 to -8.5) | 6.2 |
+| Hybrid v4 (bids by BiddingNet) | | | | 5.3 |
+
+Both measures agree: the searched bids lose points. The search picks the option with the best
+mean over a few noisy play-outs, so it tends to pick the option that got lucky; in its imagined
+rounds every other seat bids greedily by BiddingNet, which is not how real opponents bid; and it
+trusts its own play-outs on openings and super calls, where it did worst (open: best chosen 0% vs
+12%, super call 15.8 vs 10.4 points lost). Hybrid v4 stays the best Hybrid. The bid search stays
+in the code, off by default (`bid_search=false`), for a later try with more deals or a learned
+value for the rest of the auction; no roster name.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

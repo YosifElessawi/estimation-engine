@@ -5,7 +5,7 @@ from collections import Counter
 
 import pytest
 
-from estimation.bots.sampling import deal_unseen
+from estimation.bots.sampling import deal_by_guesses, deal_unseen
 from estimation.engine import HEARTS, SPADES, mask_of, parse_hand
 from estimation.engine.cards import SUIT_MASKS
 
@@ -92,3 +92,60 @@ def test_the_same_generator_seed_gives_the_same_deal():
 def test_impossible_constraints_are_rejected(sizes: list[int], voids: list[int]):
     with pytest.raises(ValueError, match=r"deal|hand|void"):
         deal_unseen(parse_hand("2C 3C 4C"), sizes, voids, random.Random(0))
+
+
+def random_constraints(rng: random.Random) -> tuple[int, list[int], list[int], list[int]]:
+    """A real deal of 3 to 39 cards and voids it allows: unseen cards, sizes, voids, the deal."""
+    cards = rng.sample(range(52), 3 * rng.randint(1, 13))
+    size = len(cards) // 3
+    truth = [mask_of(cards[i * size : (i + 1) * size]) for i in range(3)]
+    voids = [
+        sum(1 << suit for suit in range(4) if not hand & SUIT_MASKS[suit] and rng.random() < 0.8)
+        for hand in truth
+    ]
+    return mask_of(cards), [size] * 3, voids, truth
+
+
+def test_deals_by_guesses_fit_the_sizes_and_voids_whatever_the_chances():
+    rng = random.Random(6)
+    for _ in range(2000):
+        unseen, sizes, voids, _ = random_constraints(rng)
+        chances = [[rng.random() * (rng.random() < 0.7) for _ in range(3)] for _ in range(52)]
+        hands = deal_by_guesses(unseen, sizes, voids, chances, rng)
+        assert hands[0] | hands[1] | hands[2] == unseen
+        assert sum(hand.bit_count() for hand in hands) == unseen.bit_count()  # no overlap
+        for hand, size, void in zip(hands, sizes, voids, strict=True):
+            assert hand.bit_count() == size
+            assert not any(void >> suit & 1 and hand & SUIT_MASKS[suit] for suit in range(4))
+
+
+def test_certain_guesses_deal_the_true_hands():
+    rng = random.Random(7)
+    for _ in range(300):
+        unseen, sizes, voids, truth = random_constraints(rng)
+        chances = [[float(truth[i] >> card & 1) for i in range(3)] for card in range(52)]
+        assert deal_by_guesses(unseen, sizes, voids, chances, rng) == truth
+
+
+def test_a_card_goes_to_a_hand_as_often_as_its_chance_says():
+    unseen = parse_hand("2C 3C 4C 5C 6C 7C")
+    chances = [[1 / 3, 1 / 3, 1 / 3] for _ in range(52)]
+    chances[0] = [0.6, 0.3, 0.1]  # the 2 of Clubs
+    rng = random.Random(8)
+    holders = Counter(
+        next(
+            i
+            for i, hand in enumerate(deal_by_guesses(unseen, [2, 2, 2], [0, 0, 0], chances, rng))
+            if hand & 1
+        )
+        for _ in range(6000)
+    )
+    assert 0.5 < holders[0] / 6000 < 0.7
+    assert holders[0] > holders[1] > holders[2]
+
+
+def test_dealing_by_guesses_is_seeded():
+    unseen = parse_hand("2C 3C 4C 5C 6C 7C 8D 9D TH")
+    chances = [[0.2, 0.3, 0.5] for _ in range(52)]
+    first = deal_by_guesses(unseen, [3, 3, 3], [0, 1, 0], chances, random.Random(9))
+    assert first == deal_by_guesses(unseen, [3, 3, 3], [0, 1, 0], chances, random.Random(9))

@@ -10,6 +10,12 @@ the deal's likelihood: deals where the bidding makes sense count more.
 Everything but the hand in those decision positions is public, so each decision is encoded once
 per round from ``Observation.log`` with an empty hand (``BiddingHistory``) and each deal only
 writes the hand, the unseen cards and the hand's shape (nothing is played during bidding).
+
+``PublicBidding`` is that public state, stepped by the rules without any seat's cards (bots never
+touch a Round). It also finishes the bidding of an imagined round, for the bid search: once the
+last estimate is made it moves to card play with the Caller leading (the highest estimate in a
+fixed-trump round, FIX-3), with the total, Over or Under and Risks known, and a round nobody bid
+in ends skipped (GAM-3).
 """
 
 from collections.abc import Callable
@@ -59,7 +65,7 @@ class BiddingHistory:
 def bidding_history(obs: Observation, rules: RulesConfig) -> BiddingHistory:
     """Rebuild this round's non-card decisions of every seat but ``obs.seat`` from ``obs.log``."""
     me = obs.seat
-    state = _PublicBidding(obs, rules)
+    state = PublicBidding(obs, rules)
     seats: list[int] = []
     rows: list[Floats] = []
     legal_rows: list[npt.NDArray[np.bool_]] = []
@@ -89,9 +95,9 @@ def bidding_history(obs: Observation, rules: RulesConfig) -> BiddingHistory:
     )
 
 
-class _PublicBidding:
+class PublicBidding:
     """The public state of a round before card play, stepped from ``Observation.log`` without
-    any seat's cards."""
+    any seat's cards. ``phase`` ends at PLAY, or DONE for a skipped round."""
 
     __slots__ = (
         "answers",
@@ -115,6 +121,7 @@ class _PublicBidding:
         "phase",
         "pos",
         "rules",
+        "skipped",
         "stayed",
         "super_call",
         "super_seat",
@@ -145,6 +152,7 @@ class _PublicBidding:
         self.final = False
         self.answers: list[int] = []
         self.max_bid = LAST_BID
+        self.skipped = False
         self.super_call = False
         self.super_seat = -1
         self.est = [-1, -1, -1, -1]
@@ -171,7 +179,22 @@ class _PublicBidding:
             self.trump = obs.fixed_trump
             self.last = self.order[3]
 
+    def clone(self) -> "PublicBidding":
+        """An independent copy in the same state."""
+        twin = object.__new__(PublicBidding)
+        for name in PublicBidding.__slots__:
+            value = getattr(self, name)
+            setattr(twin, name, value.copy() if isinstance(value, list) else value)
+        return twin
+
+    @property
+    def bidding(self) -> bool:
+        """Whether a Dash Call, bid or estimate is still to be made."""
+        return self.phase is not Phase.PLAY and self.phase is not Phase.DONE
+
     def legal_actions(self) -> list[int]:
+        if not self.bidding:
+            return []
         if self.phase is Phase.DASH:
             return [NO_DASH_CALL, DASH_CALL]
         if self.phase is Phase.AUCTION:
@@ -255,6 +278,8 @@ class _PublicBidding:
             self.chosen += 1
             if self.chosen < 4:
                 self.cur = (seat + 1) & 3
+            elif all(self.dash):
+                self._skip()  # DSH-5: all four Dash Called
             else:
                 self.out = self.dash.copy()
                 if self.dash.count(True) == 3:
@@ -334,6 +359,30 @@ class _PublicBidding:
         self.pos += 1
         if self.pos < len(self.order):
             self.cur = self.order[self.pos]
+        elif self.caller < 0:
+            self._end_fixed_estimation()
+        else:
+            self._start_play()
+
+    def _end_fixed_estimation(self) -> None:
+        """FIX-3: the highest estimate is Caller (first said wins ties); equal ones are With."""
+        best = max(self.est)
+        caller = next(seat for seat in self.order if self.est[seat] == best)
+        self.caller = caller
+        self.c = best
+        for seat in self.order:
+            if seat != caller and self.est[seat] == best:
+                self.with_w[seat] = best
+        self._start_play()
+
+    def _start_play(self) -> None:
+        self.phase = Phase.PLAY  # PLY-1: the Caller leads
+        self.cur = self.caller
+
+    def _skip(self) -> None:
+        self.phase = Phase.DONE  # GAM-3
+        self.skipped = True
+        self.cur = -1
 
     def _take_top(self, seat: int, action: int) -> None:
         old = self.top_seat
@@ -353,6 +402,9 @@ class _PublicBidding:
             if not self.out[nxt] and nxt != self.top_seat:
                 self.cur = nxt
                 return
+        if self.top_seat < 0:
+            self._skip()  # AUC-3, GAM-3: nobody bid
+            return
         self.final = True
         self.cur = self.top_seat
 
@@ -390,6 +442,9 @@ class _PublicBidding:
             self.last = self.order[-1]
             self.phase = Phase.ESTIMATION
             self.cur = self.order[0]
+        else:
+            self.last = -1  # EST-7: nobody estimates, so nobody takes Risk
+            self._start_play()
 
     def observation(self, seat: int) -> Observation:
         if self.phase is Phase.AUCTION:
@@ -409,11 +464,14 @@ class _PublicBidding:
                 WithInfo(s, w, self.trump) for s, w in enumerate(self.with_w) if w >= 0
             )
         e0, e1, e2, e3 = self.est
+        settled = self.caller >= 0 and not self.bidding
+        total = self.total if settled else None
+        last = self.last
         return replace(
             self.obs,
             seat=seat,
             phase=self.phase,
-            current_player=self.cur,
+            current_player=self.cur if self.cur >= 0 else None,
             super_call=self.super_call,
             trump=self.trump if self.trump >= 0 else None,
             hand=0,
@@ -434,11 +492,13 @@ class _PublicBidding:
                 e2 if e2 >= 0 else None,
                 e3 if e3 >= 0 else None,
             ),
-            last_estimator=self.last if self.last >= 0 and self.phase is Phase.ESTIMATION else None,
-            total=None,
-            over=None,
-            risks=None,
-            leader=None,
+            last_estimator=last
+            if last >= 0 and (self.phase is Phase.ESTIMATION or settled)
+            else None,
+            total=total,
+            over=None if total is None else total > 13,
+            risks=None if total is None else (abs(total - 13) // 2 if last >= 0 else 0),
+            leader=self.caller if self.phase is Phase.PLAY else None,
             trick=(),
             tricks=(),
             tricks_won=(0, 0, 0, 0),
