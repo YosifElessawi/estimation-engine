@@ -194,8 +194,16 @@ Essam Gouda's, from estimation-arena (MIT licence).
   practice question learns from the recorded games, with its held-out score.
 - **Self-play (GPU, JAX):** Essam's loop (PPO, his judge, credit by TD(lambda), half the games
   against past versions) started from the copy, with the seven practice outputs labelled inside
-  the games, and gentle exploration at first: step 1 showed that a trained net pushed to explore
-  at the from-scratch rate loses most of its strength within 50 loops.
+  the games. Three guards keep the head start (Yosif, 2026-11-06):
+  - gentle exploration and a fading pull back toward the copy, like the card anchor: step 1
+    showed that a trained net pushed to explore at the from-scratch rate loses most of its
+    strength within 50 loops;
+  - the frozen copy stays among the opponents next to the past versions, so the net keeps
+    having to beat a Hybrid v4-style player, not only itself;
+  - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
+
+  First run: 2,000 loops (about 2.5 h on the 1060) with a check-up every 500, continued while the
+  check-ups improve.
 - **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
   `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
