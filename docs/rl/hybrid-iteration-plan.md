@@ -27,7 +27,8 @@ played them:
 ## How every step is run and judged
 
 - Everything runs on the Mac, one heavy job at a time, each after Yosif's yes (what runs, how
-  long, workers, RAM). Heavy runs slow the public B-Tig table, so each ask says so.
+  long, workers, RAM). Heavy runs slow the public B-Tig table, so each ask says so. Step 5's copy
+  and self-play run on the home server's GPU instead, under the same rule.
 - Each step is built with tests and the full gate (pre-commit, pytest on 2 workers, pyright),
   then measured against the previous Hybrid and the frozen yardsticks (RL v2, Search bot) with
   head-to-head duplicate matches, the ladder and the bidding and card-play evaluators.
@@ -48,8 +49,9 @@ played them:
 | 2. Copy a stronger search (expert iteration) | The card net learns the values of a deeper Hybrid search, then BiddingNet relearns to bid for the new card play. Repeat. | Per round about 4-5 h: recording 2-3 h, copying about 1 h, bidding refit about 1 h. Plan 3 rounds. | New Hybrid vs previous Hybrid each round, 200 sets; card-play evaluator. |
 | 3. Hybrid uses the guesses | Imagine deals where step 1's guesses say the cards are, plus a settings check. | No training; about 2-3 h of measuring. | Card-play evaluator and new vs previous Hybrid. |
 | 4. Search the bidding | For each bid, try the net's best few options on imagined deals played out by the nets. | No training; about 2 h of measuring. | Bidding evaluator and new vs previous Hybrid. |
+| 5. One net for every decision | One player net copies Hybrid v4, then learns final place by GPU self-play (Essam's design). | Recording on the Mac (about 5 h per 2,000 Bolas); copy and self-play on the home server's GPU, sized by a timing test. | The player inside the search vs Hybrid v4: weighted place, King only and points per game. |
 
-Total: about 25-30 hours of compute over several days.
+Steps 1-4 took about 25-30 hours of compute over several days.
 
 ### Step 1: hidden-card guesses, under the current rules
 
@@ -108,39 +110,107 @@ Why this order: steps 2 and 3 both use the step-1 head. Doing 2 before 4 improve
 first; once 4 exists, one more round of step 2 also teaches BiddingNet to bid like the searched
 bidding. Step 4's code can be written while step 1 trains; only its measuring waits for the Mac.
 
-### Play for King (after step 4, Yosif's choice 2026-11-05)
+### Step 5: one net for every decision (Yosif, 2026-11-06)
 
-Today's reward plays each open round for points against the table (opponents ahead weigh double)
-and blends in the chance of finishing first only in rounds 14-18, from a simple formula
-(`win_blend`, a 20-point spread per round). Winning a Bola needs a risk attitude from the score
-situation: gamble when far behind, play safe when far ahead, which costs some average score.
+Replaces the "Play for King" step and the earlier one-net candidate (both agreed on 2026-11-03 and
+2026-11-05). Essam's design plus our head start: Essam's single net (estimation-arena), trained
+from zero by GPU self-play, tied the original Hybrid once our Hybrid search ran on top of it
+(`bitter-search` vs Hybrid v1, 150 sets: -3.3 points a game, -9.8 to +3.2, first place 25.8%).
+This step starts the same kind of net from Hybrid v4 instead of from zero.
 
-- **A learned King chance:** a net output that predicts the chance of finishing first (King) from
-  here, trained on how real Bolas ended, replacing the formula.
-- **The reward in every round** becomes the change in that King chance, instead of the
-  fixed-trump-only blend.
-- **The Hybrid's search** scores its imagined rounds by the King chance too, not only by points.
-- **Judged by Bolas won:** Win Elo and first-place share, with points per game only as a side
-  note (a bot playing for King may score less on average).
+**The nets**
 
-Nothing runs for it yet.
+- **Player:** one net for every decision: Dash Calls, bids, With, estimates, super calls and
+  cards. Its input is the raw table view only: own hand, cards played, calls, estimates, tricks
+  won, scores and the legal moves. No hand-made hints (no HeuristicBot trick counts, no "wins the
+  trick now", no "top card left"). Only the player is used at the table.
+- **Judge, training only:** the same view plus the three hidden hands, so the learning signal
+  separates deal luck from skill. The player never sees hidden cards; the judge is thrown away
+  after training.
+- **Reward:** final place in the Bola: King +1, Sub king +0.2, Sub kooz -0.2, Kooz -1, ties
+  shared (Essam's per-round reward stalled). Playing for final place is built into this net and
+  its search, so the separate Play for King step is dropped.
+- **Practice questions:** extra outputs of the player, learned from the real game at light
+  weight next to the main goal, all seven from the start:
+  1. who holds each hidden card;
+  2. my tricks this round;
+  3. will each player make their call;
+  4. each other player's tricks;
+  5. who is out of which suit;
+  6. my chance of finishing King from here;
+  7. each player's round score.
 
-### Step 5 (candidate, after step 4): one net for the whole game
+  Each gets its own held-out score against a blind guess (today GuessNet names 47% of holders
+  against 35% blind). One comparison run trains without the questions, and a question whose
+  score never moves is dropped. Questions 4 and 5 overlap 1 and 3, so they go first if the net
+  runs short of room.
+- **At the table:** the player inside the Hybrid search. Imagined deals are placed by its own
+  hidden-card guesses (question 1, kept by the bidding as `deals=both` is today), played out by
+  the player for every seat, and each card is scored by its chance of finishing well (question 6
+  or a judge-style value) instead of round points.
 
-Added 2026-11-03 at Yosif's question (a friend's pointer to Sutton's "The Bitter Lesson"): three
-nets (bidding, card play, guesses) are there for history and speed, not because they are known to
-be better. One net with three outputs, trained on every part of the game together, may learn
-shared understanding (where the cards are helps bidding and card play alike).
+**The steps**
 
-- **Copy:** the single net learns from the best Hybrid's games, as step 2 does (its bids, its
-  search's value of every card, the real hidden hands), so it starts near the Hybrid's level
-  instead of from zero.
-- **Self-play:** then it improves as RL v2 did, against itself, recent versions, PIMC and the
-  Search bot.
-- **Judged as a Hybrid:** the Hybrid rebuilt on it plays the best three-net Hybrid; strength and
-  time per move both count. Keep whichever wins.
+| # | What | Where | Time |
+|---|---|---|---|
+| 1 | **Record the teacher:** Hybrid v4 plays a few thousand Bolas, saving every decision, the deeper search's value of every card, BiddingNet's value of every bid and the real hands (like step 2) | Mac, 5 workers | about 5 h per 2,000 Bolas at step 2's pace; a short timing test first |
+| 2 | **Copy:** the player learns to play like Hybrid v4 from those recordings, so it starts near our best level; the judge and the practice questions learn from the same games | home server GPU | sized by the timing test |
+| 3 | **Self-play** on Essam's JAX rules, against itself and past versions; every update learns from final place, the judge and the practice questions | home server GPU | sized by the timing test |
+| 4 | **Check-ups:** the player inside the search plays Hybrid v4 at regular points, so it does not drift into habits that only work against itself | Mac | a short match each |
+| 5 | **Final judgement:** the player inside the search vs Hybrid v4 on all three agreed measures: weighted place (King +1 to Kooz -1), King only (first-place share) and score difference (points per game). Keep whichever wins | Mac | 200 sets |
 
-Runs only on Yosif's yes; its compute is sized after step 4.
+**Machines.** The Mac records, searches and plays every match (its CPU is the faster one). The
+home server (GTX 1060 6 GB, a weak 4-core CPU) runs the copy and the self-play. Runs move between
+them with rsync over Tailscale. Each long run on either machine still waits for Yosif's yes.
+
+**Timing test** (2026-11-06, the 1060, Essam's loop unchanged, batches of 4,096 Bolas x 128
+decisions, peak GPU memory about 2 GB of 6):
+
+| Player net | Self-play | 1,000 loops | Copy, one pass over 1 M decisions |
+|---|---|---|---|
+| 384 x 3 layers (Essam's size, about as fast as today's card net in the search) | 116,000 decisions a second | about 75 min | 3 s |
+| 512 x 4 layers (twice the room) | 70,000 decisions a second | about 2.1 h | 5 s |
+
+Essam's whole from-zero run was 5,000 loops: about 6.5 h here at his size. The copy is minutes,
+not hours, so both sizes are copied and the bigger one is kept only if it copies Hybrid v4
+clearly better. The practice questions and the regular check-ups add a little to each loop.
+
+**Credit.** The one-net design, the final-place reward, the judge that sees the hidden hands and
+the JAX rules (`jaxenv`, checked move for move against our engine over about 7.6 M steps) are
+Essam Gouda's, from estimation-arena (MIT licence).
+
+**How it is built**
+
+- **Raw view:** Essam's raw view as is (747 inputs). It exists on the GPU (`jaxenv.encode`) and on
+  the CPU from an engine Observation (`jaxenv.encode_np`), and his check requires the two to be
+  equal at every step, so what the player learns on the GPU is what it sees on the Mac.
+- **Recorder (Mac):** step 2's recorder with Hybrid v4 playing. The teacher is Hybrid v4's search
+  made deeper, as in step 2 (64 deals instead of 32, every legal card instead of the top 2). It
+  saves every seat's decisions, BiddingNet's values at bids, the real hands and each Bola's final
+  places, which also label the practice questions.
+- **Copy (GPU, JAX):** the player's move output learns the teacher's values turned into chances;
+  measured as in step 2 by held-out regret (points the top 1, 2 and 3 moves lose by the teacher's
+  values). The judge learns each Bola's final place from the view and the real hands; each
+  practice question learns from the recorded games, with its held-out score.
+- **Self-play (GPU, JAX):** Essam's loop (PPO, his judge, credit by TD(lambda), half the games
+  against past versions) started from the copy, with the seven practice outputs labelled inside
+  the games. Three guards keep the head start (Yosif, 2026-11-06):
+  - gentle exploration and a fading pull back toward the copy, like the card anchor: step 1
+    showed that a trained net pushed to explore at the from-scratch rate loses most of its
+    strength within 50 loops;
+  - the frozen copy stays among the opponents next to the past versions, so the net keeps
+    having to beat a Hybrid v4-style player, not only itself;
+  - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
+
+  First run: 2,000 loops (about 2.5 h on the 1060) with a check-up every 500, continued while the
+  check-ups improve.
+- **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
+  `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
+- **Arena:** our duplicate arena reports weighted place too, so one match shows all three
+  measures.
+
+**Open decision:** where the JAX code lives (Essam's `jaxenv` is MIT now; earlier his code stayed
+out of this repo).
 
 ## Parked net changes
 
@@ -156,6 +226,8 @@ Runs only on Yosif's yes; its compute is sized after step 4.
 1. Step 2's recordings run on the Mac (Yosif, 2026-11-03).
 2. One session runs the whole plan, stopping for Yosif's yes before each heavy run (Yosif,
    2026-11-03).
+3. Step 5 is Essam's one-net design started from Hybrid v4, and it replaces the Play for King
+   step: final place is its reward (Yosif, 2026-11-06).
 
 ## Results
 
