@@ -17,10 +17,11 @@ from estimation.onenet.copy_hybrid import (
     load_config,
     move_loss,
     place_reward,
+    played_loss,
     run,
     voids,
 )
-from estimation.onenet.nets import load_player
+from estimation.onenet.nets import load_judge, load_player
 from estimation.onenet.shards import KIND_CARD, NUM_ACTIONS, VIEW
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,7 @@ def test_the_committed_config_copies_both_sizes_from_the_full_recording():
         ({"copy": {"sizes": ["384"]}}, "units x layers"),
         ({"copy": {"held_out": 1.0}}, "held_out"),
         ({"copy": {"temperature": 0}}, "above 0"),
+        ({"copy": {"played_weight": -1.0}}, "played_weight"),
         ({"copy": {"teacher": "x"}}, "unknown key 'teacher'"),
     ],
 )
@@ -77,9 +79,25 @@ def test_the_move_output_learns_the_values_as_chances():
     )
 
 
-def test_a_tiny_copy_learns_scores_and_keeps_its_best_epoch(data: Path, tmp_path: Path):
+def test_the_move_output_learns_the_move_played_where_there_are_no_values():
+    x = np.zeros((1, VIEW), np.float32)
+    x[0, -NUM_ACTIONS + 68] = x[0, -NUM_ACTIONS + 69] = 1  # two legal cards
+    mb = {"x": jnp.asarray(x), "action": jnp.array([69])}
+    assert float(played_loss(jnp.zeros((1, NUM_ACTIONS)), mb)[0]) == pytest.approx(np.log(2.0))
+    sure = jnp.zeros((1, NUM_ACTIONS)).at[0, 69].set(20.0)
+    assert float(played_loss(sure, mb)[0]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_tiny_copy_learns_scores_and_keeps_its_best_epochs(data: Path, tmp_path: Path):
     config = CopyConfig(
-        data=str(data), sizes=("16x1",), epochs=3, batch=64, lr=3e-3, held_out=0.34, seed=2
+        data=str(data),
+        sizes=("16x1",),
+        epochs=3,
+        batch=64,
+        lr=3e-3,
+        held_out=0.34,
+        played_weight=1.0,
+        seed=2,
     )
     summary = run(config, tmp_path / "copy")
     folder = tmp_path / "copy" / "16x1"
@@ -91,6 +109,14 @@ def test_a_tiny_copy_learns_scores_and_keeps_its_best_epoch(data: Path, tmp_path
     assert kept["held_out"]["move_loss"] == min(e["held_out"]["move_loss"] for e in epochs)
     _, meta = load_player(folder / "player.npz")
     assert meta["epoch"] == kept["epoch"]
+    judge_mse = [e["held_out"]["judge_mse"] for e in epochs]
+    assert size["judge"] == {
+        "epoch": 1 + judge_mse.index(min(judge_mse)),
+        "judge_mse": min(judge_mse),
+    }
+    _, judge_meta = load_judge(folder / "judge.npz")
+    assert judge_meta["epoch"] == size["judge"]["epoch"]
+    assert epochs[-1]["train"]["played"] < epochs[0]["train"]["played"]
     scores = kept["held_out"]
     assert scores["card_lose1"] >= scores["card_lose3"] >= 0
     assert 0 <= scores["card_best"] <= 1

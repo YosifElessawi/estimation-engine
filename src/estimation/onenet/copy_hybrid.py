@@ -10,7 +10,8 @@ On the home server's GPU, from the repo, with its JAX env (no PyTorch needed):
 
 - Move: at every valued decision the values (the teacher's for cards, BiddingNet's for bids)
   become chances, softmax(value / temperature) over the legal moves, and the move output learns
-  them. Decisions without values (Hybrid v4's own card moves) teach only the rest.
+  them. At the card decisions without values, the move output learns Hybrid v4's own move, at
+  ``played_weight`` (0 leaves those decisions to the practice questions and the judge).
 - Practice questions: each learns its answer from the real game, at ``practice_weight`` each.
 - Judge: learns each decision's final place (King +1, Sub king +0.2, Sub kooz -0.2, Kooz -1,
   ties shared) from the view and the three hidden hands.
@@ -19,8 +20,10 @@ On the home server's GPU, from the repo, with its JAX env (no PyTorch needed):
   top card; the points its top bid loses by BiddingNet's values; each practice question against
   a blind guess; and the judge against always saying 0.
 
-Each size in ``sizes`` is copied in turn into ``<out>/<size>/``; the epoch with the lowest
-held-out move loss is kept there (``player.npz``, ``judge.npz``, ``metrics.json``).
+Each size in ``sizes`` is copied in turn into ``<out>/<size>/``: the player of the epoch with
+the lowest held-out move loss, and the judge of the epoch with its lowest held-out error, which
+comes early, as it learns the training Bolas' final places by heart (``player.npz``,
+``judge.npz``, ``metrics.json``).
 """
 
 import argparse
@@ -57,7 +60,17 @@ from .nets import (
 from .shards import KIND_BID, KIND_CARD, KIND_PLAYED, NUM_ACTIONS, Shard, load_data
 
 SHOWN = slice(52 + 208 + 208, 52 + 208 + 208 + 16)  # the view's suits each seat showed out of
-BATCH_FIELDS = ("kind", "x", "values", "holder", "tricks", "made", "round_score", "final")
+BATCH_FIELDS = (
+    "kind",
+    "action",
+    "x",
+    "values",
+    "holder",
+    "tricks",
+    "made",
+    "round_score",
+    "final",
+)
 Batch = dict[str, Any]
 
 
@@ -72,6 +85,7 @@ class CopyConfig:
     temperature: float = 2.0  # points: values become chances by softmax(value / temperature)
     held_out: float = 0.05  # share of the Bolas kept out of training, to score on
     practice_weight: float = 0.1  # each practice question's weight, the move's being 1
+    played_weight: float = 0.0  # Hybrid v4's own card moves, at the decisions without values
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -83,8 +97,8 @@ class CopyConfig:
             raise ValueError("copy.held_out must be between 0 and 1")
         if self.temperature <= 0 or self.lr <= 0 or self.lr_end <= 0:
             raise ValueError("copy.temperature, copy.lr and copy.lr_end must be above 0")
-        if self.practice_weight < 0:
-            raise ValueError("copy.practice_weight must be 0 or more")
+        if self.practice_weight < 0 or self.played_weight < 0:
+            raise ValueError("copy.practice_weight and copy.played_weight must be 0 or more")
 
 
 def config_of(data: dict[str, Any]) -> CopyConfig:
@@ -187,13 +201,22 @@ def judge_loss(judge: Net, mb: Batch) -> jax.Array:
 Step = Callable[[Net, Net, Any, Any, Batch], tuple[Net, Net, Any, Any, dict[str, jax.Array]]]
 
 
-def make_step(tx: optax.GradientTransformation, temperature: float, weight: float) -> Step:
+def played_loss(logits: jax.Array, mb: Batch) -> jax.Array:
+    """[B]: cross-entropy from the move played to the move output, over the legal moves."""
+    logp = jax.nn.log_softmax(jnp.where(legal_of(mb), logits, -1e9))
+    return -jnp.take_along_axis(logp, mb["action"].astype(jnp.int32)[:, None], -1)[:, 0]
+
+
+def make_step(tx: optax.GradientTransformation, config: CopyConfig) -> Step:
     def player_loss(player: Net, mb: Batch) -> tuple[jax.Array, dict[str, jax.Array]]:
         logits, q = apply_player(player, mb["x"].astype(jnp.float32))
-        move = _mean(move_loss(logits, mb, temperature), mb["kind"] != KIND_PLAYED)
+        valued = mb["kind"] != KIND_PLAYED
+        move = _mean(move_loss(logits, mb, config.temperature), valued)
+        played = _mean(played_loss(logits, mb), ~valued)
         parts = practice_losses(q, mb)
-        total = move + weight * sum(parts.values(), jnp.zeros(()))
-        return total, {"move": move, **parts}
+        practice = sum(parts.values(), jnp.zeros(()))
+        total = move + config.played_weight * played + config.practice_weight * practice
+        return total, {"move": move, "played": played, **parts}
 
     @jax.jit
     def step(player: Net, judge: Net, opt_p: Any, opt_j: Any, mb: Batch):
@@ -396,7 +419,7 @@ def copy_size(
     )
     tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
     opt_p, opt_j = tx.init(player), tx.init(judge)
-    step = make_step(tx, config.temperature, config.practice_weight)
+    step = make_step(tx, config)
     scores = make_scores(config.temperature)
     blind = blind_guesses(data, train)
     rng = np.random.default_rng(config.seed)
@@ -404,6 +427,7 @@ def copy_size(
     folder.mkdir(parents=True, exist_ok=True)
     log = (folder / "log.jsonl").open("w")
     kept: dict[str, Any] = {}
+    judge_kept: dict[str, Any] = {}
     for epoch in range(1, config.epochs + 1):
         started = time.time()
         order = rng.permutation(train)
@@ -432,13 +456,21 @@ def copy_size(
         log.flush()
         line = epoch_line(losses, held_scores)
         _say(f"[copy {size}] epoch {epoch}/{config.epochs}: {line} | {row['seconds']:.0f} s")
+        meta = {"size": size, "epoch": epoch, "config": dataclasses.asdict(config)}
         if not kept or held_scores["move_loss"] < kept["held_out"]["move_loss"]:
             kept = row
-            meta = {"size": size, "epoch": epoch, "config": dataclasses.asdict(config)}
             save_player(folder / "player.npz", player, meta)
+        if not judge_kept or held_scores["judge_mse"] < judge_kept["judge_mse"]:
+            judge_kept = {"epoch": epoch, "judge_mse": held_scores["judge_mse"]}
             save_judge(folder / "judge.npz", judge, meta)
     log.close()
-    result = {"size": size, "kept": kept, "card_net": card_net_scores(data, held), "blind": blind}
+    result = {
+        "size": size,
+        "kept": kept,
+        "judge": judge_kept,
+        "card_net": card_net_scores(data, held),
+        "blind": blind,
+    }
     (folder / "metrics.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
