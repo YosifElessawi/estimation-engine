@@ -20,7 +20,11 @@ imagined deal, plays all four seats to the end of the round. Two things are set 
   and dropped: it lost about 30 points a game). ``place``: the training judge's expected final
   place (King +1 to Kooz -1, ``judge_net``), read at the same moment from that view and the other
   three hands. The judge sees every hand, so it never plays; it can score an imagined ending
-  because every hand of an imagined deal is known: it never sees a real hidden card.
+  because every hand of an imagined deal is known: it never sees a real hidden card. ``late``:
+  round points in the open rounds, the judge in the fixed-trump rounds (the last five), where the
+  standings decide what to risk. ``spread``: round points, but in the fixed-trump rounds a card's
+  spread of outcomes over the imagined deals counts too, toward the long shot when behind the
+  leader and away from it when leading (``risk``).
 
 This started as Essam Gouda's bitter-search (estimation-arena bots/bitter-search, commit e43b15b,
 MIT licence, see estimation/jaxenv/LICENSE), which runs his net inside the Hybrid search. Changes
@@ -65,8 +69,12 @@ from estimation.engine.cards import SUIT_MASKS
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
 
 PLAYED, TABLE, SHOWN, WON, LEADER, MASK = 52, 260, 468, 580, 594, SIZE - 120
-ROUND, KING, PLACE = "round", "king", "place"
-JUDGES = (ROUND, KING, PLACE)
+ROUND, KING, PLACE, LATE, SPREAD = "round", "king", "place", "late", "spread"
+JUDGES = (ROUND, KING, PLACE, LATE, SPREAD)
+RISK, SWING = (
+    0.5,
+    30.0,
+)  # SPREAD: the most standard deviations it leans, the points one round swings
 _ONE = np.uint64(1)
 _SUITS = np.array(SUIT_MASKS, dtype=np.uint64)
 Floats = npt.NDArray[np.float32]
@@ -373,10 +381,10 @@ class OneNetSearch(HybridBot):
         judge_net: str = "",
     ) -> None:
         if judge not in JUDGES:
-            raise ValueError(f"judge must be {ROUND}, {KING} or {PLACE}, not {judge!r}")
-        if (judge == PLACE) != bool(judge_net):
+            raise ValueError(f"judge must be one of {', '.join(JUDGES)}, not {judge!r}")
+        if (judge in (PLACE, LATE)) != bool(judge_net):
             raise ValueError(
-                "judge=place takes judge_net=<the judge's .npz file>, and only it does"
+                "judge=place and judge=late take judge_net=<the judge file>, and only they do"
             )
         if judge_net and not Path(judge_net).exists():
             raise ValueError(f"onenet: no judge file at {judge_net}")
@@ -458,6 +466,7 @@ class OneNetSearch(HybridBot):
             estimates=estimates_of(obs),
             trump=obs.trump,
         )
+        mode = self.mode(obs)
         out = play_out(
             self._net,
             templates_of(obs),
@@ -466,25 +475,47 @@ class OneNetSearch(HybridBot):
             np.tile(np.array(know.played_by, dtype=np.uint64), (games, 1)),
             np.tile(np.array(know.voids, dtype=np.uint8), (games, 1)),
             np.tile(np.array(cards, dtype=np.int64), n_deals),
-            **self._end_judge(obs.seat),
+            **self._end_judge(obs.seat, mode),
         )
-        totals = [0.0] * n_cards
         if out.value is not None:
-            for g, value in enumerate(out.value.tolist()):
-                totals[g % n_cards] += value
-            return totals
-        weights = standings_weights(obs.scores, obs.seat) if self.config.leader_weight else None
-        scorer = RoundScorer(obs, self.config.rules, weights)
-        for g, tricks in enumerate(out.won.tolist()):
-            totals[g % n_cards] += scorer.value(tricks)
-        return totals
+            values = out.value.astype(np.float64)
+        else:
+            weights = standings_weights(obs.scores, obs.seat) if self.config.leader_weight else None
+            scorer = RoundScorer(obs, self.config.rules, weights)
+            values = np.array([scorer.value(tricks) for tricks in out.won.tolist()], np.float64)
+        by_card = values.reshape(n_deals, n_cards)  # [deal, card]
+        totals = by_card.sum(axis=0)
+        lean = self.risk(obs) if mode == SPREAD else 0.0
+        if lean:
+            totals = totals + lean * n_deals * by_card.std(axis=0)
+        return totals.tolist()
 
-    def _end_judge(self, seat: int) -> dict[str, Any]:
+    def mode(self, obs: Observation) -> str:
+        """How this card decision is judged: ``late`` is round points in the open rounds and the
+        judge's final place in the fixed-trump rounds, the last five of the Bola."""
+        if self.judge == LATE:
+            return PLACE if obs.fixed_trump is not None else ROUND
+        return self.judge
+
+    @staticmethod
+    def risk(obs: Observation) -> float:
+        """With ``judge=spread``, how many standard deviations of a card's outcomes over the
+        imagined deals count on top of their mean: none in the open rounds; in the fixed-trump
+        rounds up to ``RISK`` toward the long shot when behind the leader and away from it when
+        leading, the more the further the gap is from what the rounds left can swing."""
+        if obs.fixed_trump is None:
+            return 0.0
+        me = obs.seat
+        gap = obs.scores[me] - max(score for seat, score in enumerate(obs.scores) if seat != me)
+        rounds_left = len(obs.fixed_left) + 1
+        return -RISK * max(-1.0, min(1.0, gap / (rounds_left * SWING)))
+
+    def _end_judge(self, seat: int, mode: str) -> dict[str, Any]:
         """``play_out``'s judge arguments: none for round points."""
-        if self.judge == KING:
+        if mode == KING:
             player = self._net
             return {"judge_seat": seat, "judge": lambda x, _others: player.king_chance(x)}
-        if self.judge == PLACE and self._judge_net is not None:
+        if mode == PLACE and self._judge_net is not None:
             return {"judge_seat": seat, "judge": self._judge_net.value}
         return {}
 
