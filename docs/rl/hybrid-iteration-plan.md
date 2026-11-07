@@ -370,6 +370,28 @@ final score identical over about 31,000 steps: 390 rounds of random, rule-based 
 (60 of them also requiring the GPU view to equal the numpy view at every step) and 6 whole Bolas.
 It takes 12 s on the Mac and is part of the test gate.
 
-Next: the copy on the home server's GPU.
+**Copy (done 2026-11-07)** (`configs/onenet-copy.toml`, git-ignored `runs/onenet/data/` and
+`runs/onenet/copy/`): the recording became 2,072,395 decisions with a choice (2.9 min on the Mac);
+1,900 Bolas trained the player and the judge for 12 passes (1.5 min for 384 x 3, 2.5 min for
+512 x 4 on the 1060), and the other 100 Bolas scored every pass.
+
+| Held-out Bolas | 384 x 3 | 512 x 4 | Hybrid v4's nets |
+|---|---|---|---|
+| Points the top card loses, by the teacher's values | 2.71 | 2.66 | 1.78 (card net) |
+| Points the best of the top 3 cards loses | 0.50 | 0.50 | |
+| Best card picked | 50% | 50% | 54% |
+| Points the top bid loses, by BiddingNet's values | 0.10 | 0.08 | 0 (BiddingNet) |
+| Same bid as BiddingNet's best | 88% | 89% | |
+
+Practice questions (384 x 3), against a blind guess: holders named 44% against 35% (GuessNet 47%);
+my tricks off by 0.61 against 1.73; the others' tricks off by 0.71 against 1.71; making the call
+61% against 58%; out of a suit 90% against 85% (only what the table showed); King chance Brier
+score 0.142 against 0.186; round score error 0.185 against 0.200. The judge scored 0.369 after the
+first pass (blind 0.519), then worse every pass, 0.535 at the end: it learns the training Bolas'
+final places by heart (training error 0.04).
+
+**Reading:** the bids copy almost exactly; the cards do not. The player's top card loses about 0.9
+points a card more than Hybrid v4's card net at either size, so 384 x 3 is kept (512 x 4 is not
+clearly better). The judge has to be kept at its best pass, not the player's.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
