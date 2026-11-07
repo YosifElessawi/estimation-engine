@@ -60,6 +60,19 @@ def _hybrid(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     return HybridBot(seed, configure(HybridConfig(rules=rules), options, "hybrid"))
 
 
+def _onenet(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
+    """Step 5's one net inside the Hybrid search (estimation.onenet.search): ``net`` is the
+    player's file, every other option a HybridConfig field."""
+    from estimation.onenet.search import make  # PyTorch loads only when the Hybrid is made
+
+    from .hybrid import HybridConfig
+
+    net = options.pop("net", "")
+    if not net:
+        raise ValueError("bot onenet needs net=<the player's .npz file>")
+    return make(seed, configure(HybridConfig(rules=rules), options, "onenet"), net)
+
+
 def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     heuristic = HeuristicConfig(super_call_min=rules.super_call_min)
     config = SearchConfig(
@@ -105,6 +118,7 @@ _FACTORIES: dict[str, BotFactory] = {
     "search": _search,
     "rl": _rl,
     "hybrid": _hybrid,
+    "onenet": _onenet,
     "yosif": _yosif,
 }
 BOT_NAMES = tuple(_FACTORIES)

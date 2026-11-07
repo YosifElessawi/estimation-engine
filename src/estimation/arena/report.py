@@ -28,6 +28,7 @@ from .ratings import (
     mean_ci,
     pair_records,
     set_first_places,
+    set_places,
     set_rsa,
     set_scores,
     sweep_gap,
@@ -42,6 +43,7 @@ class BotSummary:
     mean_score: float  # mean Bola score
     rsa: Interval  # mean RSA per Bola, interval over sets
     first: Interval  # share of its Bolas finished first, interval over sets
+    place: Interval  # mean weighted place per Bola (King +1 to Kooz -1), interval over sets
     elo: float | None
 
 
@@ -81,6 +83,7 @@ def build_report(
     per_set_rsa = [set_rsa(result, lineup) for result in results]
     per_set_score = [set_scores(result, lineup) for result in results]
     per_set_first = [set_first_places(result, lineup) for result in results]
+    per_set_place = [set_places(result, lineup) for result in results]
     bots = tuple(
         BotSummary(
             name=name,
@@ -89,6 +92,7 @@ def build_report(
             mean_score=math.fsum(s[name] for s in per_set_score) / len(results),
             rsa=mean_ci([r[name] for r in per_set_rsa]),
             first=mean_ci([f[name] for f in per_set_first]),
+            place=mean_ci([p[name] for p in per_set_place]),
             elo=ratings.get(name),
         )
         for name in dict.fromkeys(lineup)
@@ -133,8 +137,8 @@ def format_report(report: Report) -> str:
     ]
     width = max(len("Bot"), *(len(bot.name) for bot in report.bots))
     header = (
-        f"{'Bot':<{width}}  Slots  {'1st place':>9}  {'95% CI':<14}  {'RSA per Bola':>12}  "
-        f"{'95% CI':<22}  {'Mean score':>10}  Elo"
+        f"{'Bot':<{width}}  Slots  {'Place':>6}  {'1st place':>9}  {'95% CI':<14}  "
+        f"{'RSA per Bola':>12}  {'95% CI':<22}  {'Mean score':>10}  Elo"
     )
     lines += [header, "-" * len(header)]
     for bot in report.bots:
@@ -152,10 +156,15 @@ def format_report(report: Report) -> str:
         if bot.name == ANCHOR and bot.elo is not None:
             elo += " (anchor)"
         lines.append(
-            f"{bot.name:<{width}}  {bot.slots:>5}  {_percent(first.mean) + '%':>9}  "
+            f"{bot.name:<{width}}  {bot.slots:>5}  {bot.place.mean:>+6.3f}  "
+            f"{_percent(first.mean) + '%':>9}  "
             f"{first_ci:<14}  {_signed(interval.mean):>12}  {ci:<22}  "
             f"{_signed(bot.mean_score):>10}  {elo}"
         )
+    lines.append(
+        "Place: the weighted final place per Bola, King +1, Sub king +0.2, Sub kooz -0.2, "
+        "Kooz -1, ties shared (even is 0)."
+    )
     lines.append(
         "1st place: how often one seat of the bot finished its Bola first, ties shared "
         "(a fair share is 25%)."
@@ -258,6 +267,12 @@ def report_to_json(report: Report) -> dict[str, Any]:
                     "low": _finite(bot.first.low),
                     "high": _finite(bot.first.high),
                     "sets": bot.first.n,
+                },
+                "place": {
+                    "mean": bot.place.mean,
+                    "low": _finite(bot.place.low),
+                    "high": _finite(bot.place.high),
+                    "sets": bot.place.n,
                 },
                 "elo": bot.elo,
             }

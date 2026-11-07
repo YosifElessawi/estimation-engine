@@ -55,6 +55,25 @@ def first_place_share(scores: Sequence[int], seat: int) -> float:
     return 1 / sum(1 for score in scores if score == top) if scores[seat] == top else 0.0
 
 
+PLACE_REWARDS = (1.0, 0.2, -0.2, -1.0)  # King, Sub king, Sub kooz, Kooz: the weighted place
+
+
+def place_reward(scores: Sequence[int], seat: int) -> float:
+    """``seat``'s weighted final place in one game: King +1, Sub king +0.2, Sub kooz -0.2 and
+    Kooz -1, tied seats sharing the places they hold. The four always sum to 0."""
+    above = sum(1 for score in scores if score > scores[seat])
+    tied = sum(1 for score in scores if score == scores[seat])
+    return math.fsum(PLACE_REWARDS[above : above + tied]) / tied
+
+
+def set_places(result: SetResult, lineup: Sequence[str]) -> dict[str, float]:
+    """Each bot's mean weighted place over its Bolas in one set."""
+    return _per_bot(
+        lineup,
+        ((bot, place_reward(result.scores[k], seat)) for bot, k, seat in _seat_games(lineup)),
+    )
+
+
 def set_first_places(result: SetResult, lineup: Sequence[str]) -> dict[str, float]:
     """Each bot's share of first places over its Bolas in one set (ties shared)."""
     return _per_bot(
