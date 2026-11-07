@@ -426,4 +426,10 @@ and a player kept every 100 loops for the check-ups. Every 25 loops the player m
 (512 games at once, greedy), and the numbers go to a one-page chart (TensorBoard's CUSTOM SCALARS
 page on the home server, `estimation.onenet.charts`).
 
+The copy's move chances are soft (learned at a temperature of 2 points): moves sampled from them
+lose about a point a card more than its best move, and bids ten times more, and in a short trial
+callers made only 27% of their calls. Self-play therefore starts from them sharpened 4 times
+(sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
+loop takes 5.4 s, so the first 2,000 loops take about 3 h with the check against the copy.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
