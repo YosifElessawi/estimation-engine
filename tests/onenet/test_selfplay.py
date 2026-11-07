@@ -40,7 +40,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_the_committed_config_starts_from_the_final_copy_with_the_three_guards():
     config = load_config(ROOT / "configs" / "onenet-selfplay.toml")
     assert config.start == "runs/onenet/copy-final/384x3"
-    assert config.loops == 2000
+    assert config.loops == 5000
+    assert config.eval_every == 100
     assert config.entropy < 0.02  # 1: gentler than Essam's from-scratch exploration
     assert config.anchor > 0  # 1: a pull toward the copy
     assert config.anchor_loops < config.loops  # that fades out during the run

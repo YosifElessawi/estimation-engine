@@ -10,7 +10,8 @@
 start = "runs/onenet/copy-final/384x3"  # the final copy's player and judge
 sharpen = 4.0           # sampled as learned, its moves lose ~1 point a card more than its best;
                         # sharpened 4 times, about 0.15 more
-loops = 2000            # about 2.5 h; raise it and run again to continue while check-ups improve
+loops = 5000            # about 7.5 h (Yosif, 2026-11-07); raise it and run again to go on
+eval_every = 100        # the strength check against the copy, about every 9 minutes
 batch = 4096
 steps = 128
 lr = 1e-4               # a third of Essam's from-scratch rate: this net already plays
