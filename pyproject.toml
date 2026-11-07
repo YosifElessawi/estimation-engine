@@ -65,4 +65,5 @@ dev = [
     # server's GPU runs use the same version with CUDA (jax[cuda12]).
     "jax==0.12.0.1",
     "optax>=0.2.8",
+    "tensorboardX>=2.6.5",  # step 5's chart page (estimation.onenet.charts)
 ]

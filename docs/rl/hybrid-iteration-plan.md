@@ -202,8 +202,9 @@ Essam Gouda's, from estimation-arena (MIT licence).
     having to beat a Hybrid v4-style player, not only itself;
   - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
 
-  First run: 2,000 loops (about 2.5 h on the 1060) with a check-up every 500, continued while the
-  check-ups improve.
+  First run: 5,000 loops (Yosif, 2026-11-07; about 7.5 h on the 1060), a check against the copy
+  every 100 loops and a check-up against Hybrid v4 every 500, continued while the check-ups
+  improve.
 - **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
   `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
@@ -416,5 +417,20 @@ pass 18 kept. Its top card loses 2.41 points (the best of its top 3: 0.35) and i
 51% of the time, against Hybrid v4's card net's 1.78 and 54%; its top bid loses 0.11 points and
 is BiddingNet's best 88% of the time. The judge is the first pass's (0.37 against 0.52 blind).
 This player and judge are where self-play starts.
+
+**Self-play, built (2026-11-07)** (`configs/onenet-selfplay.toml`, `estimation.onenet.selfplay`):
+Essam's loop started from the final copy, with every decision's practice answers read from its
+own game. The three guards as set: a learning rate of 1e-4 (a third of Essam's) and exploration
+of 0.003 falling to 0.001 (Essam's from-scratch run: 0.02 to 0.01), with a pull toward the copy's
+moves that fades out by loop 1,000; the frozen copy as the opponent in a quarter of the loops;
+and a player kept every 100 loops for the check-ups. Every 100 loops the player meets the copy
+(512 games at once, greedy), and the numbers go to a one-page chart (TensorBoard's CUSTOM SCALARS
+page on the home server, `estimation.onenet.charts`).
+
+The copy's move chances are soft (learned at a temperature of 2 points): moves sampled from them
+lose about a point a card more than its best move, and bids ten times more, and in a short trial
+callers made only 27% of their calls. Self-play therefore starts from them sharpened 4 times
+(sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
+loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
