@@ -17,7 +17,11 @@ def test_a_loop_writes_its_numbers_and_the_marks_beside_them():
         "strength/king_vs_copy": 0.3,
         "marks/even_king": 0.25,
     }
-    assert values_for({"loop": 3.0}) == {}  # a number no chart shows draws nothing
+    assert values_for({"seed": 3.0}) == {}  # a number no chart shows draws nothing
+    assert values_for({"loop": 40.0, "loops_total": 2000.0}) == {
+        "progress/loops": 40.0,
+        "marks/loops_total": 2000.0,
+    }
 
 
 def test_the_charts_are_written_as_tensorboard_files(tmp_path: Path):

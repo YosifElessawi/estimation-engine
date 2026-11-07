@@ -500,6 +500,7 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
         key = jax.random.key(config.seed)
         past: list[Net] = []
         first = 1
+        bolas = 0
         (out / "log.jsonl").write_text("")
     else:
         nets = jax.tree.map(jnp.asarray, state["nets"])
@@ -510,6 +511,7 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
         rows = (out / "log.jsonl").read_text().splitlines()
         kept = [r for r in rows if json.loads(r)["loop"] <= state["loop"]]
         (out / "log.jsonl").write_text("".join(r + "\n" for r in kept))
+        bolas = sum(int(json.loads(r)["games_done"]) for r in kept)
         _say(f"[selfplay] resuming after loop {state['loop']}")
     (out / "config.json").write_text(json.dumps(dataclasses.asdict(config), indent=2) + "\n")
     _say(f"[selfplay] device {jax.devices()[0]}; from {start} (copy pass {copy_meta.get('epoch')})")
@@ -520,6 +522,7 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
     n = config.batch * config.steps
     started, decisions, row = time.time(), 0, {}
     for loop in range(first, config.loops + 1):
+        loop_started = time.time()
         key, k_opp, k_roll, k_perm, k_eval = jax.random.split(key, 5)
         use_copy = not past or float(jax.random.uniform(k_opp)) < config.copy_share
         if use_copy:
@@ -541,7 +544,10 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
         if loop % config.snapshot_every == 0:
             past = ([*past, jax.device_get(nets["player"])])[-config.pool :]
         fetched = jax.device_get(infos)
-        elapsed = time.time() - started
+        stats = {k: float(v) for k, v in jax.device_get(stats).items()}
+        bolas += int(stats["games_done"])
+        now = time.time()
+        elapsed, seconds = now - started, now - loop_started
         per_loop = elapsed / (loop - first + 1)
         row = {
             "loop": loop,
@@ -549,8 +555,13 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
             "entropy_weight": ent,
             "anchor_weight": pull,
             **{k: float(np.mean([i[k] for i in fetched])) for k in fetched[0]},
-            **{k: float(v) for k, v in jax.device_get(stats).items()},
+            **stats,
+            "loops_total": config.loops,
+            "bolas_total": bolas,
+            "loop_seconds": seconds,
             "decisions_per_s": decisions / elapsed,
+            "decisions_per_s_now": n / seconds,
+            "bolas_per_s": stats["games_done"] / seconds,
             "minutes_left": per_loop * (config.loops - loop) / 60,
         }
         if loop % config.eval_every == 0 or loop == first:

@@ -55,9 +55,29 @@ CHARTS: tuple[tuple[str, str, tuple[Line, ...]], ...] = (
         (("play/caller_made", "caller_made"),),
     ),
     (
-        "5 Speed",
+        "5 Progress and speed",
+        "Loops done (the line is the run's total)",
+        (("progress/loops", "loop"), ("marks/loops_total", "loops_total")),
+    ),
+    (
+        "5 Progress and speed",
+        "Bolas played so far",
+        (("progress/bolas", "bolas_total"),),
+    ),
+    (
+        "5 Progress and speed",
         "Minutes left",
         (("speed/minutes_left", "minutes_left"),),
+    ),
+    (
+        "5 Progress and speed",
+        "Decisions per second (this loop)",
+        (("speed/decisions_per_s", "decisions_per_s_now"),),
+    ),
+    (
+        "5 Progress and speed",
+        "Bolas finished per second (this loop)",
+        (("speed/bolas_per_s", "bolas_per_s"),),
     ),
 )
 

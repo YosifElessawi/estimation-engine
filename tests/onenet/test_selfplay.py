@@ -166,7 +166,8 @@ def test_a_tiny_run_plays_learns_keeps_players_and_resumes(tmp_path: Path):
     assert last["loop"] == 2
     rows = [json.loads(line) for line in (out / "log.jsonl").read_text().splitlines()]
     assert [r["loop"] for r in rows] == [1, 2]
-    assert {"king_vs_copy", "place_vs_copy", "distance_from_copy", "holders_named"} <= set(rows[0])
+    shown = {"king_vs_copy", "place_vs_copy", "distance_from_copy", "holders_named", "bolas_total"}
+    assert shown | {"decisions_per_s_now", "bolas_per_s", "loops_total"} <= set(rows[0])
     assert rows[0]["anchor_weight"] == 1.0
     assert rows[1]["anchor_weight"] == 0.5  # the pull fades
     assert rows[1]["distance_from_copy"] > 0  # the player has moved off the copy
