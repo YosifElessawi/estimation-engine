@@ -37,7 +37,7 @@ def duration(seconds: float) -> str:
     return f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60:02d} min"
 
 
-def sparkline(values: Sequence[float], width: int = 40) -> str:
+def sparkline(values: Sequence[float], width: int = 30) -> str:
     """The last ``width`` values as a line of block characters, scaled to their own range."""
     values = [v for v in values if math.isfinite(v)][-width:]
     if not values:
@@ -173,7 +173,7 @@ def _guards(rows: list[dict[str, Any]], config: dict[str, Any]) -> list[Renderab
             (f"{distance[-1]:.4f}", "bold"),
             "  ",
             (sparkline(distance), "blue"),
-            ("  0 is the copy's own moves", "dim"),
+            ("  0 = the copy", "dim"),
         ),
         _line(
             "Pull toward the copy",
@@ -194,7 +194,7 @@ def _practice(rows: list[dict[str, Any]]) -> list[RenderableType]:
             (f"{holders:.0%}", _mark(holders, BLIND_HOLDERS)),
             "  ",
             (sparkline([float(r["holders_named"]) for r in rows]), "blue"),
-            ("  blind 35% · GuessNet 47%", "dim"),
+            ("  blind 35%, GuessNet 47%", "dim"),
         ),
     ]
     if judged:
@@ -215,7 +215,7 @@ def _practice(rows: list[dict[str, Any]]) -> list[RenderableType]:
             (f"{made:.0%}", "bold"),
             "  ",
             (sparkline([float(r["caller_made"]) for r in rows]), "blue"),
-            ("  in the training games", "dim"),
+            ("  training games", "dim"),
         )
     )
     return out
