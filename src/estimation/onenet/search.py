@@ -1,7 +1,8 @@
 """The one net inside the Hybrid search: step 5's bots (docs/rl/hybrid-iteration-plan.md).
 
     onenet:net=<player.npz>:checkpoint=<hybrid.pt>:deals=both:top_k=2:samples=32
-    onenet:net=<player.npz>:own=true:judge=king:top_k=2:samples=32
+    onenet:net=<player.npz>:own=true:top_k=2:samples=32
+    onenet:net=<player.npz>:own=true:judge=place:judge_net=<judge.npz>:top_k=2:samples=32
 
 The player bids alone (its top legal move), keeps its ``top_k`` cards to search and, on each
 imagined deal, plays all four seats to the end of the round. Two things are set per bot:
@@ -15,7 +16,11 @@ imagined deal, plays all four seats to the end of the round. Two things are set 
   the player's.
 - **How each searched card is judged** (``judge``). ``round``: the play-out's round points, as
   the Hybrid scores them. ``king``: the player's own chance of finishing King (practice question
-  6), read from its view at its last card of the round, when twelve tricks are known.
+  6), read from its view at its last card of the round, when twelve tricks are known (tried
+  and dropped: it lost about 30 points a game). ``place``: the training judge's expected final
+  place (King +1 to Kooz -1, ``judge_net``), read at the same moment from that view and the other
+  three hands. The judge sees every hand, so it never plays; it can score an imagined ending
+  because every hand of an imagined deal is known: it never sees a real hidden card.
 
 This started as Essam Gouda's bitter-search (estimation-arena bots/bitter-search, commit e43b15b,
 MIT licence, see estimation/jaxenv/LICENSE), which runs his net inside the Hybrid search. Changes
@@ -30,7 +35,7 @@ seat was dealt. The tests check both against encode_np in real games.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
@@ -60,8 +65,8 @@ from estimation.engine.cards import SUIT_MASKS
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
 
 PLAYED, TABLE, SHOWN, WON, LEADER, MASK = 52, 260, 468, 580, 594, SIZE - 120
-ROUND, KING = "round", "king"
-JUDGES = (ROUND, KING)
+ROUND, KING, PLACE = "round", "king", "place"
+JUDGES = (ROUND, KING, PLACE)
 _ONE = np.uint64(1)
 _SUITS = np.array(SUIT_MASKS, dtype=np.uint64)
 Floats = npt.NDArray[np.float32]
@@ -133,6 +138,42 @@ def load_net(path: str) -> Player:
         return Player(data)
 
 
+class Judge:
+    """The training judge (estimation.onenet.nets.apply_judge) in numpy: the acting seat's
+    expected final place, King +1 to Kooz -1, from its raw view and the three other hands."""
+
+    __slots__ = ("_layers", "_value")
+
+    def __init__(self, data: Any) -> None:
+        layers: list[tuple[Floats, Floats]] = []
+        k = 0
+        while f"w{k}" in data:
+            layers.append((data[f"w{k}"].astype(np.float32), data[f"b{k}"].astype(np.float32)))
+            k += 1
+        if not layers or layers[0][0].shape[0] != SIZE + 3 * 52 or "vw" not in data:
+            raise ValueError(
+                "this file is not a judge (the raw view and three hands in, a value out)"
+            )
+        self._layers = layers
+        self._value = data["vw"].astype(np.float32), data["vb"].astype(np.float32)
+
+    def value(self, x: Floats, others: npt.NDArray[np.uint64]) -> Floats:
+        """``(B,)`` from views ``(B, SIZE)`` and ``others`` ``(B, 3)``: the hands of the next three
+        seats from the acting one, in that order."""
+        h = np.concatenate([x, bits(others).reshape(x.shape[0], 3 * 52)], axis=1, dtype=np.float32)
+        for w, b in self._layers:
+            h = np.maximum(h @ w + b, 0.0)
+        w, b = self._value
+        return (h @ w + b)[:, 0]
+
+
+@cache
+def load_judge(path: str) -> Judge:
+    """The judge saved at ``path`` (estimation.onenet.selfplay.export_judge)."""
+    with np.load(path) as data:
+        return Judge(data)
+
+
 def templates_of(obs: Observation) -> Floats:
     """``(4, SIZE)``: each seat's raw view of ``obs``'s public state with an empty hand."""
     views = [encode(replace(obs, seat=seat, hand=0, current_player=seat), []) for seat in range(4)]
@@ -197,12 +238,16 @@ def write_view(x, templates, hand, legal, played, voids, acting, trick_cards, tl
     x[:, MASK + PLAY_BASE :] = bits(legal)
 
 
+type EndValue = Callable[[Floats, npt.NDArray[np.uint64]], Floats]
+"""A seat's value ``(B,)`` from its views ``(B, SIZE)`` and the next three hands ``(B, 3)``."""
+
+
 class PlayOut(NamedTuple):
-    """The end of each played-out game: tricks won ``(B, 4)``, and with ``king_seat`` that
-    seat's King chance by the player at its last card of the round ``(B,)``."""
+    """The end of each played-out game: tricks won ``(B, 4)``, and with ``judge_seat`` that
+    seat's ``judge`` value at its last card of the round ``(B,)``."""
 
     won: npt.NDArray[np.int64]
-    king: Floats | None
+    value: Floats | None
 
 
 def play_out(
@@ -213,11 +258,13 @@ def play_out(
     played: npt.NDArray[np.uint64],
     voids: npt.NDArray[np.uint8],
     first_cards: npt.NDArray[np.int64],
-    king_seat: int | None = None,
+    judge_seat: int | None = None,
+    judge: EndValue | None = None,
 ) -> PlayOut:
     """Every game to the end of the round, every seat playing the net's top legal card. As
     estimation.bots.hybrid.rollout.play_out, on the raw view. ``hands``, ``played`` and ``voids``
-    are used up: pass copies."""
+    are used up: pass copies. With ``judge_seat``, ``judge`` values that seat at its last card of
+    the round (its only legal play), from its view and the others' hands at that moment."""
     games = hands.shape[0]
     ar = np.arange(games, dtype=np.int64)
     trump, tlen, tricks_done = start.trump, len(start.trick), start.tricks_done
@@ -231,15 +278,17 @@ def play_out(
     best_pos = np.full(games, best_at, np.int64)
     leaders = np.full(games, start.leader, np.int64)
     won = np.tile(np.asarray(start.won, np.int64), (games, 1))
-    king = None if king_seat is None else np.zeros(games, np.float32)
+    if (judge_seat is None) != (judge is None):
+        raise ValueError("play_out takes judge_seat and judge together")
+    value = None if judge_seat is None else np.zeros(games, np.float32)
     buf = np.empty((games, SIZE), np.float32)
     card: Any = first_cards.astype(np.int64)
     while True:
         acting = (leaders + tlen) & 3
         hand = hands[ar, acting]
         led = trick_cards[:, 0] // 13
-        if king is not None and tricks_done == 12:
-            rows = np.flatnonzero(acting == king_seat)
+        if value is not None and judge is not None and tricks_done == 12:
+            rows = np.flatnonzero(acting == judge_seat)
             if rows.size:  # its last card: the one it holds is its only legal play
                 sub = buf[: rows.size]
                 write_view(
@@ -255,7 +304,8 @@ def play_out(
                     leaders[rows],
                     won[rows],
                 )
-                king[rows] = net.king_chance(sub)
+                others = np.stack([hands[rows, (acting[rows] + k) & 3] for k in (1, 2, 3)], 1)
+                value[rows] = judge(sub, others)
         if card is None:
             if tlen:
                 follow = hand & _SUITS[led]
@@ -305,18 +355,32 @@ def play_out(
             tlen = 0
             tricks_done += 1
             if tricks_done == 13:
-                return PlayOut(won, king)
+                return PlayOut(won, value)
 
 
 class OneNetSearch(HybridBot):
     """The Hybrid search with the one net choosing the cards to search and playing them out; with
-    ``own`` it also imagines the deals, and with ``judge=king`` it judges the cards."""
+    ``own`` it also imagines the deals, and ``judge`` says how each searched card is valued."""
 
     def __init__(
-        self, seed: int, config: HybridConfig, net: str, *, own: bool = False, judge: str = ROUND
+        self,
+        seed: int,
+        config: HybridConfig,
+        net: str,
+        *,
+        own: bool = False,
+        judge: str = ROUND,
+        judge_net: str = "",
     ) -> None:
         if judge not in JUDGES:
-            raise ValueError(f"judge must be {ROUND} or {KING}, not {judge!r}")
+            raise ValueError(f"judge must be {ROUND}, {KING} or {PLACE}, not {judge!r}")
+        if (judge == PLACE) != bool(judge_net):
+            raise ValueError(
+                "judge=place takes judge_net=<the judge's .npz file>, and only it does"
+            )
+        if judge_net and not Path(judge_net).exists():
+            raise ValueError(f"onenet: no judge file at {judge_net}")
+        self._judge_net = load_judge(judge_net) if judge_net else None
         player = load_net(net)
         if (own or judge == KING) and not player.answers:
             raise ValueError(f"{net} has no practice answers, which own=true and judge=king read")
@@ -402,12 +466,12 @@ class OneNetSearch(HybridBot):
             np.tile(np.array(know.played_by, dtype=np.uint64), (games, 1)),
             np.tile(np.array(know.voids, dtype=np.uint8), (games, 1)),
             np.tile(np.array(cards, dtype=np.int64), n_deals),
-            king_seat=obs.seat if self.judge == KING else None,
+            **self._end_judge(obs.seat),
         )
         totals = [0.0] * n_cards
-        if out.king is not None:
-            for g, chance in enumerate(out.king.tolist()):
-                totals[g % n_cards] += chance
+        if out.value is not None:
+            for g, value in enumerate(out.value.tolist()):
+                totals[g % n_cards] += value
             return totals
         weights = standings_weights(obs.scores, obs.seat) if self.config.leader_weight else None
         scorer = RoundScorer(obs, self.config.rules, weights)
@@ -415,10 +479,25 @@ class OneNetSearch(HybridBot):
             totals[g % n_cards] += scorer.value(tricks)
         return totals
 
+    def _end_judge(self, seat: int) -> dict[str, Any]:
+        """``play_out``'s judge arguments: none for round points."""
+        if self.judge == KING:
+            player = self._net
+            return {"judge_seat": seat, "judge": lambda x, _others: player.king_chance(x)}
+        if self.judge == PLACE and self._judge_net is not None:
+            return {"judge_seat": seat, "judge": self._judge_net.value}
+        return {}
+
 
 def make(
-    seed: int, config: HybridConfig, net: str, *, own: bool = False, judge: str = ROUND
+    seed: int,
+    config: HybridConfig,
+    net: str,
+    *,
+    own: bool = False,
+    judge: str = ROUND,
+    judge_net: str = "",
 ) -> OneNetSearch:
     if not Path(net).exists():
         raise ValueError(f"onenet: no player file at {net}")
-    return OneNetSearch(seed, config, net, own=own, judge=judge)
+    return OneNetSearch(seed, config, net, own=own, judge=judge, judge_net=judge_net)

@@ -492,6 +492,7 @@ git-ignored `runs/onenet/checkups/`). The match with both pieces was stopped at 
 | Own guesses and King judging | 48, stopped | 10 | | 19.0% | -24.1 | |
 | Own guesses, round points | 40 | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) | 16 ms |
 | Hybrid v4's guesses, King judging | 40 | 9 | -0.113 (-0.182 to -0.044) | 18.4% | -27.3 (-40.4 to -14.2) | 19 ms |
+| Own guesses, the training judge's final place | 40 | 15 | -0.001 (-0.071 to +0.070) | 24.1% | -8.8 (-19.3 to +1.7) | 16 ms |
 
 Judging the cards by the player's King chance costs about 30 points a game with either guesser,
 and wins fewer Kings too: that answer was learned lightly (a practice question), says nothing
@@ -500,8 +501,17 @@ mostly noise, while round points are exact. King judging is not kept. The player
 as good as Hybrid v4's: with them and round points the player alone, with no Hybrid v4 net, is even
 with Hybrid v4 (within noise of the check-up on the same deals). It is a little slower than the
 check-up bot (16 ms a card against 13; Hybrid v4 took 26 ms in the same match), with rare slow
-cards. Next proposed (waiting for Yosif): judging the imagined endings by the training judge
-instead, which predicts final place itself (error 0.07 at loop 5,000 against 0.52 blind) and can be
-used there because every hand of an imagined deal is known.
+cards.
+
+**Judging by the training judge** (Yosif: build it and run the test; `judge=place`, the judge of the
+self-play run's last checkpoint exported with `estimation.onenet.selfplay.export_judge` to
+git-ignored `runs/onenet/selfplay/judge-05000.npz`, last row above): the judge predicts the final
+place itself (error 0.07 at loop 5,000 against 0.52 blind) and can score an imagined ending
+because every hand of an imagined deal is known; it is read at the player's last card of each
+imagined round, from its view and the other three hands. It does not collapse as King judging
+does: final place and King are even with Hybrid v4, but it scores about 14 points a game fewer than
+round points on the same deals (-8.8 against +5.3), and its place is no better (-0.001 against
++0.045). Not kept: round points stay the judge of the searched cards. The best version so far is
+the player alone with its own guesses and round points, even with Hybrid v4.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

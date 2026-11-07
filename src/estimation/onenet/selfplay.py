@@ -63,6 +63,7 @@ from .nets import (
     hidden_hands,
     load_judge,
     load_player,
+    save_judge,
     save_player,
 )
 
@@ -457,6 +458,16 @@ def save_checkpoint(out: Path, state: dict[str, Any]) -> None:
     with tmp.open("wb") as file:
         pickle.dump(jax.device_get(state), file)
     tmp.replace(out / CHECKPOINT)
+
+
+def export_judge(run: Path, out: Path) -> int:
+    """Save the judge of ``run``'s checkpoint as a plain numpy file at ``out`` (the search can
+    score imagined endings with it: estimation.onenet.search ``judge=place``); its loop."""
+    with (run / CHECKPOINT).open("rb") as file:
+        state = pickle.load(file)  # our own checkpoint, written by save_checkpoint
+    loop = int(state["loop"])
+    save_judge(out, state["nets"]["judge"], {"loop": loop, "run": str(run)})
+    return loop
 
 
 def _changed(saved: dict[str, Any], config: SelfPlayConfig) -> list[str]:

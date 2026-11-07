@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -17,10 +19,12 @@ from estimation.bots.hybrid.rollout import _beats as beats  # the Hybrid's own t
 from estimation.bots.knowledge import read_knowledge
 from estimation.engine import Observation, Phase, RulesConfig
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
+from estimation.onenet import nets
 from estimation.onenet.nets import PRACTICE, PRACTICE_SIZE
 from estimation.onenet.search import (
     OneNetSearch,
     bidding_views,
+    load_judge,
     load_net,
     play_out,
     templates_of,
@@ -47,6 +51,14 @@ def random_net(folder: Path, answers: bool = True) -> str:
         arrays["qb"] = np.zeros(PRACTICE_SIZE, np.float32)
         arrays["meta"] = np.array(json.dumps({"practice": [list(p) for p in PRACTICE]}))
     np.savez(path, **arrays)
+    return str(path)
+
+
+@pytest.fixture(scope="module")
+def judge_file(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """A small random judge, saved as self-play saves its judge."""
+    path = tmp_path_factory.mktemp("judge") / "judge.npz"
+    nets.save_judge(path, nets.init_judge(jax.random.PRNGKey(2), 32, 2), {"loop": 0})
     return str(path)
 
 
@@ -108,10 +120,11 @@ def test_the_play_out_view_equals_the_encoder_at_every_decision(game: tuple[Any,
             np.testing.assert_array_equal(x[0], encode(obs, legal))
 
 
-def test_a_play_out_replays_the_real_round_and_reads_the_king_chance_at_the_last_card(
-    game: tuple[Any, list[Seen]],
+def test_a_play_out_replays_the_real_round_and_judges_the_seat_at_its_last_card(
+    game: tuple[Any, list[Seen]], judge_file: str
 ):
     net, rounds = game
+    judge = load_judge(judge_file)
     for decisions in filter(None, map(cards_of_round, rounds)):
         first, _, action = decisions[0]
         dealt = [0, 0, 0, 0]
@@ -136,7 +149,8 @@ def test_a_play_out_replays_the_real_round_and_reads_the_king_chance_at_the_last
             np.zeros((1, 4), np.uint64),
             np.zeros((1, 4), np.uint8),
             np.array([action - PLAY_BASE]),
-            king_seat=first.seat,
+            judge_seat=first.seat,
+            judge=judge.value,
         )
         last, _, final = decisions[-1]
         assert len(decisions) == 52
@@ -154,8 +168,24 @@ def test_a_play_out_replays_the_real_round_and_reads_the_king_chance_at_the_last
             for obs, legal, _ in decisions
             if len(obs.tricks) == 12 and obs.seat == first.seat
         )
-        assert out.king is not None
-        assert out.king[0] == pytest.approx(net.king_chance(encode(*at_last_card)[np.newaxis])[0])
+        obs, legal = at_last_card
+        left = [dealt[s] & ~read_knowledge(obs).played_by[s] for s in range(4)]
+        others = np.array([[left[(obs.seat + k) % 4] for k in (1, 2, 3)]], np.uint64)
+        assert out.value is not None
+        expected = judge.value(encode(obs, legal)[np.newaxis], others)[0]
+        assert out.value[0] == pytest.approx(expected, rel=1e-5)
+
+
+def test_the_numpy_judge_equals_the_training_judge(judge_file: str):
+    rng = np.random.default_rng(1)
+    x = (rng.random((6, SIZE)) < 0.1).astype(np.float32)
+    cards = rng.integers(0, 2**52, size=(6, 3), dtype=np.uint64)
+    hidden = np.unpackbits(cards.astype("<u8").view(np.uint8), bitorder="little")
+    hidden = hidden.reshape(6, 3, 64)[:, :, :52].reshape(6, 156)
+    net, _ = nets.load_judge(Path(judge_file))
+    expected = np.asarray(nets.apply_judge(net, jnp.asarray(x), jnp.asarray(hidden)))
+    got = load_judge(judge_file).value(x, cards)
+    np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-5)
 
 
 def test_the_bidding_views_equal_the_encoder_with_the_dealt_hand(game: tuple[Any, list[Seen]]):
@@ -282,3 +312,28 @@ def test_it_needs_the_players_file_and_valid_settings(tmp_path: Path):
     for spec in (f"onenet:net={moves_only}:own=true", f"onenet:net={moves_only}:judge=king"):
         with pytest.raises(ValueError, match="no practice answers"):
             make_bot(spec, 0)
+    with pytest.raises(ValueError, match="judge_net"):
+        make_bot(f"onenet:net={path}:own=true:judge=place", 0)
+    with pytest.raises(ValueError, match="judge_net"):
+        make_bot(f"onenet:net={path}:own=true:judge_net={path}", 0)
+    with pytest.raises(ValueError, match="not a judge"):
+        make_bot(f"onenet:net={path}:own=true:judge=place:judge_net={path}", 0)
+
+
+def test_a_place_judged_bot_plays_a_set_scoring_each_card_by_the_judge(
+    game: tuple[Any, list[Seen]], judge_file: str, tmp_path: Path
+):
+    _, rounds = game
+    spec = (
+        f"onenet:net={random_net(tmp_path)}:own=true:judge=place:judge_net={judge_file}"
+        ":samples=2:top_k=2"
+    )
+    bot = make_bot(spec, 0)
+    assert isinstance(bot, OneNetSearch)
+    assert bot.judge == "place"
+    obs, legal, _ = next(row for row in cards_of_round(rounds[1]) if len(row[1]) > 2)
+    search = bot.search(obs, [a - PLAY_BASE for a in legal], [0.0] * len(legal))
+    assert search.deals == 2
+    assert all(math.isfinite(mean) for mean in search.means)
+    result, _ = play_set((spec, "random", spec, "random"), 1, 0, RulesConfig())
+    assert len(result.scores) == 4
