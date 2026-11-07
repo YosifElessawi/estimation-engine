@@ -84,9 +84,22 @@ def shard_paths(folder: Path) -> list[Path]:
 
 
 def load_data(folder: Path) -> Shard:
-    """Every shard in ``folder``, in order, as one set."""
+    """Every shard in ``folder``, in order, as one set. Filled in place, so loading takes about
+    the set's own size in memory (about 4.5 GB for 2,000 Bolas), not twice it."""
     paths = shard_paths(folder)
     if not paths:
         raise FileNotFoundError(f"no shards in {folder}")
-    shards = [load_shard(p) for p in paths]
-    return {name: np.concatenate([s[name] for s in shards]) for name in DTYPES}
+    counts: list[int] = []
+    for path in paths:
+        with np.load(path) as data:
+            counts.append(len(data["kind"]))  # reads only that array
+    first = load_shard(paths[0])
+    total = sum(counts)
+    out = {name: np.empty((total, *first[name].shape[1:]), DTYPES[name]) for name in DTYPES}
+    start = 0
+    for path, count in zip(paths, counts, strict=True):
+        shard = first if path == paths[0] else load_shard(path)
+        for name in DTYPES:
+            out[name][start : start + count] = shard[name]
+        start += count
+    return out
