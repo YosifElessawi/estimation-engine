@@ -417,4 +417,13 @@ pass 18 kept. Its top card loses 2.41 points (the best of its top 3: 0.35) and i
 is BiddingNet's best 88% of the time. The judge is the first pass's (0.37 against 0.52 blind).
 This player and judge are where self-play starts.
 
+**Self-play, built (2026-11-07)** (`configs/onenet-selfplay.toml`, `estimation.onenet.selfplay`):
+Essam's loop started from the final copy, with every decision's practice answers read from its
+own game. The three guards as set: a learning rate of 1e-4 (a third of Essam's) and exploration
+of 0.003 falling to 0.001 (Essam's from-scratch run: 0.02 to 0.01), with a pull toward the copy's
+moves that fades out by loop 1,000; the frozen copy as the opponent in a quarter of the loops;
+and a player kept every 100 loops for the check-ups. Every 25 loops the player meets the copy
+(512 games at once, greedy), and the numbers go to a one-page chart (TensorBoard's CUSTOM SCALARS
+page on the home server, `estimation.onenet.charts`).
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
