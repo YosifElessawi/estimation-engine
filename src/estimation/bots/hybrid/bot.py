@@ -25,11 +25,13 @@ deterministic for a given seed.
 import math
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from estimation.engine import Observation, Phase, RulesConfig, play_action
 from estimation.engine.actions import PLAY_BASE
@@ -117,7 +119,9 @@ class HybridBot:
         "seed",
     )
 
-    def __init__(self, seed: int, config: HybridConfig | None = None) -> None:
+    def __init__(self, seed: int, config: HybridConfig | None = None, *, nets: bool = True) -> None:
+        """``nets=False`` loads no checkpoint: for a subclass that brings its own nets and
+        replaces every method that reads them (``policy`` then raises)."""
         config = HybridConfig() if config is None else config
         if config.samples < 1 or config.oversample < 1:
             raise ValueError("the hybrid needs samples >= 1 and oversample >= 1")
@@ -131,16 +135,19 @@ class HybridBot:
             raise ValueError("guess_temperature must be above 0")
         if config.bid_top_k < 1 or config.bid_samples < 1:
             raise ValueError("the hybrid's bid search needs bid_top_k >= 1 and bid_samples >= 1")
-        _set_threads(config.threads)
         self.seed = seed
         self.config = config
-        self._policy = policy_at(config.checkpoint)
-        if self._policy.bidding is None:
-            raise ValueError(f"{config.checkpoint} has no trained BiddingNet")
-        if config.deals != BIDDING and self._policy.guess is None:
-            raise ValueError(
-                f"{config.checkpoint} has no GuessNet to deal by (deals={config.deals})"
-            )
+        self._policy: Policy | None = None
+        if nets:
+            _set_threads(config.threads)
+            policy = policy_at(config.checkpoint)
+            if policy.bidding is None:
+                raise ValueError(f"{config.checkpoint} has no trained BiddingNet")
+            if config.deals != BIDDING and policy.guess is None:
+                raise ValueError(
+                    f"{config.checkpoint} has no GuessNet to deal by (deals={config.deals})"
+                )
+            self._policy = policy
         self._rng = random.Random(seed)
         self._history: BiddingHistory | None = None
         self._history_key: tuple[Any, ...] | None = None
@@ -153,6 +160,8 @@ class HybridBot:
     @property
     def policy(self) -> Policy:
         """The checkpoint's nets this bot plays with."""
+        if self._policy is None:
+            raise ValueError("this bot was made without a checkpoint's nets (nets=False)")
         return self._policy
 
     def act(self, obs: Observation, legal: list[int]) -> int:
@@ -160,12 +169,12 @@ class HybridBot:
             return legal[0]
         x = encode(obs, self.config.rules)[np.newaxis]
         if obs.phase is not Phase.PLAY:
-            values = self._policy.bid_values(x)[0]
+            values = self.policy.bid_values(x)[0]
             if self.config.bid_search:
                 search = self.search_bids(obs, legal, [float(values[a]) for a in legal])
                 return search.actions[best_index(search.means)]
             return max(legal, key=lambda action: values[action])
-        advantage = self._policy.card_values(x)[0]
+        advantage = self.policy.card_values(x)[0]
         cards = [action - PLAY_BASE for action in legal]
         search = self.search(obs, cards, [float(advantage[c]) for c in cards])
         return play_action(search.cards[best_index(search.means)])
@@ -203,7 +212,7 @@ class HybridBot:
             return BidSearch(actions, [0.0], net_values, 0, 0.0)
         deals = self.sample_deals(obs, config.bid_samples)
         weights = standings_weights(obs.scores, obs.seat) if config.leader_weight else None
-        policy = self._policy
+        policy = self.policy
         totals = bid_totals(
             obs, config.rules, actions, deals, policy.bid_values, policy.card_values, weights
         )
@@ -255,31 +264,39 @@ class HybridBot:
             deals.append(hands)
         if not weigh:
             return deals
-        history = self._bidding_history(obs)
-        if not len(history):
+        logp = self.bidding_log_likelihoods(obs, deals, know.played_by)
+        if logp is None:
             return deals[:samples]
-        played_row = np.array(know.played_by, dtype=np.uint64)
-        dealt = np.array(deals, dtype=np.uint64) | played_row
-        shapes = shapes_of(dealt)
-        logp = log_likelihoods(
-            history,
-            dealt,
-            shapes,
-            self._policy.bid_values,
-            config.belief_temperature,
-            config.belief_floor,
-        )
         top = float(logp.max())
         # Efraimidis-Spirakis: keep the largest u ** (1 / weight), compared as logarithms.
         keys = [math.log(1.0 - rng.random()) * math.exp(min(top - float(lp), 700.0)) for lp in logp]
         kept = sorted(range(len(deals)), key=keys.__getitem__, reverse=True)[:samples]
         return [deals[k] for k in sorted(kept)]
 
+    def bidding_log_likelihoods(
+        self, obs: Observation, deals: list[list[int]], played_by: Sequence[int]
+    ) -> npt.NDArray[np.float64] | None:
+        """Each deal's log likelihood of the other seats' bidding this round under BiddingNet
+        (``beliefs.log_likelihoods``), or None when none of them had a choice. ``deals`` are the
+        remaining hands; ``played_by`` the cards each seat has played this round."""
+        history = self._bidding_history(obs)
+        if not len(history):
+            return None
+        dealt = np.array(deals, dtype=np.uint64) | np.array(played_by, dtype=np.uint64)
+        return log_likelihoods(
+            history,
+            dealt,
+            shapes_of(dealt),
+            self.policy.bid_values,
+            self.config.belief_temperature,
+            self.config.belief_floor,
+        )
+
     def guess_chances(self, obs: Observation) -> list[list[float]]:
         """GuessNet's chance of each other seat (the next one counterclockwise first) holding
         each card, from ``obs`` alone, raised to ``1 / guess_temperature``."""
         x = encode(obs, self.config.rules)[np.newaxis]
-        chances = self._policy.card_guesses(x)[0].astype(np.float64)
+        chances = self.policy.card_guesses(x)[0].astype(np.float64)
         if self.config.guess_temperature != 1.0:
             chances = chances ** (1.0 / self.config.guess_temperature)
         return chances.tolist()
@@ -322,7 +339,7 @@ class HybridBot:
         )
         templates = seat_templates(obs, config.rules)
         won = play_out(
-            self._policy.card_values, templates, start, hands, played, voids, shapes, first
+            self.policy.card_values, templates, start, hands, played, voids, shapes, first
         )
         weights = standings_weights(obs.scores, me) if config.leader_weight else None
         scorer = RoundScorer(obs, config.rules, weights)

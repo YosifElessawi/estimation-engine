@@ -62,15 +62,24 @@ def _hybrid(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
 
 def _onenet(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     """Step 5's one net inside the Hybrid search (estimation.onenet.search): ``net`` is the
-    player's file, every other option a HybridConfig field."""
-    from estimation.onenet.search import make  # PyTorch loads only when the Hybrid is made
+    player's file; ``own=true`` plays with no checkpoint, the player guessing the hidden cards
+    itself; ``judge`` is ``round`` (round points) or ``king`` (its own King chance); every other
+    option a HybridConfig field."""
+    from estimation.onenet.search import ROUND, make  # PyTorch loads only with the Hybrid
 
     from .hybrid import HybridConfig
 
     net = options.pop("net", "")
     if not net:
         raise ValueError("bot onenet needs net=<the player's .npz file>")
-    return make(seed, configure(HybridConfig(rules=rules), options, "onenet"), net)
+    own = _parse(options.pop("own", "false"), bool, "bot option own") is True
+    judge = options.pop("judge", ROUND)
+    if own and {"checkpoint", "deals"} & options.keys():
+        raise ValueError(
+            "bot onenet with own=true takes no checkpoint or deals: the player imagines the deals"
+        )
+    config = configure(HybridConfig(rules=rules), options, "onenet")
+    return make(seed, config, net, own=own, judge=judge)
 
 
 def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
