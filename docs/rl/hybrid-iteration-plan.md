@@ -394,4 +394,21 @@ final places by heart (training error 0.04).
 points a card more than Hybrid v4's card net at either size, so 384 x 3 is kept (512 x 4 is not
 clearly better). The judge has to be kept at its best pass, not the player's.
 
+**Copy variants (2026-11-07, Yosif: improve the copy first)**, 384 x 3, 12 passes each (2 min each
+on the 1060), scored at the last pass:
+
+| Variant | Points the top card loses | Best of the top 3 | Points the top bid loses |
+|---|---|---|---|
+| First copy (the kept values only, temperature 2) | 2.71 | 0.50 | 0.10 |
+| Also Hybrid v4's own card moves (the 961,528 decisions without values) | 2.48 | 0.36 | 0.12 |
+| Sharper targets (temperature 0.5) | 2.88 | 0.48 | 0.09 |
+| Both | 2.54 | 0.37 | 0.11 |
+| Own moves, temperature 1 | 2.47 | 0.35 | 0.11 |
+
+Learning Hybrid v4's own card moves gains about a quarter of a point a card; sharper targets lose
+some. Temperatures 1 and 2 tie, so 2 stays. Every variant was still improving at pass 12. From
+now on the copy learns the own moves, runs 20 passes, and keeps the pass whose top moves lose the
+fewest points: keeping by the move loss picked an early pass, since the own moves pull that loss
+up while the points lost keep falling.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
