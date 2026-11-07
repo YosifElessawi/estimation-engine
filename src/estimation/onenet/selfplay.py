@@ -9,7 +9,9 @@ its critic, final place as the only reward, and half the games pure self-play wh
 others two opposite seats are played by an opponent. Step 5 adds
 (docs/rl/hybrid-iteration-plan.md):
 
-- the start: the player and the judge of the copy of Hybrid v4 (estimation.onenet.copy_hybrid);
+- the start: the player and the judge of the copy of Hybrid v4 (estimation.onenet.copy_hybrid),
+  its move chances sharpened ``sharpen`` times: the copy learned them soft, and moves sampled
+  from them as they are lose about a point a card more than its best move (0.2 at 4 times);
 - the seven practice questions, answered by the games themselves, at ``practice_weight``;
 - the three guards that keep the head start:
   1. gentle exploration (a small entropy bonus) and a pull back toward the copy's moves that
@@ -73,6 +75,7 @@ RESUMABLE = frozenset({"loops", "eval_every", "eval_games", "eval_steps", "save_
 @dataclass(frozen=True, slots=True)
 class SelfPlayConfig:
     start: str = "runs/onenet/copy-final/384x3"  # the copy: player.npz and judge.npz
+    sharpen: float = 4.0  # the copy's move chances sharpened, so sampled moves stay near its best
     loops: int = 2000
     batch: int = 4096  # games played at once
     steps: int = 128  # decisions per game per loop
@@ -108,6 +111,8 @@ class SelfPlayConfig:
             raise ValueError("selfplay.copy_share must be from 0 to 1")
         if min(self.entropy, self.entropy_end, self.anchor, self.practice_weight) < 0:
             raise ValueError("selfplay.entropy, entropy_end, anchor and practice_weight >= 0")
+        if self.sharpen <= 0:
+            raise ValueError("selfplay.sharpen must be above 0")
         if self.objective not in ("weighted", "king", "delta"):
             raise ValueError("selfplay.objective must be weighted, king or delta")
 
@@ -128,6 +133,12 @@ def load_config(path: Path) -> SelfPlayConfig:
 
 
 # The games.
+
+
+def sharpened(player: Net, times: float) -> Net:
+    """``player`` with its move output times ``times``: the same best move, surer chances."""
+    move = {"w": player["policy"]["w"] * times, "b": player["policy"]["b"] * times}
+    return {**player, "policy": move}
 
 
 def holder_of(r: R.Round, seat: jax.Array) -> jax.Array:
@@ -477,6 +488,7 @@ def run(config: SelfPlayConfig, out: Path) -> dict[str, Any]:
     (out / "snapshots").mkdir(exist_ok=True)
     start = Path(config.start)
     copy, copy_meta = load_player(start / "player.npz")
+    copy = sharpened(copy, config.sharpen)  # the start, the frozen opponent and the pull's target
     tx, update = make_update(config)
     rollout = make_rollout(config)
     evaluate = make_eval(config.eval_games, config.eval_steps)

@@ -14,8 +14,16 @@ import pytest
 
 from estimation.engine.cards import deal
 from estimation.jaxenv import rules
+from estimation.jaxenv.encode import SIZE
 from estimation.onenet.data import card_bits, holders
-from estimation.onenet.nets import init_judge, init_player, load_player, save_judge, save_player
+from estimation.onenet.nets import (
+    apply_player,
+    init_judge,
+    init_player,
+    load_player,
+    save_judge,
+    save_player,
+)
 from estimation.onenet.selfplay import (
     SelfPlayConfig,
     config_of,
@@ -23,6 +31,7 @@ from estimation.onenet.selfplay import (
     load_config,
     round_labels,
     run,
+    sharpened,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +46,16 @@ def test_the_committed_config_starts_from_the_final_copy_with_the_three_guards()
     assert config.anchor_loops < config.loops  # that fades out during the run
     assert 0 < config.copy_share < 1  # 2: the frozen copy among the opponents
     assert config.save_every == 100  # 3: players kept for the check-ups
+    assert config.sharpen == 4.0
+
+
+def test_sharpening_keeps_the_best_move_and_makes_it_surer():
+    player = init_player(jax.random.key(4), 16, 1)
+    x = jax.random.bernoulli(jax.random.key(5), 0.2, (6, SIZE)).astype(jnp.float32)
+    soft, practice = apply_player(player, x)
+    sure, same = apply_player(sharpened(player, 4.0), x)
+    assert np.allclose(sure, 4.0 * soft, atol=1e-5)
+    assert np.allclose(same, practice)  # the practice outputs are untouched
 
 
 @pytest.mark.parametrize(
@@ -47,6 +66,7 @@ def test_the_committed_config_starts_from_the_final_copy_with_the_three_guards()
         ({"selfplay": {"copy_share": 1.5}}, "copy_share"),
         ({"selfplay": {"batch": 2, "steps": 2, "minibatch": 8}}, "minibatch"),
         ({"selfplay": {"objective": "points"}}, "objective"),
+        ({"selfplay": {"sharpen": 0.0}}, "sharpen"),
         ({"selfplay": {"teacher": 1}}, "unknown key 'teacher'"),
     ],
 )
