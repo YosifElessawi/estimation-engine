@@ -339,4 +339,27 @@ trusts its own play-outs on openings and super calls, where it did worst (open: 
 in the code, off by default (`bid_search=false`), for a later try with more deals or a learned
 value for the rest of the auction; no roster name.
 
+### Step 5 (under way): one net for every decision
+
+**Recording (done 2026-11-07)** (`configs/onenet-record.toml`, git-ignored `runs/onenet/record/`):
+Hybrid v4 played 2,000 Bolas in every seat, 6.0 h on 5 workers (the 10-Bola timing test suggested
+7.9 h). At half its card decisions the teacher (Hybrid v4's search with 64 deals and every legal
+card) valued every legal card and played its best; at every bid, BiddingNet's values were kept.
+
+| Saved | Count |
+|---|---|
+| Bolas | 2,000, in 80 parts of 25 (48 MB) |
+| Moves | 2,497,727 |
+| Bids with BiddingNet's values | 407,899 (24 options on average) |
+| Cards with the teacher's values | 702,968 (5.2 legal cards on average) |
+
+Each Bola is kept as its seed and its moves, so a replay gives the raw view, the real hands and
+the final places for the copy and the practice questions. Checked after the run: every Bola
+replays to its recorded final scores, every kept value is a real number, and on 100 Bolas every
+kept decision has one value per legal move and the teacher played its best card. First place is
+spread evenly over the four seats (479 to 509 Bolas each), as it should be with Hybrid v4 in all
+of them.
+
+Next: the copy on the home server's GPU, once it is decided where the JAX code lives.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
