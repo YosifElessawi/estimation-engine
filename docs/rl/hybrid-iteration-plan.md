@@ -455,11 +455,15 @@ git-ignored `runs/onenet/checkups/`):
 | Loop 2,000 | 35 of 100 | -0.022 (-0.061 to +0.018) | 22.8% | 27.3% | -8.0 (-14.2 to -1.8) |
 | Loop 3,000 | 41 of 100 | -0.006 (-0.048 to +0.036) | 23.3% | 26.7% | -4.0 (-10.5 to +2.6) |
 | Loop 4,000 | 56 of 100, 1 drawn | +0.015 (-0.018 to +0.049) | 24.9% | 25.1% | +3.2 (-1.8 to +8.1) |
+| Loop 5,000 | 46 of 100 | -0.001 (-0.041 to +0.039) | 25.2% | 24.8% | -0.7 (-6.5 to +5.1) |
 
 The copy inside the search started far behind Hybrid v4. Self-play closed most of the gap by
-loop 2,000 and was even with Hybrid v4 at loop 4,000: none of the three measures is clearly
-different from even. After loop 2,000 each check-up gains less than its own margin of error. The
-one net in the search moves about a third faster than Hybrid v4 (13 ms a card against 20 ms; both
-ran slower in the first two check-ups, 18 ms against 28 ms, on a busier Mac).
+loop 2,000 and was even with Hybrid v4 at loops 4,000 and 5,000: none of the three measures is
+clearly different from even. After loop 2,000 each check-up gained less than its own margin of
+error, and from 4,000 to 5,000 nothing, while the player still gained against the copy (38% to
+40% King). The check-ups stopped improving, so the first run ends at 5,000 loops; loop 4,000 has
+the best check-up (within noise of loop 5,000). The one net in the search moves about a third
+faster than Hybrid v4 (13 ms a card against 20 ms; both ran slower in the first two check-ups,
+18 ms against 28 ms, on a busier Mac).
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
