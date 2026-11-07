@@ -411,4 +411,10 @@ now on the copy learns the own moves, runs 20 passes, and keeps the pass whose t
 fewest points: keeping by the move loss picked an early pass, since the own moves pull that loss
 up while the points lost keep falling.
 
+**Final copy (2026-11-07)** (`runs/onenet/copy-final/384x3`, 2.5 min): the own moves on, 20 passes,
+pass 18 kept. Its top card loses 2.41 points (the best of its top 3: 0.35) and is the best card
+51% of the time, against Hybrid v4's card net's 1.78 and 54%; its top bid loses 0.11 points and
+is BiddingNet's best 88% of the time. The judge is the first pass's (0.37 against 0.52 blind).
+This player and judge are where self-play starts.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
