@@ -203,8 +203,8 @@ Essam Gouda's, from estimation-arena (MIT licence).
   - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
 
   First run: 5,000 loops (Yosif, 2026-11-07; about 7.5 h on the 1060), a check against the copy
-  every 100 loops and a check-up against Hybrid v4 every 500, continued while the check-ups
-  improve.
+  every 100 loops and a check-up against Hybrid v4 every 1,000 (after one at 500), continued
+  while the check-ups improve.
 - **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
   `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
@@ -432,5 +432,38 @@ lose about a point a card more than its best move, and bids ten times more, and 
 callers made only 27% of their calls. Self-play therefore starts from them sharpened 4 times
 (sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
 loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
+
+**First self-play run (done 2026-11-07)** (git-ignored `runs/onenet/selfplay/`, a player kept every
+100 loops in `snapshots/`): 5,000 loops in 7.6 h on the 1060, 2.14 M Bolas at 95,000 decisions a
+second. Against the copy (25% King is even) the player's King share was 27% at loop 500, 31% at
+1,000, 37% at 2,000, 39% at 3,000, 38% at 4,000 and 40% at 5,000 (place +0.35): fast until loop
+2,000, then slow. It was still changing at the end: its moves kept drifting further from the
+copy's. In its training games callers made 56 to 61% of their calls (41% at the start), and the
+player named 46% of the hidden cards' holders (44% at the start; GuessNet names 47% in Hybrid
+v4's games).
+
+**Check-ups** (the player inside Hybrid v4's search, `onenet` bot, against Hybrid v4; 100 duplicate
+sets each, seed 2040 every time, 5 workers on the Mac, about 23 min each; every 1,000 loops after
+the first at 500, Yosif 2026-11-07, with every game saved for later study from loop 1,000 on, in
+git-ignored `runs/onenet/checkups/`):
+
+| Player | Sets won | Place, King +1 to Kooz -1 (95% CI) | King | Hybrid v4 King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| The final copy, before self-play | 6 of 100 | -0.234 (-0.270 to -0.197) | 13.9% | 36.1% | -42.8 (-48.7 to -36.9) |
+| Loop 500 | 8 of 100 | -0.225 (-0.263 to -0.187) | 13.3% | 36.7% | -40.4 (-46.8 to -34.0) |
+| Loop 1,000 | 18 of 100 | -0.132 (-0.169 to -0.094) | 19.4% | 30.6% | -25.2 (-31.4 to -19.0) |
+| Loop 2,000 | 35 of 100 | -0.022 (-0.061 to +0.018) | 22.8% | 27.3% | -8.0 (-14.2 to -1.8) |
+| Loop 3,000 | 41 of 100 | -0.006 (-0.048 to +0.036) | 23.3% | 26.7% | -4.0 (-10.5 to +2.6) |
+| Loop 4,000 | 56 of 100, 1 drawn | +0.015 (-0.018 to +0.049) | 24.9% | 25.1% | +3.2 (-1.8 to +8.1) |
+| Loop 5,000 | 46 of 100 | -0.001 (-0.041 to +0.039) | 25.2% | 24.8% | -0.7 (-6.5 to +5.1) |
+
+The copy inside the search started far behind Hybrid v4. Self-play closed most of the gap by
+loop 2,000 and was even with Hybrid v4 at loops 4,000 and 5,000: none of the three measures is
+clearly different from even. After loop 2,000 each check-up gained less than its own margin of
+error, and from 4,000 to 5,000 nothing, while the player still gained against the copy (38% to
+40% King). The check-ups stopped improving, so the first run ends at 5,000 loops; loop 4,000 has
+the best check-up (within noise of loop 5,000). The one net in the search moves about a third
+faster than Hybrid v4 (13 ms a card against 20 ms; both ran slower in the first two check-ups,
+18 ms against 28 ms, on a busier Mac).
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
