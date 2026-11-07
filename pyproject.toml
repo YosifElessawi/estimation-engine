@@ -22,7 +22,11 @@ module-name = "estimation"
 line-length = 100
 target-version = "py312"
 # SPEC.md is Yosif's; ruff must not reformat the code blocks in any Markdown file.
-extend-exclude = ["*.md"]
+# src/estimation/jaxenv is Essam Gouda's code, kept as it is in estimation-arena so later fixes
+# there can be brought over by diff (see its __init__.py). force-exclude applies both to the
+# file names pre-commit passes.
+extend-exclude = ["*.md", "src/estimation/jaxenv"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PIE", "PT"]
@@ -36,6 +40,10 @@ strict = [
     "src/estimation/rl",
     "server",
 ]
+# Essam Gouda's copied JAX code (src/estimation/jaxenv) is held to its move-by-move check
+# against the engine (tests/jaxenv), not to pyright: its annotations are loose (an "int" that is
+# a traced array) and stay as in estimation-arena, so later fixes there can be diffed in.
+ignore = ["src/estimation/jaxenv"]
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
@@ -53,4 +61,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-xdist>=3.8.0",
     "ruff>=0.17.2",
+    # Step 5's JAX rules and nets (src/estimation/jaxenv): CPU here for the tests; the home
+    # server's GPU runs use the same version with CUDA (jax[cuda12]).
+    "jax==0.12.0.1",
+    "optax>=0.2.8",
 ]
