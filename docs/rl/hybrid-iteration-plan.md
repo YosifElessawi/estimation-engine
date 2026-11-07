@@ -433,4 +433,14 @@ callers made only 27% of their calls. Self-play therefore starts from them sharp
 (sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
 loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
 
+**Check-ups** (the player inside Hybrid v4's search, `onenet` bot, against Hybrid v4; 100 duplicate
+sets each, seed 2040 every time, 5 workers on the Mac, about 33 min each):
+
+| Player | Sets won | Place (King +1 to Kooz -1) | King | Hybrid v4 King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| The final copy, before self-play | 6 of 100 | -0.234 | 13.9% | 36.1% | -42.8 (-48.7 to -36.9) |
+
+The copy inside the search is far behind Hybrid v4: the gap self-play has to close. It moves
+faster (18 ms a card against 28 ms).
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
