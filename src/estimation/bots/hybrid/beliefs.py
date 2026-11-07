@@ -530,9 +530,20 @@ def log_likelihoods(
     x[:, :, UNSEEN : UNSEEN + CARDS] = 1.0 - hand_bits
     x[:, :, SHAPE : SHAPE + SHAPE_SIZE] = shapes[:, seats]
     values = bid_values(x.reshape(deals * n, NUM_FEATURES)).astype(np.float64)
-    values = values.reshape(deals, n, BID_ACTIONS) / temperature
+    return choice_log_likelihoods(
+        values.reshape(deals, n, BID_ACTIONS) / temperature, history, floor
+    )
+
+
+def choice_log_likelihoods(
+    scores: npt.NDArray[np.float64], history: BiddingHistory, floor: float
+) -> npt.NDArray[np.float64]:
+    """Each deal's log likelihood of the choices in ``history``, ``(D,)``, from ``scores[d, i]``:
+    every action's score at decision ``i`` in deal ``d``, ``(D, n, BID_ACTIONS)``. A softmax of
+    the legal ones gives each option's chance, mixed with an even ``floor`` share."""
+    deals, n = scores.shape[0], scores.shape[1]
     legal = history.legal[np.newaxis]
-    values = np.where(legal, values, -np.inf)
+    values = np.where(legal, scores, -np.inf)
     top = values.max(axis=2, keepdims=True)
     exp = np.exp(values - top)
     soft = exp / exp.sum(axis=2, keepdims=True)

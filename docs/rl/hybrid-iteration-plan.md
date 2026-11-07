@@ -466,4 +466,82 @@ the best check-up (within noise of loop 5,000). The one net in the search moves 
 faster than Hybrid v4 (13 ms a card against 20 ms; both ran slower in the first two check-ups,
 18 ms against 28 ms, on a busier Mac).
 
+**All in one at the table (2026-11-07, Yosif: build it and play the match)**: in the check-ups two
+jobs were still Hybrid v4's, guessing the hidden cards and judging the searched cards by round
+points. The search can now give both to the player (nothing retrained: the loop 4,000 player as
+saved):
+
+- **Own guesses** (`onenet:net=<player>:own=true`, no checkpoint, no Hybrid v4 net loaded): the
+  player's hidden-card guesses (question 1) place each imagined deal's cards, and its own move
+  chances at the other seats' bidding keep the 32 of 64 deals that explain that bidding best, as
+  `deals=both` does with GuessNet and BiddingNet (the same 10% floor).
+- **King judging** (`judge=king`): each searched card is worth the player's own chance of
+  finishing King (question 6), read from its view at its last card of each imagined round,
+  instead of round points.
+- Checked: every other seat's rebuilt bidding view equals what that seat saw (over 100 real
+  decisions), a play-out reads the King chance at exactly that seat's last card and still replays
+  the real round, and a deal's weight equals the player's chances of the real bids.
+
+Matches against Hybrid v4 on the check-ups' deals (seed 2040, 5 workers on the Mac, games saved in
+git-ignored `runs/onenet/checkups/`). The match with both pieces was stopped at 48 of 100 sets
+(Yosif) once it was clearly behind; each piece then played the first 40 sets on its own:
+
+| Player (loop 4,000) | Sets | Sets won | Place, King +1 to Kooz -1 (95% CI) | King | Points per game (95% CI) | Its time a card |
+|---|---|---|---|---|---|---|
+| Check-up: Hybrid v4's guesses, round points | first 40 | 20 | +0.001 | 24.1% | +2.3 | 13 ms |
+| Own guesses and King judging | 48, stopped | 10 | | 19.0% | -24.1 | |
+| Own guesses, round points | 40 | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) | 16 ms |
+| Hybrid v4's guesses, King judging | 40 | 9 | -0.113 (-0.182 to -0.044) | 18.4% | -27.3 (-40.4 to -14.2) | 19 ms |
+| Own guesses, the training judge's final place | 40 | 15 | -0.001 (-0.071 to +0.070) | 24.1% | -8.8 (-19.3 to +1.7) | 16 ms |
+| The player alone, no search (`own=true:top_k=1`) | 40 | 4 | -0.169 (-0.227 to -0.112) | 16.2% | -32.3 (-41.2 to -23.4) | 0.2 ms |
+
+Judging the cards by the player's King chance costs about 30 points a game with either guesser,
+and wins fewer Kings too: that answer was learned lightly (a practice question), says nothing
+about the other places and has to see many rounds ahead, so between two cards its difference is
+mostly noise, while round points are exact. King judging is not kept. The player's own guesses are
+as good as Hybrid v4's: with them and round points the player alone, with no Hybrid v4 net, is even
+with Hybrid v4 (within noise of the check-up on the same deals). It is a little slower than the
+check-up bot (16 ms a card against 13; Hybrid v4 took 26 ms in the same match), with rare slow
+cards.
+
+**Judging by the training judge** (Yosif: build it and run the test; `judge=place`, the judge of the
+self-play run's last checkpoint exported with `estimation.onenet.selfplay.export_judge` to
+git-ignored `runs/onenet/selfplay/judge-05000.npz`, last row above): the judge predicts the final
+place itself (error 0.07 at loop 5,000 against 0.52 blind) and can score an imagined ending
+because every hand of an imagined deal is known; it is read at the player's last card of each
+imagined round, from its view and the other three hands. It does not collapse as King judging
+does: final place and King are even with Hybrid v4, but it scores about 14 points a game fewer than
+round points on the same deals (-8.8 against +5.3), and its place is no better (-0.001 against
++0.045). Not kept: round points stay the judge of the searched cards. The best version so far is
+the player alone with its own guesses and round points, even with Hybrid v4.
+
+**The player with no search at all** (Yosif: "RL vs Hybrid"; the search keeps only the player's top
+card, so every bid and card is its own first choice, last row above): clearly behind Hybrid v4, 4 of
+40 sets and 32 points a game. The search around it is worth about 35 points a game, so the player's
+own play is where the next training should aim: learning from the search's choices (expert
+iteration, as step 2 did for the Hybrid), followed by self-play to keep playing for final place.
+
+**Search tuning (2026-11-07, Yosif: tune search now)**: the player alone with its own guesses and
+round points, one search setting changed at a time, 40 sets each against Hybrid v4 on the same
+deals (seed 2040, 5 workers). `spread` and `late` are new judging options (`judge=spread`: in the
+fixed-trump rounds a card's spread of outcomes over the imagined deals counts too, up to half a
+standard deviation toward the long shot when behind the leader and away from it when leading;
+`judge=late`: round points in the open rounds, the judge's final place in the fixed-trump rounds):
+
+| Search setting | Sets won | Place (95% CI) | King | Points per game (95% CI) |
+|---|---|---|---|---|
+| As above: the top 2 cards, 32 deals, round points | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) |
+| The top 3 cards | 21 | +0.012 (-0.061 to +0.085) | 25.0% | +1.8 (-7.4 to +11.0) |
+| Every legal card | 14 | -0.044 (-0.113 to +0.024) | 22.7% | -9.9 (-19.8 to 0.0) |
+| 64 deals | 26 | +0.037 (-0.033 to +0.108) | 26.2% | +7.2 (-2.3 to +16.7) |
+| Spread judging in the fixed-trump rounds | 20 | +0.044 (-0.039 to +0.126) | 25.3% | +1.8 (-10.0 to +13.6) |
+| The judge in the fixed-trump rounds | 20 | +0.042 (-0.034 to +0.119) | 25.0% | +5.0 (-7.1 to +17.1) |
+
+None is clearly better than the top 2 cards with 32 deals and round points, which stays. Searching
+more cards is worse, every legal card most of all: with 32 deals each card's mean is noisy, and the
+more cards are compared the more often a weaker one wins on luck, so the player's top 2 are a good
+filter. 64 deals may help a little (within noise, and twice the time a card). The two late-Bola
+judges change only the last five rounds, too few decisions to show in 40 sets. The search is at its
+best with these settings; what it lacks comes from the player: its top cards and its play-outs.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
