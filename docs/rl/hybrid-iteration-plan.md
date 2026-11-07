@@ -209,8 +209,10 @@ Essam Gouda's, from estimation-arena (MIT licence).
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
   measures.
 
-**Open decision:** where the JAX code lives (Essam's `jaxenv` is MIT now; earlier his code stayed
-out of this repo).
+**Where the code lives:** in this repo (Yosif, 2026-11-07). Essam's `jaxenv` is copied into
+`src/estimation/jaxenv` with credit and its MIT licence, kept as it is in estimation-arena so later
+fixes there can be diffed in, and its move-by-move check against our engine runs in our tests.
+Step 5's own code sits next to it and only imports it.
 
 ## Parked net changes
 
@@ -228,6 +230,8 @@ out of this repo).
    2026-11-03).
 3. Step 5 is Essam's one-net design started from Hybrid v4, and it replaces the Play for King
    step: final place is its reward (Yosif, 2026-11-06).
+4. Step 5's JAX code lives in this repo: Essam's `jaxenv` copied in with credit and its MIT
+   licence (Yosif, 2026-11-07).
 
 ## Results
 
@@ -360,6 +364,12 @@ kept decision has one value per legal move and the teacher played its best card.
 spread evenly over the four seats (479 to 509 Bolas each), as it should be with Hybrid v4 in all
 of them.
 
-Next: the copy on the home server's GPU, once it is decided where the JAX code lives.
+**The JAX rules in this repo (2026-11-07):** Essam's `jaxenv` copied into `src/estimation/jaxenv`.
+Its check against our engine passes on today's rules: every legal move, turn, round score and
+final score identical over about 31,000 steps: 390 rounds of random, rule-based and scripted play
+(60 of them also requiring the GPU view to equal the numpy view at every step) and 6 whole Bolas.
+It takes 12 s on the Mac and is part of the test gate.
+
+Next: the copy on the home server's GPU.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
