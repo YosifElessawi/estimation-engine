@@ -202,8 +202,9 @@ Essam Gouda's, from estimation-arena (MIT licence).
     having to beat a Hybrid v4-style player, not only itself;
   - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
 
-  First run: 2,000 loops (about 2.5 h on the 1060) with a check-up every 500, continued while the
-  check-ups improve.
+  First run: 5,000 loops (Yosif, 2026-11-07; about 7.5 h on the 1060), a check against the copy
+  every 100 loops and a check-up against Hybrid v4 every 500, continued while the check-ups
+  improve.
 - **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
   `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
@@ -422,7 +423,7 @@ Essam's loop started from the final copy, with every decision's practice answers
 own game. The three guards as set: a learning rate of 1e-4 (a third of Essam's) and exploration
 of 0.003 falling to 0.001 (Essam's from-scratch run: 0.02 to 0.01), with a pull toward the copy's
 moves that fades out by loop 1,000; the frozen copy as the opponent in a quarter of the loops;
-and a player kept every 100 loops for the check-ups. Every 25 loops the player meets the copy
+and a player kept every 100 loops for the check-ups. Every 100 loops the player meets the copy
 (512 games at once, greedy), and the numbers go to a one-page chart (TensorBoard's CUSTOM SCALARS
 page on the home server, `estimation.onenet.charts`).
 
@@ -430,6 +431,6 @@ The copy's move chances are soft (learned at a temperature of 2 points): moves s
 lose about a point a card more than its best move, and bids ten times more, and in a short trial
 callers made only 27% of their calls. Self-play therefore starts from them sharpened 4 times
 (sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
-loop takes 5.4 s, so the first 2,000 loops take about 3 h with the check against the copy.
+loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
