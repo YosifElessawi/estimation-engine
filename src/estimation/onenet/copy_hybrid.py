@@ -162,7 +162,12 @@ def move_loss(logits: jax.Array, mb: Batch, temperature: float) -> jax.Array:
 
 
 def practice_losses(q: jax.Array, mb: Batch) -> dict[str, jax.Array]:
+    """Each practice question's loss. Answers that are -1 are unknown and skipped; the round
+    score and the King chance also skip rows whose ``round_ok`` or ``final_ok`` is False (in
+    self-play, a round or Bola that ends after the loop). The copy knows every answer."""
     b = q.shape[0]
+    round_ok = mb.get("round_ok", jnp.ones(b, bool))
+    final_ok = mb.get("final_ok", jnp.ones(b, bool))
     holder = mb["holder"].astype(jnp.int32)
     tricks = mb["tricks"].astype(jnp.int32)
     made = mb["made"].astype(jnp.int32)
@@ -185,10 +190,11 @@ def practice_losses(q: jax.Array, mb: Batch) -> dict[str, jax.Array]:
             optax.sigmoid_binary_cross_entropy(void_logits, voids(holder).astype(jnp.float32)),
             everywhere,
         ),
-        "king": jnp.mean(
-            optax.sigmoid_binary_cross_entropy(q[:, SLICES["king"]][:, 0], king_share(mb["final"]))
+        "king": _mean(
+            optax.sigmoid_binary_cross_entropy(q[:, SLICES["king"]][:, 0], king_share(mb["final"])),
+            final_ok,
         ),
-        "round_score": jnp.mean((q[:, SLICES["round_score"]] - score) ** 2),
+        "round_score": _mean(((q[:, SLICES["round_score"]] - score) ** 2).mean(-1), round_ok),
     }
 
 
