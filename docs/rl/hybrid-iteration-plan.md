@@ -203,8 +203,8 @@ Essam Gouda's, from estimation-arena (MIT licence).
   - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
 
   First run: 5,000 loops (Yosif, 2026-11-07; about 7.5 h on the 1060), a check against the copy
-  every 100 loops and a check-up against Hybrid v4 every 500, continued while the check-ups
-  improve.
+  every 100 loops and a check-up against Hybrid v4 every 1,000 (after one at 500), continued
+  while the check-ups improve.
 - **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
   `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
 - **Arena:** our duplicate arena reports weighted place too, so one match shows all three
@@ -434,7 +434,8 @@ callers made only 27% of their calls. Self-play therefore starts from them sharp
 loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
 
 **Check-ups** (the player inside Hybrid v4's search, `onenet` bot, against Hybrid v4; 100 duplicate
-sets each, seed 2040 every time, 5 workers on the Mac, about 33 min each):
+sets each, seed 2040 every time, 5 workers on the Mac, about 33 min each; every 1,000 loops after
+the first at 500, Yosif 2026-11-07, with every game saved for later study):
 
 | Player | Sets won | Place (King +1 to Kooz -1) | King | Hybrid v4 King | Points per game (95% CI) |
 |---|---|---|---|---|---|
