@@ -493,6 +493,7 @@ git-ignored `runs/onenet/checkups/`). The match with both pieces was stopped at 
 | Own guesses, round points | 40 | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) | 16 ms |
 | Hybrid v4's guesses, King judging | 40 | 9 | -0.113 (-0.182 to -0.044) | 18.4% | -27.3 (-40.4 to -14.2) | 19 ms |
 | Own guesses, the training judge's final place | 40 | 15 | -0.001 (-0.071 to +0.070) | 24.1% | -8.8 (-19.3 to +1.7) | 16 ms |
+| The player alone, no search (`own=true:top_k=1`) | 40 | 4 | -0.169 (-0.227 to -0.112) | 16.2% | -32.3 (-41.2 to -23.4) | 0.2 ms |
 
 Judging the cards by the player's King chance costs about 30 points a game with either guesser,
 and wins fewer Kings too: that answer was learned lightly (a practice question), says nothing
@@ -513,5 +514,11 @@ does: final place and King are even with Hybrid v4, but it scores about 14 point
 round points on the same deals (-8.8 against +5.3), and its place is no better (-0.001 against
 +0.045). Not kept: round points stay the judge of the searched cards. The best version so far is
 the player alone with its own guesses and round points, even with Hybrid v4.
+
+**The player with no search at all** (Yosif: "RL vs Hybrid"; the search keeps only the player's top
+card, so every bid and card is its own first choice, last row above): clearly behind Hybrid v4, 4 of
+40 sets and 32 points a game. The search around it is worth about 35 points a game, so the player's
+own play is where the next training should aim: learning from the search's choices (expert
+iteration, as step 2 did for the Hybrid), followed by self-play to keep playing for final place.
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
