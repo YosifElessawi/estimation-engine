@@ -20,10 +20,10 @@ On the home server's GPU, from the repo, with its JAX env (no PyTorch needed):
   top card; the points its top bid loses by BiddingNet's values; each practice question against
   a blind guess; and the judge against always saying 0.
 
-Each size in ``sizes`` is copied in turn into ``<out>/<size>/``: the player of the epoch with
-the lowest held-out move loss, and the judge of the epoch with its lowest held-out error, which
-comes early, as it learns the training Bolas' final places by heart (``player.npz``,
-``judge.npz``, ``metrics.json``).
+Each size in ``sizes`` is copied in turn into ``<out>/<size>/``: the player of the epoch whose
+top moves lose the fewest points on the held-out decisions (cards and bids), and the judge of
+the epoch with its lowest held-out error, which comes early, as it learns the training Bolas'
+final places by heart (``player.npz``, ``judge.npz``, ``metrics.json``).
 """
 
 import argparse
@@ -348,6 +348,7 @@ def _ratio(sums: dict[str, float], top: str, bottom: str) -> float:
 def held_out_scores(sums: dict[str, float]) -> dict[str, float]:
     return {
         "move_loss": _ratio(sums, "move_loss", "valued"),
+        "lose1": (sums["card_lose1"] + sums["bid_lose1"]) / max(sums["cards"] + sums["bids"], 1.0),
         "card_lose1": _ratio(sums, "card_lose1", "cards"),
         "card_lose3": _ratio(sums, "card_lose3", "cards"),
         "card_best": _ratio(sums, "card_best", "cards"),
@@ -457,7 +458,7 @@ def copy_size(
         line = epoch_line(losses, held_scores)
         _say(f"[copy {size}] epoch {epoch}/{config.epochs}: {line} | {row['seconds']:.0f} s")
         meta = {"size": size, "epoch": epoch, "config": dataclasses.asdict(config)}
-        if not kept or held_scores["move_loss"] < kept["held_out"]["move_loss"]:
+        if not kept or held_scores["lose1"] < kept["held_out"]["lose1"]:
             kept = row
             save_player(folder / "player.npz", player, meta)
         if not judge_kept or held_scores["judge_mse"] < judge_kept["judge_mse"]:

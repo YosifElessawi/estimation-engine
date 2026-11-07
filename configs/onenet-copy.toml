@@ -7,12 +7,13 @@
 
 [copy]
 data = "runs/onenet/data"
-sizes = ["384x3", "512x4"]  # Essam's size, and twice the room: kept only if clearly better
-epochs = 12
+sizes = ["384x3"]           # Essam's size; 512 x 4 copied no better (2.66 against 2.71 points a card)
+epochs = 20                 # 12 passes were still improving
 batch = 4096
 lr = 1e-3                   # falling to lr_end along a cosine
 lr_end = 3e-5
 temperature = 2.0           # points: the values become chances by softmax(value / temperature)
 held_out = 0.05             # 100 of the 2,000 Bolas, scored every epoch
 practice_weight = 0.1       # each of the seven practice questions, next to the move's 1
+played_weight = 1.0         # also Hybrid v4's own card moves where the teacher kept no values
 seed = 20261107

@@ -30,8 +30,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_the_committed_config_copies_both_sizes_from_the_full_recording():
     config = load_config(ROOT / "configs" / "onenet-copy.toml")
     assert config.data == "runs/onenet/data"
-    assert config.sizes == ("384x3", "512x4")
+    assert config.sizes == ("384x3",)
     assert config.held_out == 0.05
+    assert config.played_weight == 1.0
 
 
 @pytest.mark.parametrize(
@@ -106,7 +107,7 @@ def test_a_tiny_copy_learns_scores_and_keeps_its_best_epochs(data: Path, tmp_pat
     assert epochs[-1]["train"]["move"] < epochs[0]["train"]["move"]
     size = summary["sizes"][0]
     kept = size["kept"]
-    assert kept["held_out"]["move_loss"] == min(e["held_out"]["move_loss"] for e in epochs)
+    assert kept["held_out"]["lose1"] == min(e["held_out"]["lose1"] for e in epochs)
     _, meta = load_player(folder / "player.npz")
     assert meta["epoch"] == kept["epoch"]
     judge_mse = [e["held_out"]["judge_mse"] for e in epochs]
