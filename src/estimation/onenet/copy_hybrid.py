@@ -23,8 +23,9 @@ On the home server's GPU, from the repo, with its JAX env (no PyTorch needed):
 With ``start`` the player (and judge) begin from a saved one instead of random weights: learning
 from the one net's own search (expert iteration), where the recording is the player's own search
 and its deeper teacher. The start is scored before the first epoch and kept if no epoch beats it.
-``train_share`` trains on that share of the training Bolas, the held-out ones unchanged, to see
-whether more recorded Bolas still help.
+``tilt`` makes the targets the start's own move chances tilted by the values, so a sure start
+only moves where the teacher has a clear opinion. ``train_share`` trains on that share of the
+training Bolas, the held-out ones unchanged, to see whether more recorded Bolas still help.
 
 Each size in ``sizes`` is copied in turn into ``<out>/<size>/``: the player of the epoch whose
 top moves lose the fewest points on the held-out decisions (cards and bids), and the judge of
@@ -95,6 +96,8 @@ class CopyConfig:
     practice_weight: float = 0.1  # each practice question's weight, the move's being 1
     played_weight: float = 0.0  # Hybrid v4's own card moves, at the decisions without values
     start: str = ""  # a folder with player.npz (and judge.npz) to start from; "" is random
+    tilt: bool = False  # targets tilt the start's own move chances by the values (needs start)
+    keep_last: bool = False  # keep the last epoch's player, not the one whose top moves lose least
     train_share: float = 1.0  # share of the training Bolas trained on
     seed: int = 0
 
@@ -111,6 +114,8 @@ class CopyConfig:
             raise ValueError("copy.practice_weight and copy.played_weight must be 0 or more")
         if not 0 < self.train_share <= 1:
             raise ValueError("copy.train_share must be above 0 and at most 1")
+        if self.tilt and not self.start:
+            raise ValueError("copy.tilt tilts a start's move chances: it needs copy.start")
         if self.start and len(self.sizes) != 1:
             raise ValueError("copy.start continues one player: give its one size in copy.sizes")
 
@@ -167,11 +172,18 @@ def legal_of(mb: Batch) -> jax.Array:
     return mb["x"][:, -NUM_ACTIONS:] > 0.5
 
 
-def move_loss(logits: jax.Array, mb: Batch, temperature: float) -> jax.Array:
-    """[B]: cross-entropy from the values' chances to the move output, over the legal moves."""
+def move_loss(
+    logits: jax.Array, mb: Batch, temperature: float, base: jax.Array | None = None
+) -> jax.Array:
+    """[B]: cross-entropy from the values' chances to the move output, over the legal moves.
+    With ``base`` (a start's move logits) the target tilts the start's chances by the values,
+    chances times exp(value / temperature), instead of the values' chances alone."""
     legal = legal_of(mb)
     logp = jax.nn.log_softmax(jnp.where(legal, logits, -1e9))
-    target = jax.nn.softmax(jnp.where(legal, mb["values"] / temperature, -1e9))
+    tilt = mb["values"] / temperature
+    if base is not None:
+        tilt = tilt + jax.nn.log_softmax(jnp.where(legal, base, -1e9))
+    target = jax.nn.softmax(jnp.where(legal, tilt, -1e9))
     return -(target * jnp.where(legal, logp, 0.0)).sum(-1)
 
 
@@ -218,7 +230,7 @@ def judge_loss(judge: Net, mb: Batch) -> jax.Array:
     return jnp.mean((value - place_reward(mb["final"])) ** 2)
 
 
-Step = Callable[[Net, Net, Any, Any, Batch], tuple[Net, Net, Any, Any, dict[str, jax.Array]]]
+Step = Callable[[Net, Net, Any, Any, Batch, Net], tuple[Net, Net, Any, Any, dict[str, jax.Array]]]
 
 
 def played_loss(logits: jax.Array, mb: Batch) -> jax.Array:
@@ -228,10 +240,12 @@ def played_loss(logits: jax.Array, mb: Batch) -> jax.Array:
 
 
 def make_step(tx: optax.GradientTransformation, config: CopyConfig) -> Step:
-    def player_loss(player: Net, mb: Batch) -> tuple[jax.Array, dict[str, jax.Array]]:
-        logits, q = apply_player(player, mb["x"].astype(jnp.float32))
+    def player_loss(player: Net, mb: Batch, anchor: Net) -> tuple[jax.Array, dict[str, jax.Array]]:
+        x = mb["x"].astype(jnp.float32)
+        logits, q = apply_player(player, x)
+        base = jax.lax.stop_gradient(apply_player(anchor, x)[0]) if config.tilt else None
         valued = mb["kind"] != KIND_PLAYED
-        move = _mean(move_loss(logits, mb, config.temperature), valued)
+        move = _mean(move_loss(logits, mb, config.temperature, base), valued)
         played = _mean(played_loss(logits, mb), ~valued)
         parts = practice_losses(q, mb)
         practice = sum(parts.values(), jnp.zeros(()))
@@ -239,8 +253,8 @@ def make_step(tx: optax.GradientTransformation, config: CopyConfig) -> Step:
         return total, {"move": move, "played": played, **parts}
 
     @jax.jit
-    def step(player: Net, judge: Net, opt_p: Any, opt_j: Any, mb: Batch):
-        (_, info), g_p = jax.value_and_grad(player_loss, has_aux=True)(player, mb)
+    def step(player: Net, judge: Net, opt_p: Any, opt_j: Any, mb: Batch, anchor: Net):
+        (_, info), g_p = jax.value_and_grad(player_loss, has_aux=True)(player, mb, anchor)
         j_loss, g_j = jax.value_and_grad(judge_loss)(judge, mb)
         up_p, opt_p = tx.update(g_p, opt_p, player)
         up_j, opt_j = tx.update(g_j, opt_j, judge)
@@ -436,6 +450,7 @@ def copy_size(
     player, judge = init_player(k_player, hidden, depth), init_judge(k_judge, hidden, depth)
     if config.start:
         player, judge = start_of(Path(config.start), hidden, depth, judge)
+    anchor = player  # the start, frozen: copy.tilt leans its move chances toward the values
     per_epoch = max(1, len(train) // config.batch)
     schedule = optax.cosine_decay_schedule(
         config.lr, per_epoch * config.epochs, alpha=config.lr_end / config.lr
@@ -481,7 +496,7 @@ def copy_size(
         infos: list[dict[str, jax.Array]] = []
         for k in range(per_epoch):
             mb = batch_of(data, np.sort(order[k * config.batch : (k + 1) * config.batch]))
-            player, judge, opt_p, opt_j, info = step(player, judge, opt_p, opt_j, mb)
+            player, judge, opt_p, opt_j, info = step(player, judge, opt_p, opt_j, mb, anchor)
             infos.append(info)
         fetched = jax.device_get(infos)
         losses = {key: float(np.mean([i[key] for i in fetched])) for key in fetched[0]}
@@ -497,7 +512,7 @@ def copy_size(
         line = epoch_line(losses, held_scores)
         _say(f"[copy {size}] epoch {epoch}/{config.epochs}: {line} | {row['seconds']:.0f} s")
         meta = {"size": size, "epoch": epoch, "config": dataclasses.asdict(config)}
-        if not kept or held_scores["lose1"] < kept["held_out"]["lose1"]:
+        if not kept or config.keep_last or held_scores["lose1"] < kept["held_out"]["lose1"]:
             kept = row
             save_player(folder / "player.npz", player, meta)
         if not judge_kept or held_scores["judge_mse"] < judge_kept["judge_mse"]:

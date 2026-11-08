@@ -81,6 +81,21 @@ def test_the_move_output_learns_the_values_as_chances():
     )
 
 
+def test_tilted_targets_lean_the_start_toward_the_values():
+    """A start sure of the second card (chances 0.9 and 0.1) and values of 10 and 0 at
+    temperature 2: the target is the start's chances times exp(value / 2), renormalised."""
+    x = np.zeros((1, VIEW), np.float32)
+    x[0, -NUM_ACTIONS + 68] = x[0, -NUM_ACTIONS + 69] = 1
+    values = np.zeros((1, NUM_ACTIONS), np.float32)
+    values[0, 68] = 10.0
+    mb = {"x": jnp.asarray(x), "values": jnp.asarray(values), "kind": jnp.array([KIND_CARD])}
+    base = jnp.zeros((1, NUM_ACTIONS)).at[0, 69].set(np.log(9.0))
+    target = np.array([0.1 * np.exp(5.0), 0.9])
+    target /= target.sum()
+    loss = move_loss(base, mb, temperature=2.0, base=base)  # the output is the start's chances
+    assert float(loss[0]) == pytest.approx(-(target * np.log([0.1, 0.9])).sum(), abs=1e-5)
+
+
 def test_the_move_output_learns_the_move_played_where_there_are_no_values():
     x = np.zeros((1, VIEW), np.float32)
     x[0, -NUM_ACTIONS + 68] = x[0, -NUM_ACTIONS + 69] = 1  # two legal cards
@@ -160,9 +175,22 @@ def test_a_start_of_another_size_and_a_share_of_the_bolas(data: Path, tmp_path: 
     base = CopyConfig(data=str(data), sizes=("16x1",), epochs=1, batch=64, held_out=0.34, seed=2)
     run(base, tmp_path / "first")
     wrong = dataclasses.replace(base, sizes=("8x1",), start=str(tmp_path / "first" / "16x1"))
+    with pytest.raises(ValueError, match=r"needs copy\.start"):
+        CopyConfig(tilt=True)
     with pytest.raises(ValueError, match="not 1 layers of 8"):
         run(wrong, tmp_path / "wrong")
     half = run(dataclasses.replace(base, train_share=0.5), tmp_path / "half")
     full = json.loads((tmp_path / "first" / "summary.json").read_text())
     assert half["rows"]["held_out"] == full["rows"]["held_out"]
     assert 0 < half["rows"]["train"] < full["rows"]["train"]
+
+
+def test_keep_last_keeps_the_last_epoch_even_when_it_is_worse(data: Path, tmp_path: Path):
+    base = CopyConfig(data=str(data), sizes=("16x1",), epochs=1, batch=64, held_out=0.34, seed=2)
+    run(base, tmp_path / "first")
+    start = str(tmp_path / "first" / "16x1")
+    last = dataclasses.replace(base, start=start, epochs=2, keep_last=True)
+    summary = run(last, tmp_path / "last")
+    assert summary["sizes"][0]["kept"]["epoch"] == 2
+    _, meta = load_player(tmp_path / "last" / "16x1" / "player.npz")
+    assert meta["epoch"] == 2
