@@ -521,4 +521,54 @@ card, so every bid and card is its own first choice, last row above): clearly be
 own play is where the next training should aim: learning from the search's choices (expert
 iteration, as step 2 did for the Hybrid), followed by self-play to keep playing for final place.
 
+**Learning from the search, round 1 (2026-11-08, Yosif: run it all; not kept).** The loop 4,000
+player inside its own search (own guesses, round points) played 2,000 Bolas on fresh deals
+(`configs/onenet-expert-1.toml`, git-ignored `runs/onenet/expert-1/`), 2.6 h on the Mac's 5
+workers. At half its card decisions the same search with 64 deals and every card valued every
+legal card (675,856 cards); its bids keep no values, since it bids by its own move chances. The
+training set: 2,021,390 decisions. The player then learned from it, starting from itself
+(`copy.start`, about 1.5 min a setting on the 1060, the same 100 Bolas held out):
+
+| Learning setting (10 passes) | Top card loses | Best of top 3 loses |
+|---|---|---|
+| None: the loop 4,000 player | **1.76** | 0.45 |
+| The teacher's values as chances (temperature 2), as the copy | 1.93 | 0.39 |
+| The same on half the Bolas | 2.08 | 0.40 |
+| The same, learning rate 10 times lower | 2.36 | 0.45 |
+| Sharper chances (temperature 0.5) | 2.09 | 0.39 |
+| Near the teacher's best card alone (temperature 0.1) | 2.13 | 0.39 |
+| The values only, without the search's own choices | 2.45 | 0.45 |
+| The player's own chances tilted by the values (`copy.tilt`), temperature 2 or 1 | 1.75 to 1.76 | 0.44 |
+| Tilted, temperature 0.5 | 1.80 | 0.43 |
+| Tilted, temperature 0.25 | 1.92 | 0.42 |
+
+No setting beat the player it started from. Learning the teacher's values as chances flattens a
+player that self-play made sure of its moves (its sampled moves lose only 0.03 points more than
+its top move), so its top 3 improve while its first choice gets worse; tilting its own chances
+leaves it where it was.
+
+The teacher does know more. On 600 positions, each card judged by an independent 256-deal search,
+the points lost against the best card: the player's top card 1.44 (standard error 0.18), its own
+search (2 cards, 32 deals) 0.74 (0.07), the 64-deal teacher 0.49 (0.06), a 256-deal teacher 0.28
+(0.03). So the teacher is about a point a card better than the player, but in one decision its
+value of a card carries about 2.6 points of noise. Half the Bolas learned clearly less (2.08
+against 1.93), so the learning is short of data: a teacher four times less noisy (256 deals) or
+several times more Bolas is what a next round would need, each about four times this round's
+recording.
+
+Matches against Hybrid v4 (seed 2040, 5 workers on the Mac). The learned player of the copy's
+setting, kept at its last pass, also plays worse at the table:
+
+| Player | Sets | Sets won | Place (95% CI) | King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| Loop 4,000 in its own search | 100 | 46 | +0.026 | 26.5% | -0.1 (-5.7 to +5.6) |
+| Loop 4,000 in its own search | first 40 | 21 | +0.045 | 26.4% | +5.3 |
+| Learned, in its own search | first 40 | 16 | -0.031 | 22.5% | -7.7 (-17.3 to +1.8) |
+| Loop 4,000 alone | 40 | 4 | -0.169 | 16.2% | -32.3 |
+| Learned, alone | 40 | 2 | -0.264 | 11.9% | -52.8 (-65.1 to -40.5) |
+
+Not kept. The night plan's gates held: no self-play from a learned player and no second round. The
+loop 4,000 player in its own search, with no Hybrid v4 net at all, stays even with Hybrid v4 over
+the full 100 sets.
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
