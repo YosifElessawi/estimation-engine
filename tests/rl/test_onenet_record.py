@@ -189,10 +189,10 @@ def test_a_run_saves_parts_resumes_and_refuses_another_config(
         run(dataclasses.replace(config, label_share=0.25), out)
 
 
-def watched(part: Arrays, tmp_path: Path, progress: dict[str, Any]) -> str:
+def watched(part: Arrays, tmp_path: Path, progress: dict[str, Any], player: str = "hybrid") -> str:
     out = tmp_path / "record"
     (out / "parts").mkdir(parents=True)
-    config = dataclasses.asdict(RecordConfig(player="hybrid"))
+    config = dataclasses.asdict(RecordConfig(player=player))
     (out / "config.json").write_text(json.dumps(config))
     (out / "progress.json").write_text(json.dumps(progress))
     save_part(out / "parts" / "part-00000.npz", part)
@@ -217,3 +217,13 @@ def test_the_watch_shows_a_finished_recording(part: Arrays, tmp_path: Path):
     text = watched(part, tmp_path, progress)
     assert "✓ Bolas recorded" in text
     assert "in 1 h 00 min" in text
+
+
+def test_the_watch_names_the_one_nets_own_search(part: Arrays, tmp_path: Path):
+    progress = {"games": 2000, "done": 500, "resumed_at": 0, "started": 0.0}
+    shown = watched(part, tmp_path, progress, player="onenet:net=player.npz:own=true")
+    text = " ".join(shown.split())  # the description wraps
+    assert "recording the one net's own search" in text
+    assert "kept without values" in text
+    assert "Hybrid v4" not in text
+    assert "BiddingNet" not in text
