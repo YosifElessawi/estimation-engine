@@ -619,4 +619,13 @@ which cards are searched and how the play-outs play. The bot is test-only: it re
 real hands, which no real bot may see. Its script is kept with its report, outside the repo, in
 the main checkout's git-ignored `runs/cheat-test/` (`cheat_test.py`, `cheat.json`).
 
+**The search on the GPU (2026-11-08, PR #19).** The one net's own search in JAX
+(`estimation.onenet.gpu_search`) and a recorder that uses it (`estimation.onenet.gpu_record`),
+with the engine still playing every Bola from the same seeds. Its teacher agrees with the CPU
+teacher as often as the CPU teacher agrees with itself (on 300 positions the same best card 59%
+against 60%). On the 1060 it records about 570 Bolas an hour against the Mac's 785: the play-outs
+are arithmetic-bound and the Mac's matrix units match the 1060 on a net this size. It is a second
+recorder to run next to the Mac, about 1,350 Bolas an hour together.
+
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
