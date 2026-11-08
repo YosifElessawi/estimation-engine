@@ -402,12 +402,21 @@ class OneNetSearch(HybridBot):
     def act(self, obs: Observation, legal: list[int]) -> int:
         if len(legal) == 1:
             return legal[0]
-        logits = self._net(encode(obs, legal))
         if obs.phase is not Phase.PLAY:
+            logits = self._net(encode(obs, legal))
             return max(legal, key=lambda a: logits[a])
         cards = [a - PLAY_BASE for a in legal]
-        search = self.search(obs, cards, [float(logits[PLAY_BASE + c]) for c in cards])
+        search = self.search(obs, cards, self.card_advantages(obs, cards))
         return play_action(search.cards[best_index(search.means)])
+
+    def card_advantages(self, obs: Observation, cards: list[int]) -> list[float]:
+        """The player's move logits of the legal ``cards``, which order them for the search."""
+        logits = self._net(encode(obs, [PLAY_BASE + c for c in cards]))
+        return [float(logits[PLAY_BASE + c]) for c in cards]
+
+    def bid_points(self, obs: Observation, legal: list[int]) -> list[float] | None:
+        """None: the player bids by its own move chances, which are not points."""
+        return None
 
     def guess_chances(self, obs: Observation) -> list[list[float]]:
         """With ``own``, the player's chance of each other seat (the next one first) holding each

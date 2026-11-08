@@ -69,15 +69,33 @@ def render(out: Path, now: float | None = None) -> RenderableType:
         return Text(f"No recording in {out} yet: waiting for its config.json", style="yellow")
     now = time.time() if now is None else now
     games = int(config["games"])
+    one_net = str(config["player"]).startswith("onenet")
+    gpu = _read(out / "gpu.json")
+    machine = (
+        f"Searched on the GPU, {gpu['batch']} Bolas at once."
+        if gpu is not None
+        else f"{config['workers']} workers."
+    )
+    teacher = (
+        f"At {float(config['label_share']):.0%} of its card decisions a deeper search "
+        f"({config['teacher_samples']} deals, every card) values every legal card and plays its "
+        "best"
+    )
+    if one_net:
+        title = "Step 5: recording the one net's own search (learning from the search)"
+        about = (
+            f"The one net inside its own search plays every seat. {teacher}; its bids are its own "
+            f"top moves, kept without values. {machine}"
+        )
+    else:
+        title = "Step 5: recording Hybrid v4 for the one-net copy"
+        about = (
+            f"Hybrid v4 plays every seat. {teacher}; at every bid, BiddingNet's values are kept. "
+            f"{machine}"
+        )
     blocks: list[RenderableType] = [
-        Text.assemble(("Step 5: recording Hybrid v4 for the one-net copy", "bold"), f"   {out}"),
-        Text(
-            f"Hybrid v4 plays every seat. At {float(config['label_share']):.0%} of its card "
-            f"decisions a deeper search ({config['teacher_samples']} deals, every card) values "
-            "every legal card and plays its best; at every bid, BiddingNet's values are kept. "
-            f"{config['workers']} workers.",
-            style="dim",
-        ),
+        Text.assemble((title, "bold"), f"   {out}"),
+        Text(about, style="dim"),
         Text(""),
     ]
     progress = _read(out / PROGRESS)
@@ -110,8 +128,8 @@ def render(out: Path, now: float | None = None) -> RenderableType:
             _line(
                 "Saved",
                 f"{saved['bolas']:,} Bolas ({saved['actions']:,} moves): "
-                f"{saved['bids']:,} bids with BiddingNet's values, "
-                f"{saved['cards']:,} cards with the teacher's values",
+                + ("" if one_net else f"{saved['bids']:,} bids with BiddingNet's values, ")
+                + f"{saved['cards']:,} cards with the teacher's values",
             )
         )
     return Group(*blocks)

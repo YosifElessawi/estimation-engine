@@ -179,6 +179,10 @@ def record_config(record: Path) -> RecordConfig:
 def build(record: Path, out: Path, card_net: bool = True) -> dict[str, Any]:
     """Build every missing shard from the recording in ``record``; returns the summary."""
     config = record_config(record)
+    if card_net and config.player.split(":")[0] != "hybrid":
+        raise ValueError(
+            f"the recording's player {config.player!r} has no card net: use --no-card-net"
+        )
     bot = make_bot(config.player, 0) if card_net else None
     if bot is not None and not isinstance(bot, HybridBot):
         raise ValueError(f"the recording's player {config.player!r} is not a Hybrid")

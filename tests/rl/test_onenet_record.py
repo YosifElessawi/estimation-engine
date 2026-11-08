@@ -1,4 +1,5 @@
-"""Recording Hybrid v4's games for the one-net copy (Hybrid plan step 5)."""
+"""Recording Hybrid v4's games for the one-net copy, and the one net's own search's games
+(Hybrid plan step 5)."""
 
 import dataclasses
 import io
@@ -14,6 +15,7 @@ from estimation.arena.roster import HYBRID_V4
 from estimation.bots.rl import policy_at
 from estimation.engine import Bola, Phase
 from estimation.engine.config import DEFAULT_CONFIG
+from estimation.onenet.search import OneNetSearch
 from estimation.rl.encoder import encode
 from estimation.rl.networks import REWARD_SCALE
 from estimation.rl.onenet_record import (
@@ -22,6 +24,7 @@ from estimation.rl.onenet_record import (
     Arrays,
     PartTask,
     RecordConfig,
+    bots,
     config_of,
     decisions,
     load_config,
@@ -32,6 +35,7 @@ from estimation.rl.onenet_record import (
     save_part,
 )
 from estimation.rl.onenet_watch import render
+from tests.onenet.test_search import random_net
 from tests.rl.helpers import make_checkpoint
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +70,15 @@ def test_the_committed_config_records_hybrid_v4_with_a_deeper_teacher():
     assert config.teacher_samples > 32  # deeper than Hybrid v4's own 32 deals
     assert config.label_share == 0.5
     assert config.games == 2000
+
+
+def test_the_committed_expert_config_records_the_one_nets_own_search():
+    config = load_config(ROOT / "configs" / "onenet-expert-1.toml")
+    assert config.player.startswith("onenet:")
+    assert ":own=true:" in config.player
+    assert config.teacher_samples > 32  # deeper than the player's own 32 deals
+    assert config.label_share == 0.5
+    assert config.seed != load_config(ROOT / "configs" / "onenet-record.toml").seed
 
 
 @pytest.mark.parametrize(
@@ -116,6 +129,30 @@ def test_every_kept_decision_has_one_value_per_legal_action(checkpoint: Path, pa
     assert cards > 20
 
 
+def test_the_one_nets_search_records_with_a_deeper_teacher_and_no_bid_values(tmp_path: Path):
+    net = random_net(tmp_path)
+    config = tiny(Path(), player=f"onenet:net={net}:own=true:top_k=2:samples=2", games=1)
+    players, teachers = bots(config, 0)
+    for player, teacher in zip(players, teachers, strict=True):
+        assert isinstance(player, OneNetSearch)
+        assert isinstance(teacher, OneNetSearch)
+        assert teacher.own
+        assert (player.config.top_k, player.config.samples) == (2, 2)
+        assert (teacher.config.top_k, teacher.config.samples) == (0, 3)  # every card, deeper
+    recorded = record_part(PartTask(0, 1, config))
+    assert replay(recorded, 0).scores == tuple(recorded["scores"][0].tolist())
+    assert not (recorded["kind"] == KIND_BID).any()  # it bids by its own move chances
+    cards = 0
+    for decision in decisions(recorded):
+        cards += 1
+        assert decision.kind == KIND_CARD
+        assert decision.bola.observation(decision.seat).phase is Phase.PLAY
+        assert len(decision.values) == len(decision.legal)
+        played = decision.legal.index(decision.action)  # the teacher plays its best card
+        assert decision.values[played] == pytest.approx(float(decision.values.max()))
+    assert cards > 10
+
+
 def test_the_teacher_values_about_its_share_of_card_decisions(part: Arrays):
     choices = 0
     for row in range(2):
@@ -152,10 +189,10 @@ def test_a_run_saves_parts_resumes_and_refuses_another_config(
         run(dataclasses.replace(config, label_share=0.25), out)
 
 
-def watched(part: Arrays, tmp_path: Path, progress: dict[str, Any]) -> str:
+def watched(part: Arrays, tmp_path: Path, progress: dict[str, Any], player: str = "hybrid") -> str:
     out = tmp_path / "record"
     (out / "parts").mkdir(parents=True)
-    config = dataclasses.asdict(RecordConfig(player="hybrid"))
+    config = dataclasses.asdict(RecordConfig(player=player))
     (out / "config.json").write_text(json.dumps(config))
     (out / "progress.json").write_text(json.dumps(progress))
     save_part(out / "parts" / "part-00000.npz", part)
@@ -180,3 +217,13 @@ def test_the_watch_shows_a_finished_recording(part: Arrays, tmp_path: Path):
     text = watched(part, tmp_path, progress)
     assert "✓ Bolas recorded" in text
     assert "in 1 h 00 min" in text
+
+
+def test_the_watch_names_the_one_nets_own_search(part: Arrays, tmp_path: Path):
+    progress = {"games": 2000, "done": 500, "resumed_at": 0, "started": 0.0}
+    shown = watched(part, tmp_path, progress, player="onenet:net=player.npz:own=true")
+    text = " ".join(shown.split())  # the description wraps
+    assert "recording the one net's own search" in text
+    assert "kept without values" in text
+    assert "Hybrid v4" not in text
+    assert "BiddingNet" not in text

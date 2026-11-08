@@ -1,5 +1,6 @@
 """Step 5's copy of Hybrid v4: its config, its losses, and a tiny run from end to end."""
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -132,3 +133,36 @@ def test_the_copy_loads_no_pytorch():
     """The home server runs the copy in its JAX env, which has no PyTorch."""
     check = "import sys, estimation.onenet.copy_hybrid; sys.exit('torch' in sys.modules)"
     subprocess.run([sys.executable, "-c", check], check=True)
+
+
+def test_a_copy_can_start_from_a_saved_player_and_keeps_it_unless_beaten(
+    data: Path, tmp_path: Path
+):
+    """Learning from the one net's own search continues a saved player: the start is scored
+    first (epoch 0) and stays kept when no epoch beats it, as with a learning rate of ~0."""
+    base = CopyConfig(data=str(data), sizes=("16x1",), epochs=1, batch=64, held_out=0.34, seed=2)
+    run(base, tmp_path / "first")
+    start = tmp_path / "first" / "16x1"
+    still = dataclasses.replace(base, start=str(start), lr=1e-12, lr_end=1e-12)
+    summary = run(still, tmp_path / "again")
+    folder = tmp_path / "again" / "16x1"
+    epochs = [json.loads(line) for line in (folder / "log.jsonl").read_text().splitlines()]
+    assert [e["epoch"] for e in epochs] == [0, 1]
+    first = json.loads((start / "metrics.json").read_text())["kept"]["held_out"]
+    assert epochs[0]["held_out"]["card_lose1"] == pytest.approx(first["card_lose1"], abs=1e-5)
+    assert summary["sizes"][0]["kept"]["held_out"]["lose1"] <= epochs[1]["held_out"]["lose1"]
+    started, _ = load_player(start / "player.npz")
+    kept, _ = load_player(folder / "player.npz")
+    assert np.allclose(np.asarray(kept["body"][0]["w"]), np.asarray(started["body"][0]["w"]))
+
+
+def test_a_start_of_another_size_and_a_share_of_the_bolas(data: Path, tmp_path: Path):
+    base = CopyConfig(data=str(data), sizes=("16x1",), epochs=1, batch=64, held_out=0.34, seed=2)
+    run(base, tmp_path / "first")
+    wrong = dataclasses.replace(base, sizes=("8x1",), start=str(tmp_path / "first" / "16x1"))
+    with pytest.raises(ValueError, match="not 1 layers of 8"):
+        run(wrong, tmp_path / "wrong")
+    half = run(dataclasses.replace(base, train_share=0.5), tmp_path / "half")
+    full = json.loads((tmp_path / "first" / "summary.json").read_text())
+    assert half["rows"]["held_out"] == full["rows"]["held_out"]
+    assert 0 < half["rows"]["train"] < full["rows"]["train"]
