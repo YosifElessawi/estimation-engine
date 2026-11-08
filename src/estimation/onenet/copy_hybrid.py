@@ -20,6 +20,12 @@ On the home server's GPU, from the repo, with its JAX env (no PyTorch needed):
   top card; the points its top bid loses by BiddingNet's values; each practice question against
   a blind guess; and the judge against always saying 0.
 
+With ``start`` the player (and judge) begin from a saved one instead of random weights: learning
+from the one net's own search (expert iteration), where the recording is the player's own search
+and its deeper teacher. The start is scored before the first epoch and kept if no epoch beats it.
+``train_share`` trains on that share of the training Bolas, the held-out ones unchanged, to see
+whether more recorded Bolas still help.
+
 Each size in ``sizes`` is copied in turn into ``<out>/<size>/``: the player of the epoch whose
 top moves lose the fewest points on the held-out decisions (cards and bids), and the judge of
 the epoch with its lowest held-out error, which comes early, as it learns the training Bolas'
@@ -53,6 +59,8 @@ from .nets import (
     hidden_hands,
     init_judge,
     init_player,
+    load_judge,
+    load_player,
     parse_size,
     save_judge,
     save_player,
@@ -86,6 +94,8 @@ class CopyConfig:
     held_out: float = 0.05  # share of the Bolas kept out of training, to score on
     practice_weight: float = 0.1  # each practice question's weight, the move's being 1
     played_weight: float = 0.0  # Hybrid v4's own card moves, at the decisions without values
+    start: str = ""  # a folder with player.npz (and judge.npz) to start from; "" is random
+    train_share: float = 1.0  # share of the training Bolas trained on
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -99,6 +109,10 @@ class CopyConfig:
             raise ValueError("copy.temperature, copy.lr and copy.lr_end must be above 0")
         if self.practice_weight < 0 or self.played_weight < 0:
             raise ValueError("copy.practice_weight and copy.played_weight must be 0 or more")
+        if not 0 < self.train_share <= 1:
+            raise ValueError("copy.train_share must be above 0 and at most 1")
+        if self.start and len(self.sizes) != 1:
+            raise ValueError("copy.start continues one player: give its one size in copy.sizes")
 
 
 def config_of(data: dict[str, Any]) -> CopyConfig:
@@ -420,6 +434,8 @@ def copy_size(
     hidden, depth = parse_size(size)
     k_player, k_judge = jax.random.split(jax.random.key(config.seed))
     player, judge = init_player(k_player, hidden, depth), init_judge(k_judge, hidden, depth)
+    if config.start:
+        player, judge = start_of(Path(config.start), hidden, depth, judge)
     per_epoch = max(1, len(train) // config.batch)
     schedule = optax.cosine_decay_schedule(
         config.lr, per_epoch * config.epochs, alpha=config.lr_end / config.lr
@@ -435,6 +451,30 @@ def copy_size(
     log = (folder / "log.jsonl").open("w")
     kept: dict[str, Any] = {}
     judge_kept: dict[str, Any] = {}
+
+    def held_out(player: Net, judge: Net) -> dict[str, float]:
+        sums: dict[str, float] = {}
+        for k in range(0, len(held), config.batch):
+            batch_sums = jax.device_get(
+                scores(player, judge, batch_of(data, held[k : k + config.batch]), blind)
+            )
+            for key, value in batch_sums.items():
+                sums[key] = sums.get(key, 0.0) + float(value)
+        return held_out_scores(sums)
+
+    if config.start:  # the start, scored as it is: kept unless an epoch beats it
+        held_scores = held_out(player, judge)
+        kept = {"epoch": 0, "seconds": 0.0, "train": {}, "held_out": held_scores}
+        judge_kept = {"epoch": 0, "judge_mse": held_scores["judge_mse"]}
+        meta = {"size": size, "epoch": 0, "config": dataclasses.asdict(config)}
+        save_player(folder / "player.npz", player, meta)
+        save_judge(folder / "judge.npz", judge, meta)
+        log.write(json.dumps(kept) + "\n")
+        _say(
+            f"[copy {size}] the start: top card loses {held_scores['card_lose1']:.2f} "
+            f"(best of top 3 {held_scores['card_lose3']:.2f}), best {held_scores['card_best']:.0%} "
+            f"| judge {held_scores['judge_mse']:.3f}"
+        )
     for epoch in range(1, config.epochs + 1):
         started = time.time()
         order = rng.permutation(train)
@@ -445,14 +485,7 @@ def copy_size(
             infos.append(info)
         fetched = jax.device_get(infos)
         losses = {key: float(np.mean([i[key] for i in fetched])) for key in fetched[0]}
-        sums: dict[str, float] = {}
-        for k in range(0, len(held), config.batch):
-            batch_sums = jax.device_get(
-                scores(player, judge, batch_of(data, held[k : k + config.batch]), blind)
-            )
-            for key, value in batch_sums.items():
-                sums[key] = sums.get(key, 0.0) + float(value)
-        held_scores = held_out_scores(sums)
+        held_scores = held_out(player, judge)
         row = {
             "epoch": epoch,
             "seconds": round(time.time() - started, 1),
@@ -482,12 +515,35 @@ def copy_size(
     return result
 
 
+def start_of(folder: Path, hidden: int, depth: int, judge: Net) -> tuple[Net, Net]:
+    """The player saved in ``folder`` (and its judge, when there is one, else ``judge``),
+    checked to be the size being trained."""
+    player, _ = load_player(folder / "player.npz")
+    widths = [layer["w"].shape[1] for layer in player["body"]]
+    if widths != [hidden] * depth:
+        raise ValueError(f"{folder}/player.npz is {widths}, not {depth} layers of {hidden}")
+    if (folder / "judge.npz").exists():
+        judge, _ = load_judge(folder / "judge.npz")
+    return player, judge
+
+
+def subsample(data: Shard, rows: np.ndarray, share: float, seed: int) -> np.ndarray:
+    """``rows`` of a random ``share`` of their Bolas."""
+    if share >= 1:
+        return rows
+    bolas = np.unique(data["bola"][rows])
+    count = max(1, round(share * len(bolas)))
+    kept = np.random.default_rng(seed + 1).choice(bolas, size=count, replace=False)
+    return rows[np.isin(data["bola"][rows], kept)]
+
+
 def run(config: CopyConfig, out: Path) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(dataclasses.asdict(config), indent=2) + "\n")
     _say(f"[copy] device {jax.devices()[0]}; loading {config.data}")
     data = load_data(Path(config.data))
     train, held = split(data, config.held_out, config.seed)
+    train = subsample(data, train, config.train_share, config.seed)
     _say(f"[copy] {len(train):,} training rows, {len(held):,} held out")
     results = [copy_size(config, data, train, held, size, out) for size in config.sizes]
     summary = {"rows": {"train": len(train), "held_out": len(held)}, "sizes": results}
