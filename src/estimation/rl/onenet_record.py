@@ -1,15 +1,18 @@
-"""Hybrid v4's games for step 5's one-net copy (``docs/rl/hybrid-iteration-plan.md``).
+"""Recorded games for step 5's one net (``docs/rl/hybrid-iteration-plan.md``): Hybrid v4's for the
+copy, and the one net's own search's for learning from the search (expert iteration).
 
     uv run python -m estimation.rl.onenet_record run --config configs/onenet-record.toml \
         --out runs/onenet/record
     uv run python -m estimation.rl.onenet_record watch runs/onenet/record
     uv run python -m estimation.rl.onenet_record time --config configs/onenet-record.toml
 
-Hybrid v4 (``player``) plays whole Bolas in all four seats. At a share of its card decisions with
-a choice (``label_share``) the teacher, the same Hybrid searching deeper (``teacher_samples``
-deals, every legal card), values every legal card and plays its best one, as in step 2. At every
-Dash Call, bid, With, Pass, estimate and super call with a choice, BiddingNet's value of each legal
-option is kept: Hybrid v4 bids by it.
+A Hybrid (``player``: Hybrid v4, or the one net inside the search, ``onenet``) plays whole Bolas
+in all four seats. At a share of its card decisions with a choice (``label_share``) the teacher,
+the same bot searching deeper (``teacher_samples`` deals, every legal card), values every legal
+card and plays its best one, as in step 2. At every Dash Call, bid, With, Pass, estimate and super
+call with a choice, a plain Hybrid's BiddingNet values of each legal option are kept, since it
+bids by them; the one net bids by its own move chances, so its bids keep no values (the replay
+still has the bid it made).
 
 A record is compact: each Bola's seed and every action played, so the engine replays any position
 exactly (the raw view, the real hands, tricks, round scores and final places all come from the
@@ -43,9 +46,7 @@ from estimation.engine.actions import PLAY_BASE
 from estimation.engine.config import DEFAULT_CONFIG
 
 from .config import ONENET_STAGE, derive_seed, section_from
-from .encoder import encode
 from .expert import teach
-from .networks import REWARD_SCALE
 from .train import worker_pool
 
 KIND_BID, KIND_CARD = 0, 1  # whose values a decision keeps: BiddingNet's, or the teacher's
@@ -60,7 +61,7 @@ Arrays = dict[str, npt.NDArray[Any]]
 class RecordConfig:
     """The ``[record]`` section of a recording config."""
 
-    player: str = ""  # the Hybrid that plays every seat, as a bot spec (Hybrid v4)
+    player: str = ""  # the bot that plays every seat, as a hybrid or onenet bot spec
     games: int = 2000  # Bolas recorded
     part_games: int = 25  # Bolas per saved part
     label_share: float = 0.5  # share of card decisions with a choice that the teacher values
@@ -69,8 +70,8 @@ class RecordConfig:
     workers: int = 5
 
     def __post_init__(self) -> None:
-        if not self.player.startswith("hybrid"):
-            raise ValueError("record.player must be a Hybrid bot spec, such as Hybrid v4's")
+        if self.player.split(":")[0] not in ("hybrid", "onenet"):
+            raise ValueError("record.player must be a Hybrid bot spec (hybrid or onenet)")
         if self.games < 1 or self.part_games < 1 or self.workers < 1:
             raise ValueError("record.games, part_games and workers must be at least 1")
         if not 0.0 <= self.label_share <= 1.0:
@@ -89,7 +90,7 @@ def config_of(data: dict[str, Any]) -> RecordConfig:
         raise ValueError("a recording config needs a [record] section")
     values = cast(dict[str, Any], section)
     if "player" not in values:
-        raise ValueError("record.player must name the Hybrid that plays (a bot spec)")
+        raise ValueError("record.player must name the bot that plays (a bot spec)")
     return section_from(RecordConfig(player=str(values["player"])), values, "record")
 
 
@@ -105,16 +106,18 @@ def _say(text: str) -> None:
 
 
 def bots(config: RecordConfig, game: int) -> tuple[list[HybridBot], list[HybridBot]]:
-    """Each seat's playing Hybrid and teacher for Bola ``game``, seeded from the game."""
+    """Each seat's player and teacher (the same bot with ``teacher_samples`` deals, searching
+    every card) for Bola ``game``, seeded from the game."""
+    deeper = f"{config.player}:samples={config.teacher_samples}:top_k=0"
     players: list[HybridBot] = []
     teachers: list[HybridBot] = []
     for seat in range(4):
         player = make_bot(config.player, derive_seed(config.seed, ONENET_STAGE, game, 1 + seat))
-        if not isinstance(player, HybridBot):
+        teacher = make_bot(deeper, derive_seed(config.seed, ONENET_STAGE, game, 5 + seat))
+        if not isinstance(player, HybridBot) or not isinstance(teacher, HybridBot):
             raise ValueError(f"record.player {config.player!r} is not a plain Hybrid")
-        deeper = dataclasses.replace(player.config, samples=config.teacher_samples, top_k=0)
         players.append(player)
-        teachers.append(HybridBot(derive_seed(config.seed, ONENET_STAGE, game, 5 + seat), deeper))
+        teachers.append(teacher)
     return players, teachers
 
 
@@ -138,7 +141,7 @@ class GameRecord:
 
 
 def record_game(config: RecordConfig, game: int) -> GameRecord:
-    """Play Bola ``game`` with the config's Hybrid in every seat and record it."""
+    """Play Bola ``game`` with the config's player in every seat and record it."""
     bola = Bola(derive_seed(config.seed, ONENET_STAGE, game, _DEAL), DEFAULT_CONFIG)
     players, teachers = bots(config, game)
     labels = random.Random(derive_seed(config.seed, ONENET_STAGE, game, _LABELS))
@@ -168,14 +171,14 @@ def _decide(
     record: GameRecord,
 ) -> int:
     """The action played at a decision with a choice, keeping its values when it has some."""
-    features = encode(obs, DEFAULT_CONFIG)
     if obs.phase is not Phase.PLAY:
-        values = player.policy.bid_values(features[np.newaxis])[0] * REWARD_SCALE
-        record.keep(KIND_BID, [float(values[a]) for a in legal])
+        points = player.bid_points(obs, legal)
+        if points is not None:
+            record.keep(KIND_BID, points)
         return player.act(obs, legal)
     if labels.random() < config.label_share:
         cards = [a - PLAY_BASE for a in legal]
-        taught = teach(teacher, features, obs, cards)
+        taught = teach(teacher, obs, cards)
         if taught is not None:
             choice, card_values = taught
             record.keep(KIND_CARD, [float(card_values[c]) for c in cards])
@@ -413,7 +416,7 @@ def time_run(config: RecordConfig, games: int) -> dict[str, float]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m estimation.rl.onenet_record",
-        description="Record Hybrid v4's games for step 5's one-net copy.",
+        description="Record a Hybrid's games (Hybrid v4's, or the one net's) for step 5.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     run_cmd = commands.add_parser("run", help="record (or resume) a config's Bolas")

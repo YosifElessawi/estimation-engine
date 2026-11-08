@@ -174,10 +174,21 @@ class HybridBot:
                 search = self.search_bids(obs, legal, [float(values[a]) for a in legal])
                 return search.actions[best_index(search.means)]
             return max(legal, key=lambda action: values[action])
-        advantage = self.policy.card_values(x)[0]
         cards = [action - PLAY_BASE for action in legal]
-        search = self.search(obs, cards, [float(advantage[c]) for c in cards])
+        search = self.search(obs, cards, self.card_advantages(obs, cards))
         return play_action(search.cards[best_index(search.means)])
+
+    def card_advantages(self, obs: Observation, cards: list[int]) -> list[float]:
+        """CardPlayNet's advantage of each of the legal ``cards``, which orders them for the
+        search."""
+        advantage = self.policy.card_values(encode(obs, self.config.rules)[np.newaxis])[0]
+        return [float(advantage[c]) for c in cards]
+
+    def bid_points(self, obs: Observation, legal: list[int]) -> list[float] | None:
+        """BiddingNet's value in points of each ``legal`` bidding action, which this Hybrid bids
+        by; None for a bot that bids by something else."""
+        values = self.policy.bid_values(encode(obs, self.config.rules)[np.newaxis])[0]
+        return [float(values[a] * REWARD_SCALE) for a in legal]
 
     def search(self, obs: Observation, cards: list[int], advantages: list[float]) -> CardSearch:
         """Search the legal ``cards`` (CardPlayNet's ``advantages`` of each, to order them)."""
