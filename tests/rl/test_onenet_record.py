@@ -72,13 +72,18 @@ def test_the_committed_config_records_hybrid_v4_with_a_deeper_teacher():
     assert config.games == 2000
 
 
-def test_the_committed_expert_config_records_the_one_nets_own_search():
-    config = load_config(ROOT / "configs" / "onenet-expert-1.toml")
-    assert config.player.startswith("onenet:")
-    assert ":own=true:" in config.player
-    assert config.teacher_samples > 32  # deeper than the player's own 32 deals
-    assert config.label_share == 0.5
-    assert config.seed != load_config(ROOT / "configs" / "onenet-record.toml").seed
+def test_the_committed_expert_configs_record_the_one_nets_own_search():
+    first = load_config(ROOT / "configs" / "onenet-expert-1.toml")
+    second = load_config(ROOT / "configs" / "onenet-expert-2.toml")
+    for config in (first, second):
+        assert config.player.startswith("onenet:")
+        assert ":own=true:" in config.player
+        assert config.teacher_samples > 32  # deeper than the player's own 32 deals
+        assert config.label_share == 0.5
+    assert second.player == first.player
+    assert (second.teacher_samples, second.games) == (256, 5000)  # round 2 (Yosif, 2026-11-10)
+    seeds = {load_config(ROOT / "configs" / "onenet-record.toml").seed, first.seed, second.seed}
+    assert len(seeds) == 3  # fresh deals every recording
 
 
 @pytest.mark.parametrize(

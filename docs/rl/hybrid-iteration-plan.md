@@ -571,4 +571,13 @@ Not kept. The night plan's gates held: no self-play from a learned player and no
 loop 4,000 player in its own search, with no Hybrid v4 net at all, stays even with Hybrid v4 over
 the full 100 sets.
 
+**How much perfect guesses would give (2026-11-10, a cheat test).** Hybrid v4 whose search plays
+out the real hidden hands, against plain Hybrid v4, 40 duplicate sets on the check-ups' deals
+(seed 2040, 4 workers on the Mac, 14 min): place +0.094 (+0.028 to +0.159), King 31.2% against
+18.8%, +16.0 points a game (+4.3 to +27.7), 24 of 40 sets. A search that knew every hidden card
+would gain only about 16 points a game, so better guesses are a small lever; the larger one is
+which cards are searched and how the play-outs play. The bot is test-only: it reads the engine's
+real hands, which no real bot may see. Its script is kept with its report, outside the repo, in
+the main checkout's git-ignored `runs/cheat-test/` (`cheat_test.py`, `cheat.json`).
+
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

@@ -1,0 +1,14 @@
+# Step 5 of docs/rl/hybrid-iteration-plan.md, learning from the search (expert iteration), round 2:
+# the loop 4,000 player inside its own search (its own guesses, round points) plays every seat.
+#
+#   uv run python -m estimation.rl.onenet_record run --config configs/onenet-expert-2.toml --out runs/onenet/expert-2/record
+#   uv run python -m estimation.rl.onenet_record watch runs/onenet/expert-2/record
+
+[record]
+player = "onenet:net=runs/onenet/selfplay/snapshots/player-04000.npz:own=true:judge=round:top_k=2:samples=32"
+games = 5000         # round 1 had 2,000: half of them learned clearly less
+part_games = 25
+label_share = 0.5      # the teacher values every card at half the card decisions, as in step 2
+teacher_samples = 256  # the teacher: the same search with 256 deals and every card (round 1: 64)
+seed = 20261110        # fresh deals, not round 1's or the Hybrid v4 recording's
+workers = 5
