@@ -149,7 +149,10 @@ class Pending:
 class Recorder:
     """Plays a recording config's Bolas ``batch`` at a time, the searches on the GPU."""
 
-    def __init__(self, config: RecordConfig, gpu: GpuSettings = DEFAULT_GPU) -> None:
+    def __init__(
+        self, config: RecordConfig, gpu: GpuSettings = DEFAULT_GPU, report_every: int = 200
+    ) -> None:
+        self.report_every = report_every
         net, hybrid = player_of(config)
         self.config = config
         self.gpu = gpu
@@ -168,7 +171,7 @@ class Recorder:
         self._evaluate = jax.jit(partial(G.evaluate, player), static_argnums=5)
         self._gather = jax.jit(_gather)
         self._restart = jax.jit(_restart)
-        self.clock = Clock()
+        self.clock = Clock(report_every)
 
     def play(self, games: list[int], done: Callable[[int, GameRecord], None]) -> None:
         """Play Bolas ``games`` to the end, calling ``done`` with each finished one."""
@@ -179,7 +182,7 @@ class Recorder:
         g = self._new(jnp.asarray(hands))
         templates = jnp.zeros((b, self.gpu.history, SIZE), jnp.float32)
         key = jax.random.PRNGKey(derive_seed(self.config.seed, ONENET_STAGE, _SEARCH, games[0]))
-        clock = self.clock = Clock()
+        clock = self.clock = Clock(self.report_every)
         while any(slot is not None for slot in slots):
             clock.tick("advance")
             logits = np.asarray(self._views(g))
@@ -428,7 +431,9 @@ def _gather(g: JG.Game, templates: jax.Array, idx: jax.Array) -> tuple[Any, jax.
 # The run.
 
 
-def run(config: RecordConfig, out: Path, gpu: GpuSettings = DEFAULT_GPU) -> dict[str, Any]:
+def run(
+    config: RecordConfig, out: Path, gpu: GpuSettings = DEFAULT_GPU, report_every: int = 200
+) -> dict[str, Any]:
     """Record every missing part into ``out/parts``, as the CPU recorder does; return the
     recording's summary."""
     check_run(config, out)
@@ -476,7 +481,7 @@ def run(config: RecordConfig, out: Path, gpu: GpuSettings = DEFAULT_GPU) -> dict
                 flush=True,
             )
 
-        Recorder(config, gpu).play(games, done)
+        Recorder(config, gpu, report_every).play(games, done)
         if finished:
             raise RuntimeError(f"{len(finished)} finished Bolas were never saved in a part")
         write_progress(out, {**progress, "done": state["done"], "finished": time.time()})
@@ -485,13 +490,15 @@ def run(config: RecordConfig, out: Path, gpu: GpuSettings = DEFAULT_GPU) -> dict
     return summary
 
 
-def time_run(config: RecordConfig, games: int, gpu: GpuSettings) -> dict[str, float]:
+def time_run(
+    config: RecordConfig, games: int, gpu: GpuSettings, report_every: int = 200
+) -> dict[str, float]:
     """Record ``games`` Bolas into a scratch folder: the wall time, and the hours the config's
     whole recording would take at that pace."""
     trial = dataclasses.replace(config, games=games, part_games=games)
     with tempfile.TemporaryDirectory() as folder:
         start = time.perf_counter()
-        summary = run(trial, Path(folder), gpu)
+        summary = run(trial, Path(folder), gpu, report_every)
         seconds = time.perf_counter() - start
     return {
         "seconds": seconds,
@@ -511,6 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cmd = commands.add_parser(name, help=text)
         cmd.add_argument("--config", type=Path, required=True, help="TOML recording config")
         cmd.add_argument("--batch", type=int, default=GpuSettings.batch, help="Bolas at once")
+        cmd.add_argument("--report-every", type=int, default=200, help="steps between reports")
         if name == "run":
             cmd.add_argument("--out", type=Path, required=True, help="the recording's folder")
         else:
@@ -526,7 +534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
     print(f"[gpu-record] JAX devices: {jax.devices()}", file=sys.stderr, flush=True)
     if args.command == "time":
-        timing = time_run(config, args.games, gpu)
+        timing = time_run(config, args.games, gpu, args.report_every)
         print(
             f"{args.games} Bolas, {gpu.batch} at once, in {timing['seconds'] / 60:.1f} min: "
             f"{config.games} Bolas in about {timing['hours']:.1f} h. Per Bola: "
@@ -534,7 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "teacher-valued cards kept"
         )
         return 0
-    print(json.dumps(run(config, args.out, gpu)))
+    print(json.dumps(run(config, args.out, gpu, args.report_every)))
     return 0
 
 
