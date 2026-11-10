@@ -33,6 +33,7 @@ from estimation.rl.onenet_record import (
     replay,
     run,
     save_part,
+    summarize,
 )
 from estimation.rl.onenet_watch import render
 from tests.onenet.test_search import random_net
@@ -54,6 +55,13 @@ def tiny(checkpoint: Path, **changes: Any) -> RecordConfig:
     return RecordConfig(**{**settings, **changes})
 
 
+def recorded(task: PartTask) -> Arrays:
+    """``record_part`` of a part not saved yet."""
+    arrays = record_part(task)
+    assert arrays is not None
+    return arrays
+
+
 @pytest.fixture(scope="module")
 def checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return make_checkpoint(tmp_path_factory.mktemp("nets") / "net.pt", seed=3, guess=True)
@@ -61,7 +69,7 @@ def checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def part(checkpoint: Path) -> Arrays:
-    return record_part(PartTask(0, 2, tiny(checkpoint)))
+    return recorded(PartTask(0, 2, tiny(checkpoint)))
 
 
 def test_the_committed_config_records_hybrid_v4_with_a_deeper_teacher():
@@ -144,11 +152,11 @@ def test_the_one_nets_search_records_with_a_deeper_teacher_and_no_bid_values(tmp
         assert teacher.own
         assert (player.config.top_k, player.config.samples) == (2, 2)
         assert (teacher.config.top_k, teacher.config.samples) == (0, 3)  # every card, deeper
-    recorded = record_part(PartTask(0, 1, config))
-    assert replay(recorded, 0).scores == tuple(recorded["scores"][0].tolist())
-    assert not (recorded["kind"] == KIND_BID).any()  # it bids by its own move chances
+    one = recorded(PartTask(0, 1, config))
+    assert replay(one, 0).scores == tuple(one["scores"][0].tolist())
+    assert not (one["kind"] == KIND_BID).any()  # it bids by its own move chances
     cards = 0
-    for decision in decisions(recorded):
+    for decision in decisions(one):
         cards += 1
         assert decision.kind == KIND_CARD
         assert decision.bola.observation(decision.seat).phase is Phase.PLAY
@@ -192,6 +200,41 @@ def test_a_run_saves_parts_resumes_and_refuses_another_config(
     assert saved.stat().st_mtime_ns == stamp
     with pytest.raises(SystemExit, match="different config"):
         run(dataclasses.replace(config, label_share=0.25), out)
+
+
+def test_two_machines_share_a_recording_one_up_one_down(
+    checkpoint: Path, part: Arrays, tmp_path: Path
+):
+    """Three one-Bola parts: the other machine (going down) has saved the last; this one goes up
+    and skips it, keeping the copy as it came. Before that, a run that has not got the last part
+    yet reports it missing."""
+    config = tiny(checkpoint, games=3, part_games=1)
+    out = tmp_path / "record"
+    (out / "parts").mkdir(parents=True)
+    theirs = out / "parts" / "part-00002.npz"
+    save_part(theirs, dict(part))  # stands for the other machine's part, copied in
+    stamp = theirs.stat().st_mtime_ns
+    summary = run(config, out, "up")
+    assert summary["missing_parts"] == 0
+    assert theirs.stat().st_mtime_ns == stamp  # never re-recorded or overwritten
+    assert sorted(p.name for p in (out / "parts").iterdir()) == [
+        "part-00000.npz",
+        "part-00001.npz",
+        "part-00002.npz",
+    ]
+    assert load_part(out / "parts" / "part-00000.npz")["game"].tolist() == [0]
+    assert load_part(out / "parts" / "part-00001.npz")["game"].tolist() == [1]
+    theirs.unlink()
+    assert summarize(out, config)["missing_parts"] == 1
+    with pytest.raises(ValueError, match="order must be"):
+        run(config, out, "sideways")
+
+
+def test_a_part_saved_before_its_turn_is_skipped(checkpoint: Path, tmp_path: Path):
+    saved = tmp_path / "part-00000.npz"
+    saved.write_bytes(b"")
+    task = PartTask(0, 1, tiny(checkpoint), saved=str(saved))
+    assert record_part(task) is None
 
 
 def watched(part: Arrays, tmp_path: Path, progress: dict[str, Any], player: str = "hybrid") -> str:

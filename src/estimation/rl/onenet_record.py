@@ -287,16 +287,20 @@ def decisions(part: Arrays) -> Iterator[Decision]:
 @dataclass(frozen=True, slots=True)
 class PartTask:
     """Bolas ``first`` to ``first + count - 1``; ``progress`` is a file the part keeps its
-    finished Bola count in, for ``watch``."""
+    finished Bola count in, for ``watch``; ``saved`` is the part's file, so a part another
+    machine saved there before this one started is skipped."""
 
     first: int
     count: int
     config: RecordConfig
     progress: str = ""
+    saved: str = ""
 
 
-def record_part(task: PartTask) -> Arrays:
-    """Every Bola of ``task``, in order, as one part's arrays."""
+def record_part(task: PartTask) -> Arrays | None:
+    """Every Bola of ``task``, in order, as one part's arrays; None when it is already saved."""
+    if task.saved and Path(task.saved).exists():
+        return None
     records: list[tuple[int, GameRecord]] = []
     for done, game in enumerate(range(task.first, task.first + task.count), 1):
         records.append((game, record_game(task.config, game)))
@@ -335,40 +339,68 @@ def check_run(config: RecordConfig, out: Path) -> None:
     path.write_text(json.dumps(wanted, indent=2) + "\n")
 
 
-def run(config: RecordConfig, out: Path) -> dict[str, Any]:
-    """Record every missing part into ``out/parts``; return the recording's summary."""
+UP, DOWN = "up", "down"  # the order a run records its parts in: from the first or the last
+
+
+def saved_bolas(config: RecordConfig, out: Path) -> int:
+    """Bolas in the parts saved in ``out`` so far, by this machine or copied from another."""
+    return sum(count for first, count in part_starts(config) if part_path(out, first).exists())
+
+
+def run(config: RecordConfig, out: Path, order: str = UP) -> dict[str, Any]:
+    """Record every missing part into ``out/parts``, from the first part up or from the last
+    down; return the recording's summary. Two machines can share a recording: one records up,
+    the other down, and the parts each saves are copied to the other (``rsync
+    --ignore-existing``). A part that arrives before this run starts it is skipped, and one that
+    arrives while it is recorded here is kept as it came, so the two never overwrite each other.
+    The run ends when its own list is done; the summary counts the parts saved so far."""
+    if order not in (UP, DOWN):
+        raise ValueError(f"order must be {UP} or {DOWN}, not {order!r}")
     check_run(config, out)
     (out / "parts").mkdir(exist_ok=True)
     parts = part_starts(config)
     missing = [(first, count) for first, count in parts if not part_path(out, first).exists()]
+    if order == DOWN:
+        missing.reverse()
     if missing:
         done = config.games - sum(count for _, count in missing)
         progress = {"games": config.games, "resumed_at": done, "started": time.time()}
         write_progress(out, {**progress, "done": done})
         _say(f"{len(missing)} of {len(parts)} parts to record on {config.workers} workers")
         start = time.perf_counter()
+        mine = 0
         with worker_pool(config.workers) as pool:
             futures = {
                 pool.submit(
                     record_part,
-                    PartTask(first, count, config, str(out / "parts" / f"part-{first:05d}.games")),
+                    PartTask(
+                        first,
+                        count,
+                        config,
+                        str(out / "parts" / f"part-{first:05d}.games"),
+                        str(part_path(out, first)),
+                    ),
                 ): first
                 for first, count in missing
             }
             for future in as_completed(futures):
                 first = futures[future]
                 arrays = future.result()
-                save_part(part_path(out, first), arrays)
                 (out / "parts" / f"part-{first:05d}.games").unlink(missing_ok=True)
-                done += len(arrays["game"])
+                if arrays is not None and not part_path(out, first).exists():
+                    save_part(part_path(out, first), arrays)
+                    mine += len(arrays["game"])
+                done = saved_bolas(config, out)
                 write_progress(out, {**progress, "done": done})
+                if not mine:
+                    continue
                 elapsed = time.perf_counter() - start
-                left = elapsed / (done - progress["resumed_at"]) * (config.games - done)
+                left = elapsed / mine * (config.games - done)
                 _say(
-                    f"{done}/{config.games} Bolas, {elapsed / 60:.1f} min, "
-                    f"about {left / 60:.1f} min left"
+                    f"{done}/{config.games} Bolas ({mine} here), {elapsed / 60:.1f} min, "
+                    f"about {left / 60:.1f} min left at this machine's pace"
                 )
-        write_progress(out, {**progress, "done": done, "finished": time.time()})
+        write_progress(out, {**progress, "done": saved_bolas(config, out), "finished": time.time()})
     summary = summarize(out, config)
     (out / SUMMARY).write_text(json.dumps(summary, indent=2) + "\n")
     return summary
@@ -388,9 +420,15 @@ def part_counts(path: Path) -> dict[str, int]:
 
 
 def summarize(out: Path, config: RecordConfig) -> dict[str, Any]:
-    totals = {"bolas": 0, "actions": 0, "bids": 0, "cards": 0}
+    """Totals over the saved parts, and how many parts are still missing (``missing_parts``,
+    0 for a whole recording)."""
+    totals = {"bolas": 0, "actions": 0, "bids": 0, "cards": 0, "missing_parts": 0}
     for first, _ in part_starts(config):
-        for key, value in part_counts(part_path(out, first)).items():
+        path = part_path(out, first)
+        if not path.exists():
+            totals["missing_parts"] += 1
+            continue
+        for key, value in part_counts(path).items():
             totals[key] += value
     return totals
 
@@ -422,6 +460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd = commands.add_parser("run", help="record (or resume) a config's Bolas")
     run_cmd.add_argument("--config", type=Path, required=True, help="TOML recording config")
     run_cmd.add_argument("--out", type=Path, required=True, help="the recording's folder")
+    run_cmd.add_argument(
+        "--order", choices=(UP, DOWN), default=UP, help="record from the first part or the last"
+    )
     time_cmd = commands.add_parser("time", help="time a few Bolas on the config's workers")
     time_cmd.add_argument("--config", type=Path, required=True, help="TOML recording config")
     time_cmd.add_argument("--games", type=int, default=10, help="Bolas to time")
@@ -446,7 +487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{timing['cards_per_bola']:.0f} teacher-valued cards kept"
         )
         return 0
-    print(json.dumps(run(config, args.out)))
+    print(json.dumps(run(config, args.out, args.order)))
     return 0
 
 

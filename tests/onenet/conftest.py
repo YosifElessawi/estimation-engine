@@ -29,7 +29,9 @@ def record(tmp_path_factory: pytest.TempPathFactory) -> Path:
         workers=1,
     )
     (folder / "parts").mkdir()
-    save_part(part_path(folder, 0), record_part(PartTask(0, BOLAS, config)))
+    arrays = record_part(PartTask(0, BOLAS, config))
+    assert arrays is not None  # nothing saved yet, so the part is recorded
+    save_part(part_path(folder, 0), arrays)
     (folder / "config.json").write_text(json.dumps(dataclasses.asdict(config)))
     return folder
 
