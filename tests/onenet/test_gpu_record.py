@@ -1,5 +1,6 @@
 """Step 5's recorder with the search on the GPU: the same records as the CPU recorder's."""
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from estimation.rl.onenet_record import (
     load_part,
     part_path,
     replay,
+    save_part,
 )
 from tests.onenet.test_search import random_net
 
@@ -103,3 +105,25 @@ def test_only_the_one_nets_own_search_is_recorded(tmp_path: Path):
     assert player_of(tiny(net))[0] == net
     with pytest.raises(ValueError, match="own=true and judge=round"):
         player_of(tiny(net, player=f"onenet:net={net}:own=true:judge=king"))
+
+
+def test_a_shared_recording_skips_the_parts_the_other_machine_saved(
+    recorded: tuple[RecordConfig, Path, Arrays], tmp_path: Path
+):
+    """Three one-Bola parts going down: the last is already there (the other machine's copy,
+    kept as it came), so this machine records the other two, last first, and the summary has
+    every part."""
+    config, _, part = recorded
+    three = dataclasses.replace(config, games=3, part_games=1)
+    out = tmp_path / "shared"
+    (out / "parts").mkdir(parents=True)
+    theirs = part_path(out, 2)
+    save_part(theirs, part)
+    stamp = theirs.stat().st_mtime_ns
+    summary = run(three, out, GPU, order="down")
+    assert summary["missing_parts"] == 0
+    assert theirs.stat().st_mtime_ns == stamp
+    assert load_part(part_path(out, 0))["game"].tolist() == [0]
+    assert load_part(part_path(out, 1))["game"].tolist() == [1]
+    with pytest.raises(ValueError, match="order must be"):
+        run(three, out, GPU, order="sideways")

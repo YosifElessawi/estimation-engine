@@ -48,8 +48,10 @@ from estimation.jaxenv.check import bits
 from estimation.jaxenv.encode import SIZE, encode
 from estimation.rl.config import ONENET_STAGE, derive_seed
 from estimation.rl.onenet_record import (
+    DOWN,
     KIND_CARD,
     SUMMARY,
+    UP,
     GameRecord,
     RecordConfig,
     check_run,
@@ -58,6 +60,7 @@ from estimation.rl.onenet_record import (
     part_path,
     part_starts,
     save_part,
+    saved_bolas,
     summarize,
     write_progress,
 )
@@ -171,13 +174,28 @@ class Recorder:
         self._evaluate = jax.jit(partial(G.evaluate, player), static_argnums=5)
         self._gather = jax.jit(_gather)
         self._restart = jax.jit(_restart)
+        self._queue: list[int] = []
+        self._skip: Callable[[int], bool] = lambda _: False
         self.clock = Clock(report_every)
 
-    def play(self, games: list[int], done: Callable[[int, GameRecord], None]) -> None:
-        """Play Bolas ``games`` to the end, calling ``done`` with each finished one."""
-        queue = list(reversed(games))
-        b = min(self.gpu.batch, len(games))
-        slots: list[Slot | None] = [self._start(queue.pop()) for _ in range(b)]
+    def play(
+        self,
+        games: list[int],
+        done: Callable[[int, GameRecord], None],
+        skip: Callable[[int], bool] = lambda _: False,
+    ) -> None:
+        """Play Bolas ``games`` to the end, in order, calling ``done`` with each finished one;
+        a Bola for which ``skip`` says yes when its turn comes is not played (its part has been
+        saved by another machine)."""
+        self._queue = list(reversed(games))
+        self._skip = skip
+        first: list[Slot] = []
+        while len(first) < self.gpu.batch and (slot := self._next()) is not None:
+            first.append(slot)
+        if not first:
+            return
+        b = len(first)
+        slots: list[Slot | None] = list(first)
         hands = np.stack([bits(s.bola.round.hands) for s in slots if s is not None])
         g = self._new(jnp.asarray(hands))
         templates = jnp.zeros((b, self.gpu.history, SIZE), jnp.float32)
@@ -244,8 +262,16 @@ class Recorder:
                     clock.count["teacher cards" if teacher else "player cards"] += sum(
                         len(p.searched) for p in group
                     )
-            g = self._advance(g, slots, actions, queue, done)
+            g = self._advance(g, slots, actions, done)
             clock.step(sum(slot is not None for slot in slots))
+
+    def _next(self) -> Slot | None:
+        """The next Bola of the queue not to skip, started; None when there is none."""
+        while self._queue:
+            game = self._queue.pop()
+            if not self._skip(game):
+                return self._start(game)
+        return None
 
     def _start(self, game: int) -> Slot:
         config = self.config
@@ -335,7 +361,6 @@ class Recorder:
         g: JG.Game,
         slots: list[Slot | None],
         actions: npt.NDArray[np.int32],
-        queue: list[int],
         done: Callable[[int, GameRecord], None],
     ) -> JG.Game:
         """Play every live Bola's action in the engine and in JAX; start the next round's JAX
@@ -358,11 +383,9 @@ class Recorder:
             if bola.is_over:
                 slot.record.scores = bola.scores
                 done(slot.game, slot.record)
-                if queue:
-                    slots[i] = self._start(queue.pop())
+                slots[i] = self._next()
+                if slots[i] is not None:
                     restart.append(i)
-                else:
-                    slots[i] = None
         g = self._step(g, jnp.asarray(actions), jnp.asarray(nxt))
         if restart:
             b = len(slots)
@@ -432,10 +455,18 @@ def _gather(g: JG.Game, templates: jax.Array, idx: jax.Array) -> tuple[Any, jax.
 
 
 def run(
-    config: RecordConfig, out: Path, gpu: GpuSettings = DEFAULT_GPU, report_every: int = 200
+    config: RecordConfig,
+    out: Path,
+    gpu: GpuSettings = DEFAULT_GPU,
+    report_every: int = 200,
+    order: str = UP,
 ) -> dict[str, Any]:
-    """Record every missing part into ``out/parts``, as the CPU recorder does; return the
-    recording's summary."""
+    """Record every missing part into ``out/parts``, from the first part up or the last down,
+    as the CPU recorder does, sharing a recording with another machine the same way: a part
+    saved there by the other machine is skipped, or, if it arrives while this one records it,
+    kept as it came. Returns the recording's summary."""
+    if order not in (UP, DOWN):
+        raise ValueError(f"order must be {UP} or {DOWN}, not {order!r}")
     check_run(config, out)
     gpu_path = out / "gpu.json"
     wanted = dataclasses.asdict(gpu)
@@ -445,6 +476,8 @@ def run(
     parts_dir = out / "parts"
     parts_dir.mkdir(exist_ok=True)
     missing = [(first, n) for first, n in part_starts(config) if not part_path(out, first).exists()]
+    if order == DOWN:
+        missing.reverse()
     if missing:
         games = [game for first, n in missing for game in range(first, first + n)]
         part_of = {game: first for first, n in missing for game in range(first, first + n)}
@@ -454,37 +487,47 @@ def run(
         progress: dict[str, float] = {"games": config.games}
         progress["resumed_at"] = config.games - len(games)
         progress["started"] = time.time()
-        state = {"done": progress["resumed_at"]}
+        state = {"done": progress["resumed_at"], "mine": 0}
         write_progress(out, {**progress, "done": state["done"]})
         start = time.perf_counter()
 
+        def saved(game: int) -> bool:
+            return part_path(out, part_of[game]).exists()
+
         def done(game: int, record: GameRecord) -> None:
             first = part_of[game]
+            counter = parts_dir / f"part-{first:05d}.games"
+            if part_path(out, first).exists():  # the other machine saved it meanwhile
+                for g in range(first, first + size[first]):
+                    finished.pop(g, None)
+                counter.unlink(missing_ok=True)
+                return
             finished[game] = record
             got[first] += 1
-            counter = parts_dir / f"part-{first:05d}.games"
             if got[first] < size[first]:
                 counter.write_text(f"{got[first]}\n")
                 return
             records = [(g, finished.pop(g)) for g in range(first, first + size[first])]
             save_part(part_path(out, first), part_arrays(records))
             counter.unlink(missing_ok=True)
-            state["done"] += size[first]
+            state["mine"] += size[first]
+            state["done"] = saved_bolas(config, out)
             write_progress(out, {**progress, "done": state["done"]})
             elapsed = time.perf_counter() - start
-            fresh = state["done"] - progress["resumed_at"]
-            left = elapsed / fresh * (config.games - state["done"])
+            left = elapsed / state["mine"] * (config.games - state["done"])
             print(
-                f"[gpu-record] {state['done']}/{config.games} Bolas, {elapsed / 60:.1f} min, "
-                f"about {left / 60:.1f} min left",
+                f"[gpu-record] {state['done']}/{config.games} Bolas ({state['mine']} here), "
+                f"{elapsed / 60:.1f} min, about {left / 60:.1f} min left at this machine's pace",
                 file=sys.stderr,
                 flush=True,
             )
 
-        Recorder(config, gpu, report_every).play(games, done)
-        if finished:
-            raise RuntimeError(f"{len(finished)} finished Bolas were never saved in a part")
-        write_progress(out, {**progress, "done": state["done"], "finished": time.time()})
+        Recorder(config, gpu, report_every).play(games, done, skip=saved)
+        unsaved = [g for g in finished if not saved(g)]
+        if unsaved:
+            raise RuntimeError(f"{len(unsaved)} finished Bolas were never saved in a part")
+        done_now = saved_bolas(config, out)
+        write_progress(out, {**progress, "done": done_now, "finished": time.time()})
     summary = summarize(out, config)
     (out / SUMMARY).write_text(json.dumps(summary, indent=2) + "\n")
     return summary
@@ -520,6 +563,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         cmd.add_argument("--batch", type=int, default=GpuSettings.batch, help="Bolas at once")
         cmd.add_argument("--report-every", type=int, default=200, help="steps between reports")
         if name == "run":
+            cmd.add_argument(
+                "--order", choices=(UP, DOWN), default=UP, help="from the first part or the last"
+            )
+        if name == "run":
             cmd.add_argument("--out", type=Path, required=True, help="the recording's folder")
         else:
             cmd.add_argument("--games", type=int, default=64, help="Bolas to time")
@@ -542,7 +589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "teacher-valued cards kept"
         )
         return 0
-    print(json.dumps(run(config, args.out, gpu, args.report_every)))
+    print(json.dumps(run(config, args.out, gpu, args.report_every, args.order)))
     return 0
 
 
