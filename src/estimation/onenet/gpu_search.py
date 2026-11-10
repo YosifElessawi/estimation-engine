@@ -390,6 +390,9 @@ def evaluate(
     return mine - (result.sum(-1) - mine) / 3.0
 
 
+DEAL_BLOCK = 8192  # imagined deals worked on at once, to bound the bid check's memory
+
+
 def imagine_all(
     player: Player,
     settings: Settings,
@@ -398,11 +401,17 @@ def imagine_all(
     me: jax.Array,
     bidding: Bidding,
 ) -> jax.Array:
-    """``[N, S, 4, 52]``: ``imagine`` for each of a batch of decisions."""
+    """``[N, S, 4, 52]``: ``imagine`` for each of a batch of decisions, a block of decisions at a
+    time so the bid check never holds more than about ``DEAL_BLOCK`` drawn deals."""
     keys = jax.random.split(key, me.shape[0])
-    return jax.vmap(imagine, in_axes=(None, None, 0, 0, 0, 0))(
-        player, settings, keys, rounds, me, bidding
-    )
+    drawn = settings.samples * settings.oversample
+    block = max(1, DEAL_BLOCK // drawn)
+
+    def one(args: tuple[jax.Array, R.Round, jax.Array, Bidding]) -> jax.Array:
+        k, r, m, b = args
+        return imagine(player, settings, k, r, m, b)
+
+    return jax.lax.map(one, (keys, rounds, me, bidding), batch_size=block)
 
 
 def search(
