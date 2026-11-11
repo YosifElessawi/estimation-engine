@@ -571,6 +571,45 @@ Not kept. The night plan's gates held: no self-play from a learned player and no
 loop 4,000 player in its own search, with no Hybrid v4 net at all, stays even with Hybrid v4 over
 the full 100 sets.
 
+**Learning from the search, round 2 (2026-11-10 to 11-11, Yosif: 5,000 Bolas, a 256-deal teacher).**
+The same player and search as round 1, with a teacher four times less noisy (256 deals) and 2.5
+times the Bolas on fresh deals (`configs/onenet-expert-2.toml`, git-ignored
+`runs/onenet/expert-2/`). The Mac (5 workers, from the first part up) and the home server's 1060
+(256 Bolas at once, from the last part down) shared the recording, each saved part copied to the
+other every minute: 5,000 Bolas in 12 h 42 min (the Mac about 3,150, the 1060 about 1,850),
+1,696,390 cards valued by the teacher, every part checked to replay to its scores. The training
+set: 5,059,425 decisions. The player then learned from it as in round 1, starting from itself
+(`configs/onenet-expert-2-learn.toml`, about 18 s a pass on the 1060), 250 Bolas held out:
+
+| Points lost against the teacher's best (250 held-out Bolas) | Top card | Best of top 2 | Best of top 3 |
+|---|---|---|---|
+| The loop 4,000 player | **1.355** | 0.598 | 0.307 |
+| Learned on half the Bolas, 10 passes | 1.50 | | 0.26 |
+| Learned on all of them, 10 passes | 1.41 | | 0.25 |
+| Learned on all of them, 20 passes | 1.369 | **0.519** | **0.247** |
+
+(Standard errors over the held-out Bolas: about 0.016 for the top card, 0.010 for the top 2.) A
+better teacher and more Bolas closed most of round 1's gap: the learned player's first choice is
+now as good as the start's (within noise), and the pair of cards its search looks at is clearly
+better, 13% fewer points lost. Half the Bolas learned clearly less (1.50 against 1.41), so more
+Bolas would still help. Yosif chose to play the 20-pass player at the table although the top card
+did not improve, since its top 2 did:
+
+| Player (against Hybrid v4, seed 2040) | Sets | Sets won | Place | King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| Loop 4,000 in its own search | 100 | 46 | +0.026 | 26.5% | -0.1 (-5.7 to +5.6) |
+| Learned (20 passes) in its own search | 100 | 39 | -0.010 | 22.8% | -4.0 (-10.3 to +2.2) |
+| Loop 4,000 alone | 40 | 4 | -0.169 | 16.2% | -32.3 (-41.2 to -23.4) |
+| Learned (20 passes) alone | 40 | 12 | -0.134 | 17.8% | -28.7 (-39.5 to -18.0) |
+
+Alone, the learned player is a little better on every measure (about 4 points a game, within
+noise, and 12 sets won against 4); in its own search it is a little worse on every measure (about
+4 points a game, within noise). Not kept. The search reads the player for more than its cards: it
+also weighs the imagined deals by the player's chances of the other seats' bids, and the learning
+trained those bids on the player's own (greedy) bids, which sharpens them; a search with the
+learned player's cards but the loop 4,000 player's guesses and bid weights would show whether
+that is what cost the points.
+
 **How much perfect guesses would give (2026-11-10, a cheat test).** Hybrid v4 whose search plays
 out the real hidden hands, against plain Hybrid v4, 40 duplicate sets on the check-ups' deals
 (seed 2040, 4 workers on the Mac, 14 min): place +0.094 (+0.028 to +0.159), King 31.2% against
