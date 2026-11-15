@@ -7,12 +7,15 @@ bidding decisions of recorded games.
 
 The games are a recording of the player inside its own search (``estimation.rl.onenet_record``
 or ``estimation.onenet.gpu_record``: each Bola's seed and moves). The engine replays every Bola
-on the CPU; at ``label_share`` of its bidding decisions with a choice the teacher
-(``estimation.onenet.bid_teacher``) tries the player's options on imagined deals and keeps each
-one's lead over the move the player made (the fields are in ``estimation.onenet.lessons``). One
-lesson part is saved per recording part, so a stopped run resumes where it stopped, and two
-machines share a run as they share a recording: one takes the parts from the first up, the other
-from the last down, and each saved part is copied to the other (``rsync --ignore-existing``).
+on the CPU; at a share of its bidding decisions with a choice (``label_share``: of the Dash
+Calls, of the auction's and of the estimates) the teacher (``estimation.onenet.bid_teacher``)
+tries the player's options on imagined deals and keeps each one's lead over the move the player
+made (the fields are in ``estimation.onenet.lessons``). One lesson part is saved per recording
+part, so a stopped run resumes where it stopped, and two machines share a run as they share a
+recording: one takes the parts from the first up, the other from the last down, and each saved
+part is copied to the other (``rsync --ignore-existing``). With ``--wait`` a run teaches a
+recording that is still being made, part by part as its parts arrive, and ``--hours`` ends it at
+a deadline.
 
 ``time`` teaches the same decisions twice, on fresh deals each time: the pace, how often the
 teacher picks the same option both times, and how far its picks are from the player's own.
@@ -71,7 +74,9 @@ class LessonConfig:
     """The ``[lessons]`` section of a lessons config."""
 
     record: str = ""  # the games: a recording of the player inside its own search
-    label_share: float = 0.5  # share of the bidding decisions with a choice that are taught
+    # The share of the decisions with a choice that are taught: of the Dash Calls, of the
+    # auction's (bids, With, Pass) and of the estimates (and super calls).
+    label_share: tuple[float, ...] = (0.25, 0.5, 1.0)
     coverage: float = 0.97  # the options tried hold this share of the player's move chances,
     min_options: int = 5  # are at least this many
     max_options: int = 8  # and at most this many
@@ -86,8 +91,12 @@ class LessonConfig:
     def __post_init__(self) -> None:
         if not self.record:
             raise ValueError("lessons.record must name the recording of the games")
-        if not 0 < self.label_share <= 1:
-            raise ValueError("lessons.label_share must be above 0 and at most 1")
+        shares = self.label_share
+        if len(shares) != 3 or min(shares) < 0 or max(shares) > 1 or not any(shares):
+            raise ValueError(
+                "lessons.label_share must be three shares from 0 to 1, not all 0: "
+                "of the Dash Calls, the auction's decisions and the estimates"
+            )
         if self.batch < 1:
             raise ValueError("lessons.batch must be at least 1")
         settings = T.Settings(
@@ -158,9 +167,10 @@ class Spot:
 
 def replay(part: Arrays, config: LessonConfig) -> tuple[list[Dealt], list[Spot], int]:
     """Replay every Bola of a recording part. Returns its rounds, the bidding decisions to teach
-    (``label_share`` of those with a choice, drawn from the seed and the Bola's number) and how
-    many drawn decisions the teacher cannot hold: past a round's ``MOVES`` bidding moves or the
-    widest history, or in a Bola whose carry or scores have left JAX's int32 range."""
+    (its phase's ``label_share`` of those with a choice, drawn from the seed and the Bola's
+    number) and how many drawn decisions the teacher cannot hold: past a round's ``MOVES``
+    bidding moves or the widest history, or in a Bola whose carry or scores have left JAX's
+    int32 range."""
     rounds: list[Dealt] = []
     spots: list[Spot] = []
     unheld = 0
@@ -187,7 +197,7 @@ def replay(part: Arrays, config: LessonConfig) -> tuple[list[Dealt], list[Spot],
                 legal = bola.legal_actions()
                 at = len(dealt.moves)
                 if len(legal) > 1:
-                    if draw.random() < config.label_share:
+                    if draw.random() < config.label_share[int(bola.phase)]:
                         history = tuple(place for place, who in choices if who != seat)
                         fits = (
                             at < T.MOVES
@@ -397,29 +407,48 @@ def _pace(name: str, of: int, every: int) -> Callable[[int], None]:
     return report
 
 
-def run(config: LessonConfig, out: Path, order: str = UP, report_every: int = 10) -> dict[str, Any]:
-    """Teach every recording part that has no lessons in ``out/parts`` yet, from the first part
-    up or the last down, and return the lessons' summary. A part another machine saved there
-    meanwhile is kept as it came. A part whose recording is not here (yet) is left missing: run
-    again once it has arrived."""
+def run(
+    config: LessonConfig,
+    out: Path,
+    order: str = UP,
+    report_every: int = 10,
+    wait: bool = False,
+    hours: float = 0.0,
+    poll: float = 30.0,
+) -> dict[str, Any]:
+    """Teach the recording parts that have no lessons in ``out/parts`` yet, one at a time: the
+    first such part whose recording is here (``up``) or the last (``down``). A part another
+    machine saved meanwhile is kept as it came. Returns the lessons' summary.
+
+    A part whose recording is not here is left missing, unless ``wait``: then the run looks
+    again every ``poll`` seconds until every part has lessons, so it can teach a recording that
+    is still being made or copied in. After ``hours`` (0: no deadline) no new part is started."""
     if order not in (UP, DOWN):
         raise ValueError(f"order must be {UP} or {DOWN}, not {order!r}")
     check_run(config, out)
     (out / "parts").mkdir(exist_ok=True)
     labeler = Labeler(config)
-    parts = part_starts(labeler.record_config)
-    missing = [first for first, _ in parts if not lesson_path(out, first).exists()]
+    parts = [first for first, _ in part_starts(labeler.record_config)]
     if order == DOWN:
-        missing.reverse()
-    _say(f"{len(missing)} of {len(parts)} parts to teach, {config.batch} decisions at a time")
+        parts.reverse()
+    missing = sum(1 for first in parts if not lesson_path(out, first).exists())
+    _say(f"{missing} of {len(parts)} parts to teach, {config.batch} decisions at a time")
     started = time.perf_counter()
     mine = unheld = taught = 0
-    for first in missing:
+    while True:
+        late = hours > 0 and time.perf_counter() - started > hours * 3600
+        untaught = [first for first in parts if not lesson_path(out, first).exists()]
+        ready = [first for first in untaught if part_path(labeler.record, first).exists()]
+        if late or not untaught or not (ready or wait):
+            if late and untaught:
+                _say(f"{hours:g} h are up: {len(untaught)} parts are left untaught")
+            break
+        if not ready:
+            time.sleep(poll)  # the recording's next part has not arrived
+            continue
+        first = ready[0]
         target = lesson_path(out, first)
-        source = part_path(labeler.record, first)
-        if target.exists() or not source.exists():
-            continue  # the other machine's, or a recording part that has not arrived
-        rounds, spots, skipped = replay(load_part(source), config)
+        rounds, spots, skipped = replay(load_part(part_path(labeler.record, first)), config)
         unheld += skipped
         report = _pace(target.stem, len(spots), config.batch * report_every)
         lessons = labeler.teach(rounds, spots, report=report)
@@ -427,7 +456,7 @@ def run(config: LessonConfig, out: Path, order: str = UP, report_every: int = 10
             save_lessons(target, lessons)
             mine += 1
             taught += len(lessons["pick"])
-        left = sum(1 for other in missing if not lesson_path(out, other).exists())
+        left = sum(1 for other in parts if not lesson_path(out, other).exists())
         elapsed = time.perf_counter() - started
         _say(
             f"{len(parts) - left}/{len(parts)} parts ({mine} here, {taught:,} lessons), "
@@ -592,6 +621,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--order", choices=(UP, DOWN), default=UP, help="from the first part or the last"
             )
             cmd.add_argument("--report-every", type=int, default=10, help="batches between lines")
+            cmd.add_argument(
+                "--wait", action="store_true", help="wait for recording parts still to arrive"
+            )
+            cmd.add_argument("--hours", type=float, default=0.0, help="start no part after this")
         else:
             cmd.add_argument("--decisions", type=int, default=512, help="decisions to teach twice")
             cmd.add_argument("--out", type=Path, help="write the report here as JSON")
@@ -614,7 +647,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.out.write_text(json.dumps(report, indent=2) + "\n")
         print("\n".join(noise_lines(report)))
         return 0
-    print(json.dumps(run(config, args.out, args.order, args.report_every)))
+    summary = run(config, args.out, args.order, args.report_every, args.wait, args.hours)
+    print(json.dumps(summary))
     return 0
 
 

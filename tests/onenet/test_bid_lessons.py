@@ -39,6 +39,7 @@ from tests.onenet.test_search import random_net
 
 BOLAS = 2
 DEALS = (2, 4)
+EVERY = (1.0, 1.0, 1.0)  # every bidding decision with a choice, whatever its phase
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +68,7 @@ def games(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def tiny(games: Path, **changes: Any) -> LessonConfig:
     settings: dict[str, Any] = {
         "record": str(games),
-        "label_share": 0.1,
+        "label_share": (0.1, 0.1, 0.1),
         "deals": DEALS,
         "min_options": 3,  # a random net is sure of its move: its chances alone would try 2
         "max_options": 3,
@@ -109,7 +110,7 @@ def holds(obs: Observation) -> bool:
 
 def test_replay_finds_every_bidding_decision_with_a_choice(games: Path):
     part = load_part(part_path(games, 0))
-    rounds, spots, unheld = replay(part, tiny(games, label_share=1.0))
+    rounds, spots, unheld = replay(part, tiny(games, label_share=EVERY))
     found = choices(part)
     # A random player's Bola doubles its carry past JAX's int32 range: those rounds are left out.
     want = [c for c in found if holds(c.obs)]
@@ -133,12 +134,28 @@ def test_replay_finds_every_bidding_decision_with_a_choice(games: Path):
 
 def test_replay_draws_its_share_of_the_decisions_from_the_seed(games: Path):
     part = load_part(part_path(games, 0))
-    every = [s.step for s in replay(part, tiny(games, label_share=1.0))[1]]
-    some = [s.step for s in replay(part, tiny(games, label_share=0.3))[1]]
+    third = (0.3, 0.3, 0.3)
+    every = [s.step for s in replay(part, tiny(games, label_share=EVERY))[1]]
+    some = [s.step for s in replay(part, tiny(games, label_share=third))[1]]
     assert set(some) < set(every)
     assert 0.15 < len(some) / len(every) < 0.45
-    assert some == [s.step for s in replay(part, tiny(games, label_share=0.3))[1]]
-    assert some != [s.step for s in replay(part, tiny(games, label_share=0.3, seed=7))[1]]
+    assert some == [s.step for s in replay(part, tiny(games, label_share=third))[1]]
+    assert some != [s.step for s in replay(part, tiny(games, label_share=third, seed=7))[1]]
+
+
+def test_replay_draws_each_phases_own_share(games: Path):
+    part = load_part(part_path(games, 0))
+    every = replay(part, tiny(games, label_share=EVERY))[1]
+    estimates = replay(part, tiny(games, label_share=(0.0, 0.0, 1.0)))[1]
+    assert [s.step for s in estimates] == [
+        s.step for s in every if s.phase == int(Phase.ESTIMATION)
+    ]
+    mixed = replay(part, tiny(games, label_share=(1.0, 0.0, 0.5)))[1]
+    by_phase = {phase: sum(s.phase == phase for s in mixed) for phase in range(3)}
+    of_all = {phase: sum(s.phase == phase for s in every) for phase in range(3)}
+    assert by_phase[int(Phase.DASH)] == of_all[int(Phase.DASH)]
+    assert by_phase[int(Phase.AUCTION)] == 0
+    assert 0.25 < by_phase[int(Phase.ESTIMATION)] / of_all[int(Phase.ESTIMATION)] < 0.75
 
 
 def test_replay_refuses_a_part_that_does_not_replay_to_its_scores(games: Path):
@@ -273,6 +290,32 @@ def test_a_shared_run_keeps_the_other_machines_part_and_leaves_missing_recording
     assert mine["value"].tolist() == L.load_lessons(L.lesson_path(out, 0))["value"].tolist()
 
 
+def test_a_waiting_run_teaches_what_is_here_and_stops_at_its_deadline(
+    taught: tuple[LessonConfig, Path], tmp_path: Path
+):
+    """A recording of three Bolas with only the first here yet: a waiting run teaches it, keeps
+    looking for the others, and gives up when its hours are up."""
+    config, out = taught
+    games = tmp_path / "games"
+    (games / "parts").mkdir(parents=True)
+    source = Path(config.record)
+    recorded = json.loads((source / "config.json").read_text())
+    (games / "config.json").write_text(json.dumps({**recorded, "games": 3}))
+    part_path(games, 0).write_bytes(part_path(source, 0).read_bytes())
+    waiting = dataclasses.replace(config, record=str(games))
+    summary = run(waiting, tmp_path / "waited", wait=True, hours=1.0 / 3600, poll=0.05)
+    assert (summary["parts"], summary["missing_parts"]) == (1, 2)
+    mine = L.load_lessons(L.lesson_path(tmp_path / "waited", 0))
+    assert mine["value"].tolist() == L.load_lessons(L.lesson_path(out, 0))["value"].tolist()
+    # Past its deadline a run starts nothing, even with a part ready.
+    part_path(games, 1).write_bytes(part_path(source, 1).read_bytes())
+    late = run(waiting, tmp_path / "late", hours=1e-12)
+    assert (late["parts"], late["missing_parts"]) == (0, 3)
+    # Without waiting, a run teaches what is here and leaves the rest.
+    plain = run(waiting, tmp_path / "plain", order="down")
+    assert (plain["parts"], plain["missing_parts"]) == (2, 1)
+
+
 def test_only_a_recording_of_the_one_nets_own_search_is_taught(record: Path, tmp_path: Path):
     with pytest.raises(ValueError, match="own=true and judge=round"):
         Labeler(LessonConfig(record=str(record)))  # the shared fixture: a Hybrid's recording
@@ -295,7 +338,11 @@ def test_a_lessons_config_is_one_checked_section(games: Path):
     with pytest.raises(ValueError, match="unknown key"):
         config_of({"lessons": {"record": "x", "samples": 3}})
     with pytest.raises(ValueError, match="label_share"):
-        LessonConfig(record="x", label_share=0.0)
+        LessonConfig(record="x", label_share=(0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="label_share"):
+        LessonConfig(record="x", label_share=(0.5, 0.5))
+    with pytest.raises(ValueError, match="label_share"):
+        LessonConfig(record="x", label_share=(0.5, 0.5, 1.5))
     with pytest.raises(ValueError, match="stages narrow at most 3 options"):
         LessonConfig(record="x", deals=(8, 16))  # the default 8 options need 4 stages
     with pytest.raises(ValueError, match="batch"):

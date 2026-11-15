@@ -12,7 +12,7 @@
 
 [lessons]
 record = "runs/onenet/bids-1/games"
-label_share = 0.5           # half the bidding decisions with a choice get a lesson
+label_share = [0.25, 0.5, 1.0]  # of the Dash Calls, the auction's decisions and the estimates
 coverage = 0.97             # the options tried hold 97% of the player's move chances,
 min_options = 5             # are at least 5
 max_options = 8             # and at most 8
