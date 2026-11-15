@@ -1,0 +1,25 @@
+# Step 6 of docs/rl/hybrid-iteration-plan.md, bid lessons, round 1: the loop 4,000 player learns
+# its bids from the bid teacher's lessons (configs/onenet-bids-1.toml) and keeps its card play.
+#
+# On the home server's GPU, from the repo, with its JAX env:
+#   PYTHONPATH=src ~/jax-env/bin/python -m estimation.onenet.bid_learn \
+#       --config configs/onenet-bids-1-learn.toml --out runs/onenet/bids-1/learn
+
+[learn]
+lessons = "runs/onenet/bids-1/lessons"
+cards = "runs/onenet/expert-2/data"  # round 2's training set: the player's own games
+start = "runs/onenet/selfplay/snapshots/player-04000.npz"
+epochs = 10
+batch = 2048
+lr = 1e-4
+lr_end = 1e-5
+temperature = 1.0       # points of lead that multiply an alternative's odds against the move by e
+shrink = true           # each lead is first pulled toward its phase's mean lead by its noise
+clip = 5.0
+card_weight = 1.0       # the card moves and
+practice_weight = 1.0   # the practice answers are held to the starting player's
+held_out = 0.05         # of the lessons' Bolas
+card_shards = 40        # about a million card decisions to hold the card play on
+card_held_out = 0.05    # round 2's own held-out Bolas (configs/onenet-expert-2-learn.toml),
+card_seed = 20261108    # so its measure (top card 1.355, best of top 2 0.598) is taken again
+seed = 20261115

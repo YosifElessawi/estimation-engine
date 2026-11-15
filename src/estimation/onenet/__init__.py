@@ -8,5 +8,13 @@ Essam Gouda's design, on his JAX rules (estimation.jaxenv), which this package o
   outputs) and the judge (training only);
 - ``copy_hybrid`` (home server GPU) copies Hybrid v4 into the player and trains the judge.
 
-Everything the GPU side imports needs only numpy, JAX and optax, never PyTorch.
+Step 6, learning bids from a slow bid search:
+
+- ``bid_teacher`` (GPU) searches one bidding decision slowly, many decisions at once;
+- ``bid_lessons`` replays recorded games and keeps the teacher's verdicts at their bidding
+  decisions, laid out in ``lessons``;
+- ``bid_learn`` (GPU) teaches the player those verdicts and holds the rest of it still.
+
+The training code the GPU side imports (``copy_hybrid``, ``selfplay``, ``bid_learn``) needs only
+numpy, JAX and optax, never PyTorch; the recorders replay games with the engine and the bots.
 """
