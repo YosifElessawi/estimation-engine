@@ -1,0 +1,25 @@
+# Step 5 of docs/rl/hybrid-iteration-plan.md: self-play from the copy of Hybrid v4 (home server).
+#
+#   PYTHONPATH=src ~/jax-env/bin/python -m estimation.onenet.selfplay \
+#       --config configs/onenet-selfplay.toml --out runs/onenet/selfplay
+#
+# Charts: ~/jax-env/bin/tensorboard --logdir runs/onenet --host 100.103.16.25
+#         then open http://100.103.16.25:6006/#custom_scalars
+
+[selfplay]
+start = "runs/onenet/copy-final/384x3"  # the final copy's player and judge
+sharpen = 4.0           # sampled as learned, its moves lose ~1 point a card more than its best;
+                        # sharpened 4 times, about 0.15 more
+loops = 5000            # about 7.5 h (Yosif, 2026-11-07); raise it and run again to go on
+eval_every = 100        # the strength check against the copy, about every 9 minutes
+batch = 4096
+steps = 128
+lr = 1e-4               # a third of Essam's from-scratch rate: this net already plays
+entropy = 0.003         # guard 1: gentle exploration (Essam's run from zero: 0.02 to 0.01)
+entropy_end = 0.001
+anchor = 1.0            # guard 1: the pull toward the copy's moves,
+anchor_loops = 1000     # fading to nothing by loop 1,000
+practice_weight = 0.1
+copy_share = 0.25       # guard 2: a quarter of the loops play the frozen copy
+save_every = 100        # guard 3: a player kept every 100 loops for the check-ups
+seed = 20261107

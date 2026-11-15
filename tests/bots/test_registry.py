@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from estimation.bots import BOT_NAMES, Bot, make_bot
@@ -48,7 +49,16 @@ def test_bots_are_built_for_the_rules_being_played():
 
 def test_every_bot_satisfies_the_bot_interface(tmp_path: Path):
     ckpt = f":checkpoint={make_checkpoint(tmp_path / 'net.pt')}"
-    required = {"rl": ckpt, "hybrid": ckpt}
+    player = tmp_path / "player.npz"
+    rng = np.random.default_rng(0)
+    np.savez(
+        player,
+        w0=rng.normal(size=(747, 8)),
+        b0=np.zeros(8),
+        pw=rng.normal(size=(8, 120)),
+        pb=np.zeros(120),
+    )
+    required = {"rl": ckpt, "hybrid": ckpt, "onenet": f"{ckpt}:net={player}"}
     for name in BOT_NAMES:
         bot: Bot = make_bot(name + required.get(name, ""), 0)
         assert callable(bot.act)

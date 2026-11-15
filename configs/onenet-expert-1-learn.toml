@@ -1,0 +1,26 @@
+# Step 5, learning from the search, round 1 (docs/rl/hybrid-iteration-plan.md): the loop 4,000
+# player learns the deeper search's card values and the search's own card choices from its own
+# recording (configs/onenet-expert-1.toml); its bids are its own moves, so they stay as they are.
+#
+# The training set, on the Mac (about 3 min), then the learning, on the home server's GPU:
+#   uv run python -m estimation.onenet.data --record runs/onenet/expert-1/record \
+#       --out runs/onenet/expert-1/data --no-card-net
+#   PYTHONPATH=src ~/jax-env/bin/python -m estimation.onenet.copy_hybrid \
+#       --config configs/onenet-expert-1-learn.toml --out runs/onenet/expert-1/learn
+#
+# The start folder holds the loop 4,000 player (runs/onenet/selfplay/snapshots/player-04000.npz)
+# as player.npz and the self-play run's last judge (judge-05000.npz) as judge.npz.
+
+[copy]
+data = "runs/onenet/expert-1/data"
+sizes = ["384x3"]
+start = "runs/onenet/expert-1/start"
+epochs = 10
+batch = 4096
+lr = 3e-4                   # a third of the copy's: this player already plays well
+lr_end = 1e-5
+temperature = 2.0           # the teacher's values become chances, as in the copy
+held_out = 0.05             # 100 of the 2,000 Bolas, scored before training and every epoch
+practice_weight = 0.1
+played_weight = 1.0         # the search's own choices (cards) and the player's own bids
+seed = 20261108

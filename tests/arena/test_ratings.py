@@ -11,8 +11,10 @@ from estimation.arena.ratings import (
     bradley_terry,
     mean_ci,
     pair_records,
+    place_reward,
     rsa,
     set_first_places,
+    set_places,
     set_rsa,
     set_scores,
     sweep_gap,
@@ -60,6 +62,24 @@ def test_first_place_share_splits_ties_and_averages_over_seat_games():
     # seat 0. k=3: a wins at seat 1. So a has 3 first places in its 8 games, b has 1.
     assert shares == {"a": pytest.approx(3 / 8), "b": pytest.approx(1 / 8)}
     assert 2 * shares["a"] + 2 * shares["b"] == pytest.approx(1)  # one first place per game
+
+
+def test_place_reward_is_the_weighted_place_with_ties_sharing_their_places():
+    assert place_reward((10, 10, 5, 0), 0) == pytest.approx(0.6)  # King and Sub king, shared
+    assert place_reward((10, 10, 5, 0), 2) == pytest.approx(-0.2)
+    assert place_reward((10, 10, 5, 0), 3) == pytest.approx(-1.0)
+    assert place_reward((5, 10, 0, 0), 2) == pytest.approx(-0.6)  # Sub kooz and Kooz, shared
+    assert place_reward((7, 7, 7, 7), 1) == pytest.approx(0.0)
+    assert math.fsum(place_reward((3, 9, 1, 9), seat) for seat in range(4)) == pytest.approx(0.0)
+
+
+def test_set_places_average_each_bots_weighted_place_over_its_seat_games():
+    scores = [(30, 0, 30, 0), (30, 0, 30, 0), (12, 0, 0, 0), (0, 12, 9, 0)]
+    places = set_places(make_set(0, scores), AB)
+    # a's 8 games: 0.6 and 0.6 (tied King), -0.6 and -0.6 (tied last), 1 (King) and -1/3 (three
+    # tied last), 1 (King) and -0.6 (tied last).
+    assert places["a"] == pytest.approx((0.6 + 0.6 - 0.6 - 0.6 + 1 - 1 / 3 + 1 - 0.6) / 8)
+    assert 2 * places["a"] + 2 * places["b"] == pytest.approx(0)  # every game's places sum to 0
 
 
 def test_mean_ci_is_a_student_t_interval():

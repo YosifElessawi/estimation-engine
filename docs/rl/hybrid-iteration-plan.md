@@ -27,7 +27,8 @@ played them:
 ## How every step is run and judged
 
 - Everything runs on the Mac, one heavy job at a time, each after Yosif's yes (what runs, how
-  long, workers, RAM). Heavy runs slow the public B-Tig table, so each ask says so.
+  long, workers, RAM). Heavy runs slow the public B-Tig table, so each ask says so. Step 5's copy
+  and self-play run on the home server's GPU instead, under the same rule.
 - Each step is built with tests and the full gate (pre-commit, pytest on 2 workers, pyright),
   then measured against the previous Hybrid and the frozen yardsticks (RL v2, Search bot) with
   head-to-head duplicate matches, the ladder and the bidding and card-play evaluators.
@@ -48,8 +49,9 @@ played them:
 | 2. Copy a stronger search (expert iteration) | The card net learns the values of a deeper Hybrid search, then BiddingNet relearns to bid for the new card play. Repeat. | Per round about 4-5 h: recording 2-3 h, copying about 1 h, bidding refit about 1 h. Plan 3 rounds. | New Hybrid vs previous Hybrid each round, 200 sets; card-play evaluator. |
 | 3. Hybrid uses the guesses | Imagine deals where step 1's guesses say the cards are, plus a settings check. | No training; about 2-3 h of measuring. | Card-play evaluator and new vs previous Hybrid. |
 | 4. Search the bidding | For each bid, try the net's best few options on imagined deals played out by the nets. | No training; about 2 h of measuring. | Bidding evaluator and new vs previous Hybrid. |
+| 5. One net for every decision | One player net copies Hybrid v4, then learns final place by GPU self-play (Essam's design). | Recording on the Mac (about 5 h per 2,000 Bolas); copy and self-play on the home server's GPU, sized by a timing test. | The player inside the search vs Hybrid v4: weighted place, King only and points per game. |
 
-Total: about 25-30 hours of compute over several days.
+Steps 1-4 took about 25-30 hours of compute over several days.
 
 ### Step 1: hidden-card guesses, under the current rules
 
@@ -108,39 +110,110 @@ Why this order: steps 2 and 3 both use the step-1 head. Doing 2 before 4 improve
 first; once 4 exists, one more round of step 2 also teaches BiddingNet to bid like the searched
 bidding. Step 4's code can be written while step 1 trains; only its measuring waits for the Mac.
 
-### Play for King (after step 4, Yosif's choice 2026-11-05)
+### Step 5: one net for every decision (Yosif, 2026-11-06)
 
-Today's reward plays each open round for points against the table (opponents ahead weigh double)
-and blends in the chance of finishing first only in rounds 14-18, from a simple formula
-(`win_blend`, a 20-point spread per round). Winning a Bola needs a risk attitude from the score
-situation: gamble when far behind, play safe when far ahead, which costs some average score.
+Replaces the "Play for King" step and the earlier one-net candidate (both agreed on 2026-11-03 and
+2026-11-05). Essam's design plus our head start: Essam's single net (estimation-arena), trained
+from zero by GPU self-play, tied the original Hybrid once our Hybrid search ran on top of it
+(`bitter-search` vs Hybrid v1, 150 sets: -3.3 points a game, -9.8 to +3.2, first place 25.8%).
+This step starts the same kind of net from Hybrid v4 instead of from zero.
 
-- **A learned King chance:** a net output that predicts the chance of finishing first (King) from
-  here, trained on how real Bolas ended, replacing the formula.
-- **The reward in every round** becomes the change in that King chance, instead of the
-  fixed-trump-only blend.
-- **The Hybrid's search** scores its imagined rounds by the King chance too, not only by points.
-- **Judged by Bolas won:** Win Elo and first-place share, with points per game only as a side
-  note (a bot playing for King may score less on average).
+**The nets**
 
-Nothing runs for it yet.
+- **Player:** one net for every decision: Dash Calls, bids, With, estimates, super calls and
+  cards. Its input is the raw table view only: own hand, cards played, calls, estimates, tricks
+  won, scores and the legal moves. No hand-made hints (no HeuristicBot trick counts, no "wins the
+  trick now", no "top card left"). Only the player is used at the table.
+- **Judge, training only:** the same view plus the three hidden hands, so the learning signal
+  separates deal luck from skill. The player never sees hidden cards; the judge is thrown away
+  after training.
+- **Reward:** final place in the Bola: King +1, Sub king +0.2, Sub kooz -0.2, Kooz -1, ties
+  shared (Essam's per-round reward stalled). Playing for final place is built into this net and
+  its search, so the separate Play for King step is dropped.
+- **Practice questions:** extra outputs of the player, learned from the real game at light
+  weight next to the main goal, all seven from the start:
+  1. who holds each hidden card;
+  2. my tricks this round;
+  3. will each player make their call;
+  4. each other player's tricks;
+  5. who is out of which suit;
+  6. my chance of finishing King from here;
+  7. each player's round score.
 
-### Step 5 (candidate, after step 4): one net for the whole game
+  Each gets its own held-out score against a blind guess (today GuessNet names 47% of holders
+  against 35% blind). One comparison run trains without the questions, and a question whose
+  score never moves is dropped. Questions 4 and 5 overlap 1 and 3, so they go first if the net
+  runs short of room.
+- **At the table:** the player inside the Hybrid search. Imagined deals are placed by its own
+  hidden-card guesses (question 1, kept by the bidding as `deals=both` is today), played out by
+  the player for every seat, and each card is scored by its chance of finishing well (question 6
+  or a judge-style value) instead of round points.
 
-Added 2026-11-03 at Yosif's question (a friend's pointer to Sutton's "The Bitter Lesson"): three
-nets (bidding, card play, guesses) are there for history and speed, not because they are known to
-be better. One net with three outputs, trained on every part of the game together, may learn
-shared understanding (where the cards are helps bidding and card play alike).
+**The steps**
 
-- **Copy:** the single net learns from the best Hybrid's games, as step 2 does (its bids, its
-  search's value of every card, the real hidden hands), so it starts near the Hybrid's level
-  instead of from zero.
-- **Self-play:** then it improves as RL v2 did, against itself, recent versions, PIMC and the
-  Search bot.
-- **Judged as a Hybrid:** the Hybrid rebuilt on it plays the best three-net Hybrid; strength and
-  time per move both count. Keep whichever wins.
+| # | What | Where | Time |
+|---|---|---|---|
+| 1 | **Record the teacher:** Hybrid v4 plays a few thousand Bolas, saving every decision, the deeper search's value of every card, BiddingNet's value of every bid and the real hands (like step 2) | Mac, 5 workers | about 5 h per 2,000 Bolas at step 2's pace; a short timing test first |
+| 2 | **Copy:** the player learns to play like Hybrid v4 from those recordings, so it starts near our best level; the judge and the practice questions learn from the same games | home server GPU | sized by the timing test |
+| 3 | **Self-play** on Essam's JAX rules, against itself and past versions; every update learns from final place, the judge and the practice questions | home server GPU | sized by the timing test |
+| 4 | **Check-ups:** the player inside the search plays Hybrid v4 at regular points, so it does not drift into habits that only work against itself | Mac | a short match each |
+| 5 | **Final judgement:** the player inside the search vs Hybrid v4 on all three agreed measures: weighted place (King +1 to Kooz -1), King only (first-place share) and score difference (points per game). Keep whichever wins | Mac | 200 sets |
 
-Runs only on Yosif's yes; its compute is sized after step 4.
+**Machines.** The Mac records, searches and plays every match (its CPU is the faster one). The
+home server (GTX 1060 6 GB, a weak 4-core CPU) runs the copy and the self-play. Runs move between
+them with rsync over Tailscale. Each long run on either machine still waits for Yosif's yes.
+
+**Timing test** (2026-11-06, the 1060, Essam's loop unchanged, batches of 4,096 Bolas x 128
+decisions, peak GPU memory about 2 GB of 6):
+
+| Player net | Self-play | 1,000 loops | Copy, one pass over 1 M decisions |
+|---|---|---|---|
+| 384 x 3 layers (Essam's size, about as fast as today's card net in the search) | 116,000 decisions a second | about 75 min | 3 s |
+| 512 x 4 layers (twice the room) | 70,000 decisions a second | about 2.1 h | 5 s |
+
+Essam's whole from-zero run was 5,000 loops: about 6.5 h here at his size. The copy is minutes,
+not hours, so both sizes are copied and the bigger one is kept only if it copies Hybrid v4
+clearly better. The practice questions and the regular check-ups add a little to each loop.
+
+**Credit.** The one-net design, the final-place reward, the judge that sees the hidden hands and
+the JAX rules (`jaxenv`, checked move for move against our engine over about 7.6 M steps) are
+Essam Gouda's, from estimation-arena (MIT licence).
+
+**How it is built**
+
+- **Raw view:** Essam's raw view as is (747 inputs). It exists on the GPU (`jaxenv.encode`) and on
+  the CPU from an engine Observation (`jaxenv.encode_np`), and his check requires the two to be
+  equal at every step, so what the player learns on the GPU is what it sees on the Mac.
+- **Recorder (Mac):** step 2's recorder with Hybrid v4 playing. The teacher is Hybrid v4's search
+  made deeper, as in step 2 (64 deals instead of 32, every legal card instead of the top 2). It
+  saves every seat's decisions, BiddingNet's values at bids, the real hands and each Bola's final
+  places, which also label the practice questions.
+- **Copy (GPU, JAX):** the player's move output learns the teacher's values turned into chances;
+  measured as in step 2 by held-out regret (points the top 1, 2 and 3 moves lose by the teacher's
+  values). The judge learns each Bola's final place from the view and the real hands; each
+  practice question learns from the recorded games, with its held-out score.
+- **Self-play (GPU, JAX):** Essam's loop (PPO, his judge, credit by TD(lambda), half the games
+  against past versions) started from the copy, with the seven practice outputs labelled inside
+  the games. Three guards keep the head start (Yosif, 2026-11-06):
+  - gentle exploration and a fading pull back toward the copy, like the card anchor: step 1
+    showed that a trained net pushed to explore at the from-scratch rate loses most of its
+    strength within 50 loops;
+  - the frozen copy stays among the opponents next to the past versions, so the net keeps
+    having to beat a Hybrid v4-style player, not only itself;
+  - the kept net is the one with the best check-up against Hybrid v4, not the last loop.
+
+  First run: 5,000 loops (Yosif, 2026-11-07; about 7.5 h on the 1060), a check against the copy
+  every 100 loops and a check-up against Hybrid v4 every 1,000 (after one at 500), continued
+  while the check-ups improve.
+- **At the table (Mac):** the player in numpy (no JAX needed) inside the Hybrid search. Essam's
+  `bitter-search` already runs his net inside our search; ours adds guessed deals and King scoring.
+- **Arena:** our duplicate arena reports weighted place too, so one match shows all three
+  measures.
+
+**Where the code lives:** in this repo (Yosif, 2026-11-07). Essam's `jaxenv` is copied into
+`src/estimation/jaxenv` with credit and its MIT licence, kept as it is in estimation-arena so later
+fixes there can be diffed in, and its move-by-move check against our engine runs in our tests.
+Step 5's own code sits next to it and only imports it.
 
 ## Parked net changes
 
@@ -156,6 +229,10 @@ Runs only on Yosif's yes; its compute is sized after step 4.
 1. Step 2's recordings run on the Mac (Yosif, 2026-11-03).
 2. One session runs the whole plan, stopping for Yosif's yes before each heavy run (Yosif,
    2026-11-03).
+3. Step 5 is Essam's one-net design started from Hybrid v4, and it replaces the Play for King
+   step: final place is its reward (Yosif, 2026-11-06).
+4. Step 5's JAX code lives in this repo: Essam's `jaxenv` copied in with credit and its MIT
+   licence (Yosif, 2026-11-07).
 
 ## Results
 
@@ -266,5 +343,312 @@ trusts its own play-outs on openings and super calls, where it did worst (open: 
 12%, super call 15.8 vs 10.4 points lost). Hybrid v4 stays the best Hybrid. The bid search stays
 in the code, off by default (`bid_search=false`), for a later try with more deals or a learned
 value for the rest of the auction; no roster name.
+
+### Step 5 (under way): one net for every decision
+
+**Recording (done 2026-11-07)** (`configs/onenet-record.toml`, git-ignored `runs/onenet/record/`):
+Hybrid v4 played 2,000 Bolas in every seat, 6.0 h on 5 workers (the 10-Bola timing test suggested
+7.9 h). At half its card decisions the teacher (Hybrid v4's search with 64 deals and every legal
+card) valued every legal card and played its best; at every bid, BiddingNet's values were kept.
+
+| Saved | Count |
+|---|---|
+| Bolas | 2,000, in 80 parts of 25 (48 MB) |
+| Moves | 2,497,727 |
+| Bids with BiddingNet's values | 407,899 (24 options on average) |
+| Cards with the teacher's values | 702,968 (5.2 legal cards on average) |
+
+Each Bola is kept as its seed and its moves, so a replay gives the raw view, the real hands and
+the final places for the copy and the practice questions. Checked after the run: every Bola
+replays to its recorded final scores, every kept value is a real number, and on 100 Bolas every
+kept decision has one value per legal move and the teacher played its best card. First place is
+spread evenly over the four seats (479 to 509 Bolas each), as it should be with Hybrid v4 in all
+of them.
+
+**The JAX rules in this repo (2026-11-07):** Essam's `jaxenv` copied into `src/estimation/jaxenv`.
+Its check against our engine passes on today's rules: every legal move, turn, round score and
+final score identical over about 31,000 steps: 390 rounds of random, rule-based and scripted play
+(60 of them also requiring the GPU view to equal the numpy view at every step) and 6 whole Bolas.
+It takes 12 s on the Mac and is part of the test gate.
+
+**Copy (done 2026-11-07)** (`configs/onenet-copy.toml`, git-ignored `runs/onenet/data/` and
+`runs/onenet/copy/`): the recording became 2,072,395 decisions with a choice (2.9 min on the Mac);
+1,900 Bolas trained the player and the judge for 12 passes (1.5 min for 384 x 3, 2.5 min for
+512 x 4 on the 1060), and the other 100 Bolas scored every pass.
+
+| Held-out Bolas | 384 x 3 | 512 x 4 | Hybrid v4's nets |
+|---|---|---|---|
+| Points the top card loses, by the teacher's values | 2.71 | 2.66 | 1.78 (card net) |
+| Points the best of the top 3 cards loses | 0.50 | 0.50 | |
+| Best card picked | 50% | 50% | 54% |
+| Points the top bid loses, by BiddingNet's values | 0.10 | 0.08 | 0 (BiddingNet) |
+| Same bid as BiddingNet's best | 88% | 89% | |
+
+Practice questions (384 x 3), against a blind guess: holders named 44% against 35% (GuessNet 47%);
+my tricks off by 0.61 against 1.73; the others' tricks off by 0.71 against 1.71; making the call
+61% against 58%; out of a suit 90% against 85% (only what the table showed); King chance Brier
+score 0.142 against 0.186; round score error 0.185 against 0.200. The judge scored 0.369 after the
+first pass (blind 0.519), then worse every pass, 0.535 at the end: it learns the training Bolas'
+final places by heart (training error 0.04).
+
+**Reading:** the bids copy almost exactly; the cards do not. The player's top card loses about 0.9
+points a card more than Hybrid v4's card net at either size, so 384 x 3 is kept (512 x 4 is not
+clearly better). The judge has to be kept at its best pass, not the player's.
+
+**Copy variants (2026-11-07, Yosif: improve the copy first)**, 384 x 3, 12 passes each (2 min each
+on the 1060), scored at the last pass:
+
+| Variant | Points the top card loses | Best of the top 3 | Points the top bid loses |
+|---|---|---|---|
+| First copy (the kept values only, temperature 2) | 2.71 | 0.50 | 0.10 |
+| Also Hybrid v4's own card moves (the 961,528 decisions without values) | 2.48 | 0.36 | 0.12 |
+| Sharper targets (temperature 0.5) | 2.88 | 0.48 | 0.09 |
+| Both | 2.54 | 0.37 | 0.11 |
+| Own moves, temperature 1 | 2.47 | 0.35 | 0.11 |
+
+Learning Hybrid v4's own card moves gains about a quarter of a point a card; sharper targets lose
+some. Temperatures 1 and 2 tie, so 2 stays. Every variant was still improving at pass 12. From
+now on the copy learns the own moves, runs 20 passes, and keeps the pass whose top moves lose the
+fewest points: keeping by the move loss picked an early pass, since the own moves pull that loss
+up while the points lost keep falling.
+
+**Final copy (2026-11-07)** (`runs/onenet/copy-final/384x3`, 2.5 min): the own moves on, 20 passes,
+pass 18 kept. Its top card loses 2.41 points (the best of its top 3: 0.35) and is the best card
+51% of the time, against Hybrid v4's card net's 1.78 and 54%; its top bid loses 0.11 points and
+is BiddingNet's best 88% of the time. The judge is the first pass's (0.37 against 0.52 blind).
+This player and judge are where self-play starts.
+
+**Self-play, built (2026-11-07)** (`configs/onenet-selfplay.toml`, `estimation.onenet.selfplay`):
+Essam's loop started from the final copy, with every decision's practice answers read from its
+own game. The three guards as set: a learning rate of 1e-4 (a third of Essam's) and exploration
+of 0.003 falling to 0.001 (Essam's from-scratch run: 0.02 to 0.01), with a pull toward the copy's
+moves that fades out by loop 1,000; the frozen copy as the opponent in a quarter of the loops;
+and a player kept every 100 loops for the check-ups. Every 100 loops the player meets the copy
+(512 games at once, greedy), and the numbers go to a one-page chart (TensorBoard's CUSTOM SCALARS
+page on the home server, `estimation.onenet.charts`).
+
+The copy's move chances are soft (learned at a temperature of 2 points): moves sampled from them
+lose about a point a card more than its best move, and bids ten times more, and in a short trial
+callers made only 27% of their calls. Self-play therefore starts from them sharpened 4 times
+(sampled moves then lose about 0.15 points more than the best; callers made 41%). On the 1060 a
+loop takes 5.4 s, so the first run of 5,000 loops takes about 7.5 h.
+
+**First self-play run (done 2026-11-07)** (git-ignored `runs/onenet/selfplay/`, a player kept every
+100 loops in `snapshots/`): 5,000 loops in 7.6 h on the 1060, 2.14 M Bolas at 95,000 decisions a
+second. Against the copy (25% King is even) the player's King share was 27% at loop 500, 31% at
+1,000, 37% at 2,000, 39% at 3,000, 38% at 4,000 and 40% at 5,000 (place +0.35): fast until loop
+2,000, then slow. It was still changing at the end: its moves kept drifting further from the
+copy's. In its training games callers made 56 to 61% of their calls (41% at the start), and the
+player named 46% of the hidden cards' holders (44% at the start; GuessNet names 47% in Hybrid
+v4's games).
+
+**Check-ups** (the player inside Hybrid v4's search, `onenet` bot, against Hybrid v4; 100 duplicate
+sets each, seed 2040 every time, 5 workers on the Mac, about 23 min each; every 1,000 loops after
+the first at 500, Yosif 2026-11-07, with every game saved for later study from loop 1,000 on, in
+git-ignored `runs/onenet/checkups/`):
+
+| Player | Sets won | Place, King +1 to Kooz -1 (95% CI) | King | Hybrid v4 King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| The final copy, before self-play | 6 of 100 | -0.234 (-0.270 to -0.197) | 13.9% | 36.1% | -42.8 (-48.7 to -36.9) |
+| Loop 500 | 8 of 100 | -0.225 (-0.263 to -0.187) | 13.3% | 36.7% | -40.4 (-46.8 to -34.0) |
+| Loop 1,000 | 18 of 100 | -0.132 (-0.169 to -0.094) | 19.4% | 30.6% | -25.2 (-31.4 to -19.0) |
+| Loop 2,000 | 35 of 100 | -0.022 (-0.061 to +0.018) | 22.8% | 27.3% | -8.0 (-14.2 to -1.8) |
+| Loop 3,000 | 41 of 100 | -0.006 (-0.048 to +0.036) | 23.3% | 26.7% | -4.0 (-10.5 to +2.6) |
+| Loop 4,000 | 56 of 100, 1 drawn | +0.015 (-0.018 to +0.049) | 24.9% | 25.1% | +3.2 (-1.8 to +8.1) |
+| Loop 5,000 | 46 of 100 | -0.001 (-0.041 to +0.039) | 25.2% | 24.8% | -0.7 (-6.5 to +5.1) |
+
+The copy inside the search started far behind Hybrid v4. Self-play closed most of the gap by
+loop 2,000 and was even with Hybrid v4 at loops 4,000 and 5,000: none of the three measures is
+clearly different from even. After loop 2,000 each check-up gained less than its own margin of
+error, and from 4,000 to 5,000 nothing, while the player still gained against the copy (38% to
+40% King). The check-ups stopped improving, so the first run ends at 5,000 loops; loop 4,000 has
+the best check-up (within noise of loop 5,000). The one net in the search moves about a third
+faster than Hybrid v4 (13 ms a card against 20 ms; both ran slower in the first two check-ups,
+18 ms against 28 ms, on a busier Mac).
+
+**All in one at the table (2026-11-07, Yosif: build it and play the match)**: in the check-ups two
+jobs were still Hybrid v4's, guessing the hidden cards and judging the searched cards by round
+points. The search can now give both to the player (nothing retrained: the loop 4,000 player as
+saved):
+
+- **Own guesses** (`onenet:net=<player>:own=true`, no checkpoint, no Hybrid v4 net loaded): the
+  player's hidden-card guesses (question 1) place each imagined deal's cards, and its own move
+  chances at the other seats' bidding keep the 32 of 64 deals that explain that bidding best, as
+  `deals=both` does with GuessNet and BiddingNet (the same 10% floor).
+- **King judging** (`judge=king`): each searched card is worth the player's own chance of
+  finishing King (question 6), read from its view at its last card of each imagined round,
+  instead of round points.
+- Checked: every other seat's rebuilt bidding view equals what that seat saw (over 100 real
+  decisions), a play-out reads the King chance at exactly that seat's last card and still replays
+  the real round, and a deal's weight equals the player's chances of the real bids.
+
+Matches against Hybrid v4 on the check-ups' deals (seed 2040, 5 workers on the Mac, games saved in
+git-ignored `runs/onenet/checkups/`). The match with both pieces was stopped at 48 of 100 sets
+(Yosif) once it was clearly behind; each piece then played the first 40 sets on its own:
+
+| Player (loop 4,000) | Sets | Sets won | Place, King +1 to Kooz -1 (95% CI) | King | Points per game (95% CI) | Its time a card |
+|---|---|---|---|---|---|---|
+| Check-up: Hybrid v4's guesses, round points | first 40 | 20 | +0.001 | 24.1% | +2.3 | 13 ms |
+| Own guesses and King judging | 48, stopped | 10 | | 19.0% | -24.1 | |
+| Own guesses, round points | 40 | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) | 16 ms |
+| Hybrid v4's guesses, King judging | 40 | 9 | -0.113 (-0.182 to -0.044) | 18.4% | -27.3 (-40.4 to -14.2) | 19 ms |
+| Own guesses, the training judge's final place | 40 | 15 | -0.001 (-0.071 to +0.070) | 24.1% | -8.8 (-19.3 to +1.7) | 16 ms |
+| The player alone, no search (`own=true:top_k=1`) | 40 | 4 | -0.169 (-0.227 to -0.112) | 16.2% | -32.3 (-41.2 to -23.4) | 0.2 ms |
+
+Judging the cards by the player's King chance costs about 30 points a game with either guesser,
+and wins fewer Kings too: that answer was learned lightly (a practice question), says nothing
+about the other places and has to see many rounds ahead, so between two cards its difference is
+mostly noise, while round points are exact. King judging is not kept. The player's own guesses are
+as good as Hybrid v4's: with them and round points the player alone, with no Hybrid v4 net, is even
+with Hybrid v4 (within noise of the check-up on the same deals). It is a little slower than the
+check-up bot (16 ms a card against 13; Hybrid v4 took 26 ms in the same match), with rare slow
+cards.
+
+**Judging by the training judge** (Yosif: build it and run the test; `judge=place`, the judge of the
+self-play run's last checkpoint exported with `estimation.onenet.selfplay.export_judge` to
+git-ignored `runs/onenet/selfplay/judge-05000.npz`, last row above): the judge predicts the final
+place itself (error 0.07 at loop 5,000 against 0.52 blind) and can score an imagined ending
+because every hand of an imagined deal is known; it is read at the player's last card of each
+imagined round, from its view and the other three hands. It does not collapse as King judging
+does: final place and King are even with Hybrid v4, but it scores about 14 points a game fewer than
+round points on the same deals (-8.8 against +5.3), and its place is no better (-0.001 against
++0.045). Not kept: round points stay the judge of the searched cards. The best version so far is
+the player alone with its own guesses and round points, even with Hybrid v4.
+
+**The player with no search at all** (Yosif: "RL vs Hybrid"; the search keeps only the player's top
+card, so every bid and card is its own first choice, last row above): clearly behind Hybrid v4, 4 of
+40 sets and 32 points a game. The search around it is worth about 35 points a game, so the player's
+own play is where the next training should aim: learning from the search's choices (expert
+iteration, as step 2 did for the Hybrid), followed by self-play to keep playing for final place.
+
+**Search tuning (2026-11-07, Yosif: tune search now)**: the player alone with its own guesses and
+round points, one search setting changed at a time, 40 sets each against Hybrid v4 on the same
+deals (seed 2040, 5 workers). `spread` and `late` are new judging options (`judge=spread`: in the
+fixed-trump rounds a card's spread of outcomes over the imagined deals counts too, up to half a
+standard deviation toward the long shot when behind the leader and away from it when leading;
+`judge=late`: round points in the open rounds, the judge's final place in the fixed-trump rounds):
+
+| Search setting | Sets won | Place (95% CI) | King | Points per game (95% CI) |
+|---|---|---|---|---|
+| As above: the top 2 cards, 32 deals, round points | 21 | +0.045 (-0.021 to +0.111) | 26.4% | +5.3 (-5.2 to +15.8) |
+| The top 3 cards | 21 | +0.012 (-0.061 to +0.085) | 25.0% | +1.8 (-7.4 to +11.0) |
+| Every legal card | 14 | -0.044 (-0.113 to +0.024) | 22.7% | -9.9 (-19.8 to 0.0) |
+| 64 deals | 26 | +0.037 (-0.033 to +0.108) | 26.2% | +7.2 (-2.3 to +16.7) |
+| Spread judging in the fixed-trump rounds | 20 | +0.044 (-0.039 to +0.126) | 25.3% | +1.8 (-10.0 to +13.6) |
+| The judge in the fixed-trump rounds | 20 | +0.042 (-0.034 to +0.119) | 25.0% | +5.0 (-7.1 to +17.1) |
+
+None is clearly better than the top 2 cards with 32 deals and round points, which stays. Searching
+more cards is worse, every legal card most of all: with 32 deals each card's mean is noisy, and the
+more cards are compared the more often a weaker one wins on luck, so the player's top 2 are a good
+filter. 64 deals may help a little (within noise, and twice the time a card). The two late-Bola
+judges change only the last five rounds, too few decisions to show in 40 sets. The search is at its
+best with these settings; what it lacks comes from the player: its top cards and its play-outs.
+
+**Learning from the search, round 1 (2026-11-08, Yosif: run it all; not kept).** The loop 4,000
+player inside its own search (own guesses, round points) played 2,000 Bolas on fresh deals
+(`configs/onenet-expert-1.toml`, git-ignored `runs/onenet/expert-1/`), 2.6 h on the Mac's 5
+workers. At half its card decisions the same search with 64 deals and every card valued every
+legal card (675,856 cards); its bids keep no values, since it bids by its own move chances. The
+training set: 2,021,390 decisions. The player then learned from it, starting from itself
+(`copy.start`, about 1.5 min a setting on the 1060, the same 100 Bolas held out):
+
+| Learning setting (10 passes) | Top card loses | Best of top 3 loses |
+|---|---|---|
+| None: the loop 4,000 player | **1.76** | 0.45 |
+| The teacher's values as chances (temperature 2), as the copy | 1.93 | 0.39 |
+| The same on half the Bolas | 2.08 | 0.40 |
+| The same, learning rate 10 times lower | 2.36 | 0.45 |
+| Sharper chances (temperature 0.5) | 2.09 | 0.39 |
+| Near the teacher's best card alone (temperature 0.1) | 2.13 | 0.39 |
+| The values only, without the search's own choices | 2.45 | 0.45 |
+| The player's own chances tilted by the values (`copy.tilt`), temperature 2 or 1 | 1.75 to 1.76 | 0.44 |
+| Tilted, temperature 0.5 | 1.80 | 0.43 |
+| Tilted, temperature 0.25 | 1.92 | 0.42 |
+
+No setting beat the player it started from. Learning the teacher's values as chances flattens a
+player that self-play made sure of its moves (its sampled moves lose only 0.03 points more than
+its top move), so its top 3 improve while its first choice gets worse; tilting its own chances
+leaves it where it was.
+
+The teacher does know more. On 600 positions, each card judged by an independent 256-deal search,
+the points lost against the best card: the player's top card 1.44 (standard error 0.18), its own
+search (2 cards, 32 deals) 0.74 (0.07), the 64-deal teacher 0.49 (0.06), a 256-deal teacher 0.28
+(0.03). So the teacher is about a point a card better than the player, but in one decision its
+value of a card carries about 2.6 points of noise. Half the Bolas learned clearly less (2.08
+against 1.93), so the learning is short of data: a teacher four times less noisy (256 deals) or
+several times more Bolas is what a next round would need, each about four times this round's
+recording.
+
+Matches against Hybrid v4 (seed 2040, 5 workers on the Mac). The learned player of the copy's
+setting, kept at its last pass, also plays worse at the table:
+
+| Player | Sets | Sets won | Place (95% CI) | King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| Loop 4,000 in its own search | 100 | 46 | +0.026 | 26.5% | -0.1 (-5.7 to +5.6) |
+| Loop 4,000 in its own search | first 40 | 21 | +0.045 | 26.4% | +5.3 |
+| Learned, in its own search | first 40 | 16 | -0.031 | 22.5% | -7.7 (-17.3 to +1.8) |
+| Loop 4,000 alone | 40 | 4 | -0.169 | 16.2% | -32.3 |
+| Learned, alone | 40 | 2 | -0.264 | 11.9% | -52.8 (-65.1 to -40.5) |
+
+Not kept. The night plan's gates held: no self-play from a learned player and no second round. The
+loop 4,000 player in its own search, with no Hybrid v4 net at all, stays even with Hybrid v4 over
+the full 100 sets.
+
+**Learning from the search, round 2 (2026-11-10 to 11-11, Yosif: 5,000 Bolas, a 256-deal teacher).**
+The same player and search as round 1, with a teacher four times less noisy (256 deals) and 2.5
+times the Bolas on fresh deals (`configs/onenet-expert-2.toml`, git-ignored
+`runs/onenet/expert-2/`). The Mac (5 workers, from the first part up) and the home server's 1060
+(256 Bolas at once, from the last part down) shared the recording, each saved part copied to the
+other every minute: 5,000 Bolas in 12 h 42 min (the Mac about 3,150, the 1060 about 1,850),
+1,696,390 cards valued by the teacher, every part checked to replay to its scores. The training
+set: 5,059,425 decisions. The player then learned from it as in round 1, starting from itself
+(`configs/onenet-expert-2-learn.toml`, about 18 s a pass on the 1060), 250 Bolas held out:
+
+| Points lost against the teacher's best (250 held-out Bolas) | Top card | Best of top 2 | Best of top 3 |
+|---|---|---|---|
+| The loop 4,000 player | **1.355** | 0.598 | 0.307 |
+| Learned on half the Bolas, 10 passes | 1.50 | | 0.26 |
+| Learned on all of them, 10 passes | 1.41 | | 0.25 |
+| Learned on all of them, 20 passes | 1.369 | **0.519** | **0.247** |
+
+(Standard errors over the held-out Bolas: about 0.016 for the top card, 0.010 for the top 2.) A
+better teacher and more Bolas closed most of round 1's gap: the learned player's first choice is
+now as good as the start's (within noise), and the pair of cards its search looks at is clearly
+better, 13% fewer points lost. Half the Bolas learned clearly less (1.50 against 1.41), so more
+Bolas would still help. Yosif chose to play the 20-pass player at the table although the top card
+did not improve, since its top 2 did:
+
+| Player (against Hybrid v4, seed 2040) | Sets | Sets won | Place | King | Points per game (95% CI) |
+|---|---|---|---|---|---|
+| Loop 4,000 in its own search | 100 | 46 | +0.026 | 26.5% | -0.1 (-5.7 to +5.6) |
+| Learned (20 passes) in its own search | 100 | 39 | -0.010 | 22.8% | -4.0 (-10.3 to +2.2) |
+| Loop 4,000 alone | 40 | 4 | -0.169 | 16.2% | -32.3 (-41.2 to -23.4) |
+| Learned (20 passes) alone | 40 | 12 | -0.134 | 17.8% | -28.7 (-39.5 to -18.0) |
+
+Alone, the learned player is a little better on every measure (about 4 points a game, within
+noise, and 12 sets won against 4); in its own search it is a little worse on every measure (about
+4 points a game, within noise). Not kept. The search reads the player for more than its cards: it
+also weighs the imagined deals by the player's chances of the other seats' bids, and the learning
+trained those bids on the player's own (greedy) bids, which sharpens them; a search with the
+learned player's cards but the loop 4,000 player's guesses and bid weights would show whether
+that is what cost the points.
+
+**How much perfect guesses would give (2026-11-10, a cheat test).** Hybrid v4 whose search plays
+out the real hidden hands, against plain Hybrid v4, 40 duplicate sets on the check-ups' deals
+(seed 2040, 4 workers on the Mac, 14 min): place +0.094 (+0.028 to +0.159), King 31.2% against
+18.8%, +16.0 points a game (+4.3 to +27.7), 24 of 40 sets. A search that knew every hidden card
+would gain only about 16 points a game, so better guesses are a small lever; the larger one is
+which cards are searched and how the play-outs play. The bot is test-only: it reads the engine's
+real hands, which no real bot may see. Its script is kept with its report, outside the repo, in
+the main checkout's git-ignored `runs/cheat-test/` (`cheat_test.py`, `cheat.json`).
+
+**The search on the GPU (2026-11-08, PR #19).** The one net's own search in JAX
+(`estimation.onenet.gpu_search`) and a recorder that uses it (`estimation.onenet.gpu_record`),
+with the engine still playing every Bola from the same seeds. Its teacher agrees with the CPU
+teacher as often as the CPU teacher agrees with itself (on 300 positions the same best card 59%
+against 60%). On the 1060 it records about 570 Bolas an hour against the Mac's 785: the play-outs
+are arithmetic-bound and the Mac's matrix units match the 1060 on a net this size. It is a second
+recorder to run next to the Mac, about 1,350 Bolas an hour together.
+
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

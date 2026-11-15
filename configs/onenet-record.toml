@@ -1,0 +1,13 @@
+# Step 5 of docs/rl/hybrid-iteration-plan.md: Hybrid v4's games, recorded for the one-net copy.
+#
+#   uv run python -m estimation.rl.onenet_record run --config configs/onenet-record.toml --out runs/onenet/record
+#   uv run python -m estimation.rl.onenet_record watch runs/onenet/record
+
+[record]
+player = "hybrid:checkpoint=runs/expert/round-1/hybrid.pt:deals=both:top_k=2:samples=32"  # Hybrid v4
+games = 2000
+part_games = 25
+label_share = 0.5      # the teacher values every card at half the card decisions, as in step 2
+teacher_samples = 64   # the teacher: Hybrid v4's search with 64 deals and every legal card
+seed = 20261106
+workers = 5

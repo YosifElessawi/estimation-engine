@@ -227,12 +227,11 @@ class _Rows:
 
 
 def teach(
-    teacher: HybridBot, features: npt.NDArray[np.float32], obs: Observation, cards: list[int]
+    teacher: HybridBot, obs: Observation, cards: list[int]
 ) -> tuple[int, npt.NDArray[np.float32]] | None:
     """The teacher's card and its value of every legal card (touching cards share their run's
     value), or None when every legal card is equivalent and nothing is searched."""
-    advantage = teacher.policy.card_values(features[np.newaxis])[0]
-    search = teacher.search(obs, cards, [float(advantage[c]) for c in cards])
+    search = teacher.search(obs, cards, teacher.card_advantages(obs, cards))
     if len(search.cards) < 2:
         return None
     value_of = dict(zip(search.cards, search.means, strict=True))
@@ -265,7 +264,7 @@ def record_game(task: PartTask, game: int) -> CardRecords:
         if choosing and labels.random() < config.expert.label_share:
             features = encode(obs, rules)
             cards = [a - PLAY_BASE for a in legal]
-            taught = teach(teachers[seat], features, obs, cards)
+            taught = teach(teachers[seat], obs, cards)
             if taught is not None:
                 choice, values = taught
                 mask = np.zeros(52, np.bool_)
@@ -677,7 +676,7 @@ def time_decisions(config: RunConfig, decisions: int, seed: int) -> dict[str, fl
             play_seconds.append(time.perf_counter() - tick)
             tick = time.perf_counter()
             card_ids = [a - PLAY_BASE for a in legal]
-            teach(teachers[seat], encode(obs, config.train.rules), obs, card_ids)
+            teach(teachers[seat], obs, card_ids)
             teach_seconds.append(time.perf_counter() - tick)
         played.step(action)
     return {
