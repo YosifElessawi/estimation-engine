@@ -155,6 +155,7 @@ IMITATION_STAGE = 2
 SELFPLAY_STAGE = 3
 EXPERT_STAGE = 4
 ONENET_STAGE = 5  # step 5's recording of Hybrid v4 (rl.onenet_record)
+LESSON_STAGE = 6  # step 6's bid lessons (onenet.bid_lessons)
 
 
 def linear_schedule(iterations: int, iteration: int, start: float, end: float) -> float:
