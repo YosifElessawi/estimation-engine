@@ -4,6 +4,7 @@ imagines the deals and judges the cards itself."""
 
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from estimation.bots import make_bot
 from estimation.bots.hybrid.rollout import Start
 from estimation.bots.hybrid.rollout import _beats as beats  # the Hybrid's own trick rule
 from estimation.bots.knowledge import read_knowledge
-from estimation.engine import Observation, Phase, RulesConfig
+from estimation.engine import Observation, Phase, RulesConfig, legal_plays
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
 from estimation.onenet import nets
 from estimation.onenet.nets import PRACTICE, PRACTICE_SIZE
@@ -337,3 +338,59 @@ def test_a_place_judged_bot_plays_a_set_scoring_each_card_by_the_judge(
     assert all(math.isfinite(mean) for mean in search.means)
     result, _ = play_set((spec, "random", spec, "random"), 1, 0, RulesConfig())
     assert len(result.scores) == 4
+
+
+def fixed_and_open(rounds: list[Seen]) -> tuple[Observation, Observation]:
+    """A card decision with a choice in a fixed-trump round and one in an open round."""
+    rows = [row for decisions in rounds for row in cards_of_round(decisions) if len(row[1]) > 2]
+    fixed = next(obs for obs, _, _ in rows if obs.fixed_trump is not None)
+    opened = next(obs for obs, _, _ in rows if obs.fixed_trump is None)
+    return fixed, opened
+
+
+def test_late_judging_uses_the_judge_only_in_the_fixed_trump_rounds(
+    game: tuple[Any, list[Seen]], judge_file: str, tmp_path: Path
+):
+    _, rounds = game
+    fixed, opened = fixed_and_open(rounds)
+    spec = f"onenet:net={random_net(tmp_path)}:own=true:judge=late:judge_net={judge_file}"
+    bot = make_bot(spec, 0)
+    assert isinstance(bot, OneNetSearch)
+    assert bot.mode(opened) == "round"
+    assert bot.mode(fixed) == "place"
+    with pytest.raises(ValueError, match="judge_net"):
+        make_bot(f"onenet:net={random_net(tmp_path)}:own=true:judge=late", 0)
+
+
+def test_spread_judging_leans_to_the_long_shot_when_behind_and_away_when_ahead(
+    game: tuple[Any, list[Seen]], tmp_path: Path
+):
+    _, rounds = game
+    fixed, opened = fixed_and_open(rounds)
+    me = fixed.seat
+    left = len(fixed.fixed_left) + 1
+
+    def scores(gap: int) -> tuple[int, int, int, int]:
+        four = [100, 100, 100, 100]
+        four[me] += gap
+        return four[0], four[1], four[2], four[3]
+
+    risk = OneNetSearch.risk
+    assert risk(replace(fixed, scores=scores(-1000))) == pytest.approx(0.5)
+    assert risk(replace(fixed, scores=scores(1000))) == pytest.approx(-0.5)
+    assert risk(replace(fixed, scores=scores(0))) == 0.0
+    assert risk(replace(fixed, scores=scores(-15))) == pytest.approx(0.5 * 15 / (left * 30))
+    assert risk(replace(opened, scores=scores(-1000))) == 0.0
+    behind = replace(fixed, scores=scores(-1000))
+    path = random_net(tmp_path)
+    cards = legal_plays(behind.hand, behind.trick)
+    plain = make_bot(f"onenet:net={path}:own=true:samples=8:top_k=0:merge_equivalent=false", 3)
+    lean = make_bot(
+        f"onenet:net={path}:own=true:judge=spread:samples=8:top_k=0:merge_equivalent=false", 3
+    )
+    assert isinstance(plain, OneNetSearch)
+    assert isinstance(lean, OneNetSearch)
+    flat = [0.0] * len(cards)
+    means_plain = plain.search(behind, cards, flat).means
+    means_lean = lean.search(behind, cards, flat).means
+    assert all(b >= a - 1e-9 for a, b in zip(means_plain, means_lean, strict=True))
