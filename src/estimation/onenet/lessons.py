@@ -22,14 +22,24 @@ field           shape, type      what it holds
 ``rank``        [L, K] int16     the option's place among all legal options by that chance
 ``value``       [L, K] f32       its mean value, in round points, over the deals it played
 ``deals``       [L, K] int16     how many deals it played before it was dropped
-``margin``      [L, K] f32       its mean lead over the favourite on those deals
+``margin``      [L, K] f32       its mean lead over the favourite on those deals: flattered
+                                 for an option kept on, since it was kept on the same deals
 ``error``       [L, K] f32       that lead's standard error
 ``opening``     [L, K] f32       its mean lead on the first stage's deals alone, which every
-                                 option played: noisier than ``margin``, but not flattered by
-                                 which options were kept on
-``pick``        [L] int8         the slot the teacher picks: the better, over every deal, of
-                                 the favourite and the last alternative left
+                                 option played: a fair measure of any option, but a short one
+``finalist``    [L] int8         the slot of the alternative that lasted longest
+``exam``        [L] f32          the finalist's mean lead over the favourite on its exam: the
+                                 deals it played once it was the only alternative left, none
+                                 of which decided what was kept. The fair measure of it
+``exam_error``  [L] f32          that lead's standard error
+``exam_deals``  [L] int16        the exam's deals: 0 when every alternative was dropped as
+                                 hopeless before one was left alone
+``pick``        [L] int8         the slot the teacher picks: the finalist if it sat its exam
+                                 to the last deal and led it, else the favourite (slot 0)
 ==============  ===============  ==========================================================
+
+A lesson whose finalist was dropped as hopeless has a short exam or none: its ``pick`` is the
+favourite, and its numbers say only that no alternative came close.
 """
 
 from pathlib import Path
@@ -54,6 +64,10 @@ DTYPES: dict[str, Any] = {
     "margin": np.float32,
     "error": np.float32,
     "opening": np.float32,
+    "finalist": np.int8,
+    "exam": np.float32,
+    "exam_error": np.float32,
+    "exam_deals": np.int16,
     "pick": np.int8,
 }
 PER_OPTION = ("options", "chance", "rank", "value", "deals", "margin", "error", "opening")

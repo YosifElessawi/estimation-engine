@@ -207,7 +207,11 @@ def test_each_lesson_holds_the_teachers_verdict_per_option(taught: tuple[LessonC
     lessons = L.load_all(out)
     used = lessons["options"] >= 0
     rows = np.arange(len(lessons["pick"]))
-    assert (lessons["deals"][:, 0] == sum(DEALS)).all()  # the favourite plays every deal
+    total = sum(DEALS)
+    # The favourite plays every deal any option plays: all of them, or the first stage's when
+    # every alternative was hopeless by then.
+    assert (lessons["deals"][:, 0] == lessons["deals"].max(1)).all()
+    assert set(lessons["deals"][:, 0].tolist()) == {DEALS[0], total}
     assert (lessons["deals"][used] >= DEALS[0]).all()
     assert not lessons["deals"][~used].any()
     assert (lessons["rank"][:, 0] == 0).all()
@@ -218,9 +222,16 @@ def test_each_lesson_holds_the_teachers_verdict_per_option(taught: tuple[LessonC
     assert not lessons["opening"][:, 0].any()
     assert (lessons["error"][used] >= 0).all()
     assert np.isfinite(lessons["value"]).all()
-    assert used[rows, lessons["pick"]].all()
-    assert (lessons["deals"][rows, lessons["pick"]] == sum(DEALS)).all()
-    assert 0 < (lessons["pick"] != 0).sum() < len(rows)  # a random net is often overruled
+    finalist, pick = lessons["finalist"], lessons["pick"]
+    assert (finalist > 0).all()
+    assert used[rows, finalist].all()
+    assert (lessons["deals"][rows, finalist] == lessons["deals"][:, 0]).all()
+    assert (lessons["exam_deals"] <= lessons["deals"][:, 0]).all()
+    changed = pick != 0
+    assert 0 < changed.sum() < len(rows)  # a random net is often overruled
+    assert (pick[changed] == finalist[changed]).all()
+    assert (lessons["exam"][changed] > 0).all()
+    assert (lessons["deals"][rows, pick][changed] == total).all()
     assert used.sum(1).max() == config.max_options
 
 
@@ -295,20 +306,19 @@ def test_a_lessons_config_is_one_checked_section(games: Path):
 
 
 def lessons_of(
-    pick: list[int], margin: list[float], error: list[float], opening: list[float]
+    pick: list[int], exam: list[float], error: list[float], opening: list[float]
 ) -> L.Lessons:
-    """Lessons with two slots, the favourite and one alternative with these numbers."""
+    """Lessons with two slots, the favourite and one alternative, searched to the last of 6
+    deals: the alternative's exam lead, its standard error and its lead on the first stage."""
     count = len(pick)
     blank = L.empty(2)
     lessons = {k: np.zeros((count, *blank[k].shape[1:]), L.DTYPES[k]) for k in L.DTYPES}
     lessons["options"][:] = [3, 7]
     lessons["deals"][:] = [6, 6]
+    lessons["finalist"][:] = 1
+    lessons["exam_deals"][:] = 6
     lessons["pick"][:] = pick
-    lessons["margin"][:, 1], lessons["error"][:, 1], lessons["opening"][:, 1] = (
-        margin,
-        error,
-        opening,
-    )
+    lessons["exam"][:], lessons["exam_error"][:], lessons["opening"][:, 1] = exam, error, opening
     return lessons
 
 
@@ -329,7 +339,10 @@ def test_noise_compares_two_teachings_of_the_same_decisions():
     assert report["lead_when_changed"] == pytest.approx((3.0 + 0.5 + 2.0) / 3)
     assert report["options"] == 2.0
     assert report["play_outs"] == 12.0
-    # Counting only leads of 2 standard errors: 1, 0, 0, 1 against 1, 0, 0, 0.
+    assert report["searched_to_the_end"] == 1.0
+    assert report["exam_deals"] == 6.0
+    assert report["exam_error"] == pytest.approx(3.5 / 4)
+    # Counting only exam leads of 2 standard errors: 1, 0, 0, 1 against 1, 0, 0, 0.
     careful = report["gates"]["2.0"]
     assert (careful["same_pick"], careful["changed"], careful["changed_again"]) == (0.75, 0.5, 0.5)
     assert careful["gain"] == pytest.approx((3.0 + 0.0 + 0.0 + 0.5) / 4)
@@ -363,6 +376,7 @@ def test_the_timing_test_teaches_the_same_decisions_twice(games: Path, tmp_path:
     second = L.load_lessons(tmp_path / "kept" / "second.npz")
     assert first["options"].tolist() == second["options"].tolist()
     assert first["value"].tolist() != second["value"].tolist()  # fresh deals
+    assert {"decisions", "deals", "stage 1", "stage 2"} == set(report["spent"])
     lines = noise_lines(report)
     assert lines[0].startswith("12 decisions in ")
     assert any(line.startswith("same pick on fresh deals: ") for line in lines)
@@ -379,7 +393,7 @@ def test_lessons_round_trip_and_join_in_order(tmp_path: Path):
     L.save_lessons(L.lesson_path(tmp_path, 0), one)
     loaded = L.load_lessons(L.lesson_path(tmp_path, 0))
     assert all(loaded[name].tolist() == one[name].tolist() for name in L.DTYPES)
-    assert L.load_all(tmp_path)["margin"][:, 1].tolist() == [1.0, 2.0, 3.0]
+    assert L.load_all(tmp_path)["exam"].tolist() == [1.0, 2.0, 3.0]
     assert not list((tmp_path / "parts").glob("*.tmp*"))
     with pytest.raises(ValueError, match="missing"):
         L.save_lessons(tmp_path / "bad.npz", {"pick": one["pick"]})

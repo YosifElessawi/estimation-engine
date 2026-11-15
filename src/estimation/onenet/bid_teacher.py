@@ -23,15 +23,21 @@ At a Dash Call, bid, With, Pass, estimate or super call with a choice:
    players ahead in the Bola counting double.
 5. **Narrowing** (``Teacher.teach``). Every option plays the first ``deals[0]`` deals and the
    worse half of the alternatives is dropped; the rest play ``deals[1]`` more; and so on, until
-   one alternative is left to meet the favourite over every deal. The favourite always stays, so
-   a verdict says by how many points, and how surely, each alternative beat the move the player
-   makes today over the deals they shared.
+   one alternative, the finalist, is left to meet the favourite. The favourite always stays, so
+   every alternative is measured against the move the player makes today on the deals they
+   shared. An alternative more than ``hopeless`` standard errors behind the favourite is dropped
+   at once, and with none left the search ends early: the favourite stands.
+6. **The exam** (``verdicts``). The deals the finalist plays once it is the only alternative
+   left. Nothing was kept or dropped on those deals, so its lead over them is a fair measure of
+   it, where a lead over the earlier deals is flattered by the luck that kept it in. The teacher
+   picks the finalist only if it led the exam.
 
 Only what the deciding seat may see goes in: its own hand, the public table and bidding, and its
 own guesses. The other three hands of the real round are replaced by imagined ones before any
 option is tried.
 """
 
+import time
 from collections.abc import Sequence
 from functools import partial
 from typing import Any, NamedTuple
@@ -65,6 +71,7 @@ class Settings(NamedTuple):
     guess_temperature: float = 1.0
     leader_weight: bool = True
     opponent_temperature: float = 1.0  # the other seats' bids: 0 is their top move, 1 their chances
+    hopeless: float = 3.0  # standard errors behind the favourite at which an option is dropped
 
 
 class Pruning(NamedTuple):
@@ -82,8 +89,8 @@ def check(settings: Settings, pruning: Pruning) -> None:
         raise ValueError("the teacher's deals must be one or more stages of at least 2 deals")
     if settings.oversample < 1 or settings.redeals < 1:
         raise ValueError("the teacher's oversample and redeals must be at least 1")
-    if settings.opponent_temperature < 0:
-        raise ValueError("the teacher's opponent_temperature must be 0 or more")
+    if settings.opponent_temperature < 0 or settings.hopeless < 0:
+        raise ValueError("the teacher's opponent_temperature and hopeless must be 0 or more")
     if not 0 < pruning.coverage <= 1:
         raise ValueError("the teacher's coverage must be above 0 and at most 1")
     most = 1 + 2 ** (len(settings.deals) - 1)
@@ -382,79 +389,115 @@ def evaluate(
 
 
 class Verdicts(NamedTuple):
-    """What the teacher found for a batch of decisions, per option slot (slot 0 is the player's
-    favourite; padded slots and decisions with nothing to compare hold zeros)."""
+    """What the teacher found for a batch of decisions. Per option slot (slot 0 is the player's
+    favourite; padded slots and decisions with nothing to compare hold zeros): how the option
+    did on the deals it played. Per decision: the exam, the finalist against the favourite on
+    deals none of the dropping was done on."""
 
     value: Floats  # [N, K]: the option's mean value over the deals it played
     deals: Ints  # [N, K]: how many deals it played
     margin: Floats  # [N, K]: its mean lead over the favourite on the deals it played
     error: Floats  # [N, K]: that lead's standard error
     opening: Floats  # [N, K]: its mean lead on the first stage's deals, which every option plays
+    finalist: Ints  # [N]: the alternative that lasted longest (0: the decision was not searched)
+    exam: Floats  # [N]: the finalist's mean lead over the favourite on its exam deals
+    exam_error: Floats  # [N]: that lead's standard error
+    exam_deals: Ints  # [N]: the exam's deals (0: no alternative was ever left alone to sit one)
     pick: Ints  # [N]: the slot the teacher picks
 
 
-def verdicts(played: Floats, first: int) -> Verdicts:
+def verdicts(played: Floats, first: int, exam_from: Ints) -> Verdicts:
     """The verdicts from each option's value on each deal ``[N, K, D]``, NaN where the option
     did not play; the first stage is the first ``first`` deals. An option plays the deals up to
-    where it was dropped; the favourite (slot 0) plays them all, as does the last alternative.
-    The pick is the better of those two over every deal, the favourite on a tie.
+    where it was dropped; the favourite (slot 0) plays every deal any option plays.
 
-    ``margin`` uses every deal an option played, so it is the best single estimate of its lead,
-    but options were kept or dropped on the same deals, which flatters the ones kept;
-    ``opening`` is noisier and free of that: no option had been dropped yet."""
+    The finalist is the alternative that played the most deals (the one further ahead on a
+    tie). Its exam is the deals it played from ``exam_from`` ``[N]`` on, the point where it was
+    the only alternative left: no option was kept or dropped on those deals, so its lead over
+    them is a fair measure, where ``margin`` (every deal an option played) flatters the options
+    that were kept on and ``opening`` is fair but short. The pick is the finalist if it sat the
+    whole exam, to the last deal, and led it; otherwise the favourite."""
+    count, _, total = played.shape
+    rows = np.arange(count)
     done = ~np.isnan(played)
     deals = done.sum(-1)
-    count = np.maximum(deals, 1)
-    value = np.where(done, played, 0.0).sum(-1) / count
+    many = np.maximum(deals, 1)
+    value = np.where(done, played, 0.0).sum(-1) / many
     lead = np.where(done, played - played[:, :1], 0.0)
-    margin = lead.sum(-1) / count
+    margin = lead.sum(-1) / many
     spread = np.where(done, (lead - margin[..., None]) ** 2, 0.0).sum(-1) / np.maximum(deals - 1, 1)
-    error = np.sqrt(spread / count)
+    error = np.sqrt(spread / many)
     opening = lead[..., :first].sum(-1) / np.maximum(done[..., :first].sum(-1), 1)
-    whole = deals == played.shape[-1]
-    pick = np.where(whole, value, -np.inf).argmax(-1)
-    pick = np.where(whole.any(-1), pick, 0)
+    ahead = margin[:, 1:] - margin[:, 1:].min(-1, keepdims=True)
+    longest = deals[:, 1:] + 0.5 * ahead / (ahead.max(-1, keepdims=True) + 1e-9)
+    finalist = np.where(deals[:, 1:].any(-1), 1 + longest.argmax(-1), 0)
+    sat = deals[rows, finalist]
+    at = np.arange(total)
+    window = (at >= exam_from[:, None]) & (at < sat[:, None]) & (finalist > 0)[:, None]
+    exam_deals = window.sum(-1)
+    exam_lead = np.where(window, lead[rows, finalist], 0.0)
+    exam = exam_lead.sum(-1) / np.maximum(exam_deals, 1)
+    exam_spread = np.where(window, (exam_lead - exam[:, None]) ** 2, 0.0).sum(-1)
+    exam_error = np.sqrt(exam_spread / np.maximum(exam_deals - 1, 1) / np.maximum(exam_deals, 1))
+    pick = np.where((sat == total) & (exam_deals > 0) & (exam > 0), finalist, 0)
     return Verdicts(
         value.astype(np.float32),
         deals.astype(np.int32),
         margin.astype(np.float32),
         error.astype(np.float32),
         opening.astype(np.float32),
+        finalist.astype(np.int32),
+        exam.astype(np.float32),
+        exam_error.astype(np.float32),
+        exam_deals.astype(np.int32),
         pick.astype(np.int32),
     )
 
 
-def narrow(alive: list[int], means: Sequence[float], keep: int) -> list[int]:
-    """The option slots that go on to the next stage: the favourite (the first of ``alive``) and
-    the better half of the alternatives by their ``means`` so far (one per alive slot), at most
-    ``keep`` of them and at least one; the more favoured slot on a tie."""
-    rest = alive[1:]
-    if len(rest) < 2:
-        return alive
-    count = max(1, min((len(rest) + 1) // 2, keep))
-    best = sorted(range(len(rest)), key=lambda i: (-means[i + 1], rest[i]))[:count]
-    return [alive[0], *sorted(rest[i] for i in best)]
+def survivors(leads: Floats, keep: int, hopeless: float) -> list[int]:
+    """Which of a decision's alternatives go on to the next stage, from each one's lead over the
+    favourite on every deal so far (``[A, deals]``, the more favoured alternative first): the
+    better half by mean lead, at most ``keep`` of them and at least one, less any that trails
+    the favourite by more than ``hopeless`` standard errors (0: none ever does). The more
+    favoured alternative wins a tie. None left ends the search: the favourite stands."""
+    count, deals = leads.shape
+    mean = leads.mean(axis=1)
+    error = leads.std(axis=1, ddof=1) / np.sqrt(deals)
+    half = max(1, min((count + 1) // 2, keep))
+    best = sorted(range(count), key=lambda i: (-mean[i], i))[:half]
+    return sorted(i for i in best if hopeless <= 0 or mean[i] + hopeless * error[i] >= 0)
 
 
 class Teacher:
     """The bid teacher for one player and one batch size: compiled once, then ``look`` at a
-    batch of decisions, choose their options (``candidates``) and ``teach``."""
+    batch of decisions, choose their options (``candidates``) and ``teach``. ``spent`` keeps
+    the seconds each part of the work has taken so far and ``play_outs`` their count."""
 
     def __init__(self, bidder: Bidder, settings: Settings) -> None:
         self.settings = settings
+        self.spent: dict[str, float] = {}
+        self.play_outs = 0
         self._positions = jax.jit(positions)
         self._opinions = jax.jit(partial(opinions, bidder))
         self._imagine = jax.jit(partial(imagine, bidder.player, settings))
         self._evaluate = jax.jit(partial(evaluate, bidder.player, settings))
+
+    def _clock(self, name: str, started: float) -> float:
+        now = time.perf_counter()
+        self.spent[name] = self.spent.get(name, 0.0) + now - started
+        return now
 
     def look(
         self, rounds: Rounds, where: Ints, at: Ints, history: Ints
     ) -> tuple[Batch, Floats, Floats]:
         """The decisions (``positions``) with the player's move logits ``[N, 120]`` and
         expected tricks ``[N]`` at each."""
+        started = time.perf_counter()
         batch = self._positions(rounds, jnp.asarray(where), jnp.asarray(at), jnp.asarray(history))
         logits, tricks = self._opinions(batch.x)
-        return batch, np.asarray(logits), np.asarray(tricks)
+        found = batch, np.asarray(logits), np.asarray(tricks)
+        self._clock("decisions", started)
+        return found
 
     def teach(self, key: jax.Array, batch: Batch, options: Ints) -> Verdicts:
         """Search every decision of ``batch``. ``options`` ``[N, K]`` are each decision's
@@ -462,10 +505,17 @@ class Teacher:
         than two is not searched."""
         n, slots = options.shape
         stages = self.settings.deals
+        total = sum(stages)
+        clock = time.perf_counter()
         hands, keys = self._imagine(key, batch.round, batch.me, batch.bidding)
-        played = np.full((n, slots, sum(stages)), np.nan, np.float32)
+        hands.block_until_ready()
+        clock = self._clock("deals", clock)
+        played = np.full((n, slots, total), np.nan, np.float32)
         alive = [[k for k in range(slots) if options[d, k] >= 0] for d in range(n)]
         alive = [slots_of if len(slots_of) > 1 else [] for slots_of in alive]
+        # A decision's exam starts once one alternative is left: at once with two options.
+        exam_from = np.array([0 if len(slots_of) == 2 else total for slots_of in alive], np.int32)
+        step = max(n // 4, 1)  # play-out batches come in quarter-batch sizes, each compiled once
         start = 0
         for stage, count in enumerate(stages):
             pairs = [(d, k) for d in range(n) for k in alive[d]]
@@ -473,9 +523,8 @@ class Teacher:
                 break
             which = np.array([d for d, _ in pairs], np.int32)
             slot = np.array([k for _, k in pairs], np.int32)
-            # One compiled size per whole number of options a decision; the padding repeats
-            # the first pair, a real option, so every play-out is a legal game.
-            size = max(2, -(-len(pairs) // n)) * n
+            # The padding repeats the first pair, a real option: every play-out is a legal game.
+            size = -(-len(pairs) // step) * step
             w = np.full(size, which[0], np.int32)
             o = np.full(size, options[which[0], slot[0]], np.int32)
             w[: len(pairs)], o[: len(pairs)] = which, options[which, slot]
@@ -489,11 +538,19 @@ class Teacher:
                 jnp.asarray(o),
             )
             played[which, slot, start:end] = np.asarray(out)[: len(pairs)]
+            self.play_outs += len(pairs) * count
+            clock = self._clock(f"stage {stage + 1}", clock)
             start = end
-            if stage + 1 < len(stages):
-                keep = 2 ** (len(stages) - 2 - stage)  # alternatives the next stage may hold
-                for d in range(n):
-                    if len(alive[d]) > 2:
-                        means = played[d, alive[d], :start].mean(axis=1).tolist()
-                        alive[d] = narrow(alive[d], means, keep)
-        return verdicts(played, stages[0])
+            if stage + 1 == len(stages):
+                break
+            keep = 2 ** (len(stages) - 2 - stage)  # alternatives the next stage may hold
+            for d in range(n):
+                slots_of = alive[d]
+                if not slots_of:
+                    continue
+                leads = played[d, slots_of[1:], :start] - played[d, slots_of[0], :start]
+                on = [slots_of[1 + i] for i in survivors(leads, keep, self.settings.hopeless)]
+                if len(on) == 1 and len(slots_of) > 2:
+                    exam_from[d] = start
+                alive[d] = [slots_of[0], *on] if on else []
+        return verdicts(played, stages[0], exam_from)

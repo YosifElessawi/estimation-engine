@@ -78,6 +78,7 @@ class LessonConfig:
     hand_margin: float = 3.0  # tricks a call or estimate may be from the player's expected tricks
     deals: tuple[int, ...] = (32, 64, 128, 256)  # deals each stage of the narrowing adds
     opponent_temperature: float = 1.0  # the other seats' imagined bids: 1 their chances, 0 the top
+    hopeless: float = 3.0  # an option this many standard errors behind the player's move is dropped
     redeals: int = 8  # draws per imagined deal to fit the void announcements
     batch: int = 64  # decisions searched at once
     seed: int = 0
@@ -93,6 +94,7 @@ class LessonConfig:
             deals=self.deals,
             redeals=self.redeals,
             opponent_temperature=self.opponent_temperature,
+            hopeless=self.hopeless,
         )
         T.check(settings, self.pruning)
 
@@ -280,6 +282,7 @@ class Labeler:
             guess_temperature=hybrid.guess_temperature,
             leader_weight=hybrid.leader_weight,
             opponent_temperature=config.opponent_temperature,
+            hopeless=config.hopeless,
         )
         self.teacher = _teacher(net, self.settings)
 
@@ -340,6 +343,10 @@ class Labeler:
             "margin": verdict.margin[taught],
             "error": verdict.error[taught],
             "opening": verdict.opening[taught],
+            "finalist": verdict.finalist[taught].astype(np.int8),
+            "exam": verdict.exam[taught],
+            "exam_error": verdict.exam_error[taught],
+            "exam_deals": verdict.exam_deals[taught].astype(np.int16),
             "pick": verdict.pick[taught].astype(np.int8),
         }
 
@@ -436,22 +443,20 @@ def run(config: LessonConfig, out: Path, order: str = UP, report_every: int = 10
 
 
 def gated(lessons: Lessons, gate: float) -> npt.NDArray[np.int64]:
-    """Each lesson's pick, counting an alternative only when its lead over the favourite is at
-    least ``gate`` standard errors (0 keeps every pick)."""
-    rows = np.arange(len(lessons["pick"]))
+    """Each lesson's pick, counting the finalist only when it led its exam by at least ``gate``
+    standard errors (0 keeps every pick)."""
     pick = lessons["pick"].astype(np.int64)
-    lead, error = lessons["margin"][rows, pick], lessons["error"][rows, pick]
-    return np.where(lead >= gate * error, pick, 0)
+    return np.where(lessons["exam"] >= gate * lessons["exam_error"], pick, 0)
 
 
 def noise(first: Lessons, second: Lessons) -> dict[str, Any]:
     """How alike two teachings of the same decisions are (the same options, fresh deals): how
     often the pick is the same; how often the teacher leaves the player's favourite, and how
     often it then names the same move again; what following its picks is worth, in points a
-    decision, on the other teaching's first-stage deals (``gain``, with its standard error: the
-    teacher's own value of a pick is flattered by the luck that got it picked, another
-    teaching's is not); how often its pick is outside the player's top 3. The same counting only
-    leads of at least 1 to 3 standard errors (``GATES``), and by phase."""
+    decision, on the other teaching's first-stage deals (``gain``, with its standard error: no
+    luck of this teaching's deals is in it); how often its pick is outside the player's top 3;
+    how many decisions were searched to the last deal. The same counting only exam leads of at
+    least 1 to 3 standard errors (``GATES``), and by phase."""
     if not np.array_equal(first["options"], second["options"]):
         raise ValueError("the two teachings tried different options")
     rows = np.arange(len(first["pick"]))
@@ -474,12 +479,14 @@ def noise(first: Lessons, second: Lessons) -> dict[str, Any]:
     report = alike(0.0)
     pick = first["pick"].astype(np.int64)
     changed = pick != 0
-    lead, error = first["margin"][rows, pick], first["error"][rows, pick]
+    whole = first["deals"][rows, first["finalist"]] == first["deals"][:, 0].max()
     report["outside_top_3"] = float((first["rank"][rows, pick] >= 3).mean())
     report["options"] = float((first["options"] >= 0).sum(1).mean())
     report["play_outs"] = float(first["deals"].sum(1).mean())
-    report["lead_when_changed"] = float(lead[changed].mean()) if changed.any() else None
-    report["error_when_changed"] = float(error[changed].mean()) if changed.any() else None
+    report["searched_to_the_end"] = float(whole.mean())
+    report["exam_deals"] = float(first["exam_deals"][whole].mean()) if whole.any() else None
+    report["exam_error"] = float(first["exam_error"][whole].mean()) if whole.any() else None
+    report["lead_when_changed"] = float(first["exam"][changed].mean()) if changed.any() else None
     report["gates"] = {str(gate): alike(gate) for gate in GATES}
     report["phases"] = {
         name: alike(0.0, first["phase"] == phase) for phase, name in enumerate(PHASES)
@@ -513,13 +520,15 @@ def time_run(config: LessonConfig, decisions: int, keep: Path | None = None) -> 
     if not passes[0]:
         raise ValueError(f"no recorded parts in {labeler.record}")
     taught = decisions - left
+    spent = dict(labeler.teacher.spent)
     both = join(passes[0]), join(passes[1])
     if keep is not None:
         keep.mkdir(parents=True, exist_ok=True)
         for name, lessons in zip(("first", "second"), both, strict=True):
             save_lessons(keep / f"{name}.npz", lessons)
     report = noise(*both)
-    return {**report, "taught": taught, "seconds": seconds, "per_hour": taught / seconds * 3600}
+    pace = {"taught": taught, "seconds": seconds, "per_hour": taught / seconds * 3600}
+    return {**report, **pace, "spent": spent}
 
 
 def _share(value: float | None) -> str:
@@ -534,21 +543,27 @@ def _gain(row: dict[str, Any]) -> str:
 
 def noise_lines(report: dict[str, Any]) -> list[str]:
     """The timing and noise test in plain lines."""
+    total = sum(report["spent"].values()) or 1.0
+    spent = ", ".join(f"{name} {seconds / total:.0%}" for name, seconds in report["spent"].items())
     lines = [
         f"{report['taught']} decisions in {report['seconds']:.0f} s: "
         f"{report['per_hour']:,.0f} an hour "
         f"({report['options']:.1f} options and {report['play_outs']:,.0f} play-outs each)",
+        f"where the time went, both teachings and their compiling: {spent}",
+        f"searched to the last deal: {_share(report['searched_to_the_end'])} of decisions, "
+        f"their exam {report['exam_deals'] or 0:.0f} deals, its lead good to "
+        f"{report['exam_error'] or 0:.1f} points; the rest stopped early, every alternative "
+        "hopeless",
         f"same pick on fresh deals: {_share(report['same_pick'])}",
         f"the teacher leaves the player's own move at {_share(report['changed'])} of decisions "
-        f"(by {report['lead_when_changed'] or 0:.1f} points, give or take "
-        f"{report['error_when_changed'] or 0:.1f}); "
+        f"(by {report['lead_when_changed'] or 0:.1f} points in the exam); "
         f"taught again, it names the same move at {_share(report['changed_again'])} of those",
         f"following its picks is worth {_gain(report)} on the other teaching's deals",
         f"its pick is outside the player's top 3 at {_share(report['outside_top_3'])}",
     ]
     for gate, row in report["gates"].items():
         lines.append(
-            f"counting only leads of {gate}+ standard errors: same pick "
+            f"counting only exam leads of {gate}+ standard errors: same pick "
             f"{_share(row['same_pick'])}, leaves the player's move at {_share(row['changed'])}, "
             f"names the same move again at {_share(row['changed_again'])}, worth {_gain(row)}"
         )

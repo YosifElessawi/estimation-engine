@@ -178,6 +178,8 @@ def test_check_refuses_settings_the_narrowing_cannot_run():
         T.check(T.Settings(), T.Pruning(coverage=0.0))
     with pytest.raises(ValueError, match="opponent_temperature"):
         T.check(T.Settings(opponent_temperature=-1.0), T.Pruning())
+    with pytest.raises(ValueError, match="hopeless"):
+        T.check(T.Settings(hopeless=-1.0), T.Pruning())
 
 
 # The decisions.
@@ -360,52 +362,89 @@ def test_a_seat_with_no_bidding_after_it_scores_the_same_whatever_is_drawn(
 # The narrowing.
 
 
-def test_narrow_keeps_the_favourite_and_the_better_half_of_the_alternatives():
-    assert T.narrow([0, 1, 2, 3, 4], [9.0, 1.0, 5.0, 3.0, 4.0], 4) == [0, 2, 4]
-    assert T.narrow([0, 1, 2, 3, 4], [-9.0, 1.0, 5.0, 3.0, 4.0], 4) == [0, 2, 4]  # a bad favourite
-    assert T.narrow([0, 2, 5, 7], [0.0, 1.0, 3.0, 2.0], 4) == [0, 5, 7]  # 3 alternatives: 2 go on
+def leads(means: list[float], wobble: float = 1.0) -> np.ndarray:
+    """Each alternative's lead on four deals: its mean, give or take ``wobble`` (so its
+    standard error is 0.577 times ``wobble``)."""
+    return np.array([[m - wobble, m + wobble, m - wobble, m + wobble] for m in means], np.float32)
 
 
-def test_narrow_keeps_no_more_than_the_next_stage_holds_and_at_least_one():
-    assert T.narrow(list(range(8)), [0.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0], 2) == [0, 1, 2]
-    assert T.narrow([0, 3, 6], [0.0, 1.0, 2.0], 1) == [0, 6]
-    assert T.narrow([0, 3], [0.0, -5.0], 1) == [0, 3]  # one alternative: it meets the favourite
-    assert T.narrow([0, 1, 2], [0.0, 3.0, 3.0], 1) == [0, 1]  # a tie: the more favoured slot
+def test_survivors_are_the_better_half_of_the_alternatives():
+    assert T.survivors(leads([1.0, 5.0, 3.0, 4.0]), 4, 0.0) == [1, 3]
+    assert T.survivors(leads([2.0, 3.0, 1.0]), 4, 0.0) == [0, 1]  # 3 alternatives: 2 go on
+    assert T.survivors(leads([-9.0, -5.0]), 4, 0.0) == [1]  # behind the favourite, still the best
 
 
-def test_verdicts_measure_each_option_against_the_favourite_on_the_deals_they_shared():
-    played = np.full((2, 3, 6), np.nan, np.float32)  # the second decision was not searched
+def test_survivors_are_no_more_than_the_next_stage_holds_and_at_least_one():
+    assert T.survivors(leads([7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]), 2, 0.0) == [0, 1]
+    assert T.survivors(leads([1.0, 2.0]), 1, 0.0) == [1]
+    assert T.survivors(leads([-5.0]), 1, 0.0) == [0]  # one alternative: it meets the favourite
+    assert T.survivors(leads([3.0, 3.0]), 1, 0.0) == [0]  # a tie: the more favoured one
+
+
+def test_survivors_drop_an_alternative_hopelessly_behind_the_favourite():
+    # Standard errors of 0.577: 3 of them are 1.73 points.
+    assert T.survivors(leads([-1.5]), 1, 3.0) == [0]  # within reach
+    assert T.survivors(leads([-2.0]), 1, 3.0) == []  # hopeless: the search ends
+    assert T.survivors(leads([-2.0]), 1, 0.0) == [0]  # no option is ever hopeless at 0
+    assert T.survivors(leads([-10.0, 0.5, -9.0, -1.0]), 4, 3.0) == [1, 3]
+    assert T.survivors(leads([-10.0, 0.5, -9.0, -3.0]), 4, 3.0) == [1]  # the better half, less one
+    assert T.survivors(leads([-10.0, -8.0]), 1, 3.0) == []
+
+
+def test_verdicts_measure_each_option_against_the_favourite_and_the_finalist_in_its_exam():
+    played = np.full((3, 3, 6), np.nan, np.float32)  # stages of 2 and 4 deals
     played[0, 0] = [1, 2, 3, 4, 5, 6]  # the favourite plays every deal
-    played[0, 1, :2] = [5, 0]  # dropped after the first stage of 2 deals
-    played[0, 2] = [2, 2, 5, 4, 7, 7]  # the last alternative
-    found = T.verdicts(played, 2)
-    assert found.deals.tolist() == [[6, 2, 6], [0, 0, 0]]
+    played[0, 1, :2] = [5, 0]  # dropped after the first stage
+    played[0, 2] = [2, 2, 5, 4, 7, 7]  # the finalist: alone from deal 2 on
+    # The second decision was not searched. The third has two options from the start, and its
+    # one alternative was dropped as hopeless after the first stage, which ended the search.
+    played[2, 0, :2] = [5, 5]
+    played[2, 1, :2] = [1, 3]
+    found = T.verdicts(played, 2, np.array([2, 6, 0], np.int32))
+    assert found.deals.tolist() == [[6, 2, 6], [0, 0, 0], [2, 2, 0]]
     assert found.value[0].tolist() == pytest.approx([3.5, 2.5, 4.5])
-    assert found.margin[0].tolist() == pytest.approx(
-        [0.0, 1.0, 1.0]
-    )  # leads [4, -2], [1, 0, 2, 0, 2, 1]
+    assert found.margin[0].tolist() == pytest.approx([0.0, 1.0, 1.0])  # [4, -2]; [1, 0, 2, 0, 2, 1]
     assert found.error[0].tolist() == pytest.approx([0.0, 3.0, 0.3651], abs=1e-4)
     assert found.opening[0].tolist() == pytest.approx([0.0, 1.0, 0.5])
-    assert found.pick.tolist() == [2, 0]
+    assert found.finalist.tolist() == [2, 0, 1]
+    assert found.exam_deals.tolist() == [4, 0, 2]
+    assert found.exam.tolist() == pytest.approx([1.25, 0.0, -3.0])  # leads [2, 0, 2, 1]; [-4, -2]
+    assert found.exam_error.tolist() == pytest.approx([0.4787, 0.0, 1.0], abs=1e-4)
+    assert found.pick.tolist() == [2, 0, 0]
     assert not found.value[1].any()
     assert not found.margin[1].any()
 
 
-def test_verdicts_pick_the_favourite_on_a_tie_and_only_an_alternative_that_played_every_deal():
-    played = np.full((2, 3, 4), np.nan, np.float32)
+def test_verdicts_pick_the_finalist_only_if_it_led_its_whole_exam():
+    played = np.full((4, 3, 4), np.nan, np.float32)  # stages of 2 and 2 deals
     played[0, 0] = [1, 2, 3, 4]
-    played[0, 1] = [4, 3, 2, 1]  # level with the favourite over every deal
+    played[0, 1] = [4, 3, 2, 1]  # level with the favourite over its exam: the favourite stands
     played[1, 0] = [1, 1, 1, 1]
-    played[1, 1, :2] = [9, 9]  # far ahead, but dropped: the last alternative decides
+    played[1, 1, :2] = [9, 9]  # far ahead, but dropped: the finalist decides, and it trails
     played[1, 2] = [0, 0, 0, 0]
-    assert T.verdicts(played, 2).pick.tolist() == [0, 0]
+    played[2, 0] = [0, 0, 5, 5]
+    played[2, 1, :2] = [-5, -5]
+    played[2, 2] = [9, 9, 4, 4]  # ahead on the deals that kept it in, behind in its exam
+    played[3, 0, :2] = [0, 0]
+    played[3, 1, :2] = [-9, -9]  # two alternatives both hopeless after the first stage: the
+    played[3, 2, :2] = [-7, -8]  # one further ahead is the finalist, and no exam was sat
+    found = T.verdicts(played, 2, np.array([0, 2, 2, 4], np.int32))
+    assert found.finalist.tolist() == [1, 2, 2, 2]
+    assert found.exam.tolist() == pytest.approx([0.0, -1.0, -1.0, 0.0])
+    assert found.margin[2, 2] == pytest.approx(4.0)  # flattered by the first two deals
+    assert found.exam_deals.tolist() == [4, 2, 2, 0]
+    assert found.pick.tolist() == [0, 0, 0, 0]
+
+
+Taught = tuple[T.Teacher, T.Batch, np.ndarray, T.Verdicts]
 
 
 @pytest.fixture(scope="module")
-def taught(net_path: str, played: Played) -> tuple[T.Teacher, T.Batch, np.ndarray, T.Verdicts]:
-    """The batch searched in three stages of 2, 4 and 8 deals: up to five options a decision;
-    the first decision is left a single option, which is nothing to search."""
-    teacher = T.Teacher(T.load_bidder(net_path), T.Settings(deals=(2, 4, 8), redeals=2))
+def taught(net_path: str, played: Played) -> Taught:
+    """The batch searched in three stages of 2, 4 and 8 deals, no option ever hopeless: up to
+    five options a decision; the first decision is left a single option, nothing to search."""
+    settings = T.Settings(deals=(2, 4, 8), redeals=2, hopeless=0.0)
+    teacher = T.Teacher(T.load_bidder(net_path), settings)
     spots = played.spots[:SIZE]
     arrays, where, at, history = batch_arrays(played.rounds, spots, SIZE)
     batch, logits, tricks = teacher.look(arrays, where, at, history)
@@ -418,11 +457,10 @@ def taught(net_path: str, played: Played) -> tuple[T.Teacher, T.Batch, np.ndarra
     return teacher, batch, options, teacher.teach(jax.random.PRNGKey(1), batch, options)
 
 
-def test_every_option_plays_the_deals_its_stage_gives_it(
-    taught: tuple[T.Teacher, T.Batch, np.ndarray, T.Verdicts],
-):
-    _, _, options, found = taught
+def test_every_option_plays_the_deals_its_stage_gives_it(taught: Taught):
+    teacher, _, options, found = taught
     by_count = {2: [14], 3: [2, 14], 4: [2, 6, 14], 5: [2, 2, 6, 14]}  # the alternatives' deals
+    exam_by_count = {2: 14, 3: 12, 4: 8, 5: 8}  # the deals after the last alternative was dropped
     seen: set[int] = set()
     for row in range(1, SIZE):
         count = int((options[row] >= 0).sum())
@@ -433,23 +471,21 @@ def test_every_option_plays_the_deals_its_stage_gives_it(
         assert found.margin[row, 0] == 0.0
         assert found.error[row, 0] == 0.0
         assert np.isfinite(found.value[row]).all()
-        last = 1 + int(np.argmax(found.deals[row, 1:count]))
-        better = found.value[row, last] > found.value[row, 0]
-        assert found.pick[row] == (last if better else 0)
+        assert found.finalist[row] == 1 + int(np.argmax(found.deals[row, 1:count]))
+        assert found.exam_deals[row] == exam_by_count[count]
+        assert found.pick[row] == (found.finalist[row] if found.exam[row] > 0 else 0)
     assert {2, 5} <= seen  # Dash Calls with two options, auctions with five
+    assert teacher.play_outs == found.deals.sum()
+    assert set(teacher.spent) == {"decisions", "deals", "stage 1", "stage 2", "stage 3"}
 
 
-def test_a_decision_with_one_option_is_not_searched(
-    taught: tuple[T.Teacher, T.Batch, np.ndarray, T.Verdicts],
-):
+def test_a_decision_with_one_option_is_not_searched(taught: Taught):
     _, _, _, found = taught
     assert not found.deals[0].any()
-    assert found.pick[0] == 0
+    assert (found.finalist[0], found.exam_deals[0], found.pick[0]) == (0, 0, 0)
 
 
-def test_teaching_is_the_same_from_the_same_key_and_differs_on_fresh_deals(
-    taught: tuple[T.Teacher, T.Batch, np.ndarray, T.Verdicts],
-):
+def test_teaching_is_the_same_from_the_same_key_and_differs_on_fresh_deals(taught: Taught):
     teacher, batch, options, found = taught
     again = teacher.teach(jax.random.PRNGKey(1), batch, options)
     assert again.value.tolist() == found.value.tolist()
@@ -457,3 +493,28 @@ def test_teaching_is_the_same_from_the_same_key_and_differs_on_fresh_deals(
     fresh = teacher.teach(jax.random.PRNGKey(2), batch, options)
     assert fresh.value.tolist() != found.value.tolist()
     assert fresh.deals[:, 0].tolist() == found.deals[:, 0].tolist()
+
+
+def test_a_search_ends_early_once_every_alternative_is_hopeless(taught: Taught):
+    """The same search, dropping any alternative a tenth of a standard error behind: the play
+    outs compile no differently, since only the narrowing between stages reads the setting."""
+    teacher, batch, options, found = taught
+    patient = teacher.settings
+    teacher.settings = patient._replace(hopeless=0.1)
+    try:
+        strict = teacher.teach(jax.random.PRNGKey(1), batch, options)
+    finally:
+        teacher.settings = patient
+    assert strict.deals.sum() < found.deals.sum()
+    ended = np.flatnonzero((strict.deals[:, 0] > 0) & (strict.deals[:, 0] < 14))
+    assert len(ended) > 2
+    for row in ended.tolist():
+        assert strict.deals[row, 0] == strict.deals[row].max()  # the favourite stops with them
+        assert strict.pick[row] == 0  # the favourite stands
+        assert strict.margin[row, strict.finalist[row]] < 0
+    whole = np.flatnonzero(strict.deals[:, 0] == 14)
+    assert len(whole) > 0
+    for row in whole.tolist():
+        assert strict.deals[row, strict.finalist[row]] == 14
+    # The first stage is the same deals and draws either way.
+    assert strict.opening.tolist() == found.opening.tolist()
