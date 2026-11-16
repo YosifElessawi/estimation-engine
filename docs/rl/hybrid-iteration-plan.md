@@ -309,6 +309,10 @@ lead. It is run for the teacher's own picks and for each learned bidder's change
 It passes only if it is clearly ahead of the loop 4,000 player's own result on those deals (46 of
 100 sets, place +0.026, King 26.5%, -0.1 points a game, -5.7 to +5.6), beyond that noise.
 
+The table test has not been run. The gain the real-play check measures, about 3 points a game,
+is well inside this test's noise of 5.7, so 100 sets could not show it either way; the check is
+the measure so far (results below).
+
 ## Parked net changes
 
 - **Suit symmetry built into the net:** an efficiency gain (the bot already learns symmetry from
@@ -904,10 +908,13 @@ the averages over many changes say anything:
 | The player, first try | estimates | 1,192 | +0.5 (+-0.8) | +1.5 |
 | | the auction | 641 | -1.8 (+-1.3) | +1.0 |
 
-"In the teacher's rounds" is the same changes' first-stage lead. Too few Dash Call changes were
-there to say anything (27 of the teacher's). By the size of the change, the teacher's careful
-estimates: one trick lower +2.4 (+-0.8, 1,131 of them), two lower +3.8 (+-2.0), one higher +2.0
-(+-1.2), two higher -0.8 (+-2.1).
+"In the teacher's rounds" is the same changes' first-stage lead. It is fair to the learned
+bidders, whose bids never saw these lessons, but it flatters the teacher's own picks, which
+were picked on the same search: a second teaching on other deals gives its careful auction
+picks +2.2, not +3.7 (the calling test below). Too few Dash Call changes were there to say
+anything (27 of the teacher's). By the size of the change, the teacher's careful estimates: one
+trick lower +2.4 (+-0.8, 1,131 of them), two lower +3.8 (+-2.0), one higher +2.0 (+-1.2), two
+higher -0.8 (+-2.1).
 
 **Reading:**
 
@@ -915,11 +922,10 @@ estimates: one trick lower +2.4 (+-0.8, 1,131 of them), two lower +3.8 (+-2.0), 
   holds when the round is played with the real search in every seat, for its own picks (+2.9 of
   +3.7) and for the bidders that learned from it (+2.0 of +2.3, +1.7 of +2.0).
 - **The auction lessons are not.** The teacher's careful auction picks are worth nothing at a
-  real table, +0.2 where it imagined +3.7, and the learned players' auction changes came out
-  a point or two behind (inside their noise). In the teacher's rounds the bidding goes on with
-  the other seats' bids drawn from the player's chances; real players bid their top bid, and
-  another bid of ours sends a real auction somewhere else than the teacher's. That is the
-  first thing to change in the teacher before its auction lessons are used.
+  real table, +0.2 (+-1.0), and the learned players' auction changes came out a point or two
+  behind (inside their noise). The first suspect: in the teacher's rounds the bidding goes on
+  with the other seats' bids drawn from the player's chances, where real players bid their top
+  bid. The calling test below tried that.
 - **So the player as it was trained loses at the auction most of what it gains at estimates:**
   about +2.8 points a game from its estimates and -1.9 from its auction changes, +1.4 a game in
   all (+-2.7). The lead models' bids come to +6.3 a game (+-3.1), the teacher's own picks to
@@ -939,8 +945,48 @@ On the same 250 held-out Bolas, in the teacher's rounds:
 | Card play: top card, best of the top 2 | | 1.357, 0.595 (the start: 1.355, 0.598) |
 
 The player keeps all of the estimate gain it had when it learned every kind (+3.4 of that
-run's +5.4), and its auction is its old one but for a little drift. At the check's four fifths,
-its 1.6 changed estimates a game should be worth close to +3 real points a game.
+run's +5.4), and its auction is its old one but for a little drift.
+
+Its changed bids were then played for real in the same check (Yosif's yes; most were already
+played for the trial bidders, the other 656 rounds took 3 minutes):
+
+| Estimates only | Changes played | Real points a change | In the teacher's rounds | Real points a game |
+|---|---|---|---|---|
+| The player's estimates | 1,618 | **+1.9** (+-0.8) | +2.1 | about +3.1 |
+| The player, all its changes | 1,754 | +1.9 (+-0.8) | +2.0 | **+3.4** (+-1.7) |
+| The lead models' estimates | 2,389 | +1.5 (+-0.6) | +2.0 | +3.6 (+-1.5) |
+
+So round 1's player bids about 3 points a game better at a real table than the loop 4,000
+player it started from, with the same cards and the same calling: 1.6 estimates a game changed,
+each worth about 2 points. At a real table its own changes are worth as much as the lead
+models'. It is a small gain and a measured one, the first since the self-play run.
+
+**The calling test (2026-11-16, Yosif's yes).** Why do the auction lessons not hold? The teacher
+taught the held-out Bolas' 11,759 auction decisions again, the very decisions of the night, with
+the other seats bidding their top bid in its rounds (`opponent_temperature = 0`; a one-off run
+of the teacher on those Bolas, 21 minutes on the 1060, its lessons kept in
+`runs/onenet/bids-1/calling-0`), and its careful picks were played for real (5 minutes on the
+Mac):
+
+| | Other seats' bids drawn (the night) | Their top bids |
+|---|---|---|
+| The teacher overrules the player | at 11.0% of auction decisions, by 3.4 points | at 10.8%, by 3.5 |
+| Its picks as the other teaching sees them, on its own deals | +2.2 (+-0.2) | +2.3 (+-0.2) |
+| Its picks played for real | +0.2 (+-1.0), 1,289 picks | +1.6 (+-1.0), 1,275 picks |
+
+- **The other seats' bids are not it.** The teacher's auction advice is as frequent and as
+  strong either way, and each teaching rates the other's picks alike.
+- **A pick's own lead flatters it,** since it was picked for that lead. Seen by the other
+  teaching, a careful auction pick is 2.2 points ahead, not 3.4, and the two teachings pick the
+  same bid at only 3.7% of decisions out of the 11% each overrules: at the auction most leads
+  are small, and a careful pick is often a lucky one. Estimates are steadier (the timing test's
+  two teachings agreed on 93% of them).
+- **For real the picks stay unproven:** +0.2 and +1.6, each good to a point, together about
+  +0.9 (+-0.8): under the +2.2 the teacher's rounds give them and not clearly above nothing.
+  One kind of change is ahead in both: a call of a lower number, +5.1 (+-2.9) and +6.2 (+-3.0).
+- **So the auction lessons stay out of the learning.** What is left to suspect is the play: a
+  call stands or falls on the card play that follows, and the teacher's rounds are played by
+  the player's top card with no search.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
