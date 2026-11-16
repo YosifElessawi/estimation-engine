@@ -318,6 +318,11 @@ def _top3(player: Net, x: npt.NDArray[np.float16], batch: int = 8192) -> npt.NDA
     return np.concatenate(parts).astype(np.int64) if parts else np.zeros((0, 3), np.int64)
 
 
+def top_bid(player: Net, x: npt.NDArray[np.float16]) -> npt.NDArray[np.int64]:
+    """``[N]``: the player's favourite legal move at each view, the move it makes."""
+    return _top3(player, x)[:, 0]
+
+
 def bid_scores(
     player: Net, lessons: Lessons, seat_game: Sequence[float] | None = None
 ) -> dict[str, Any]:
@@ -333,7 +338,7 @@ def bid_scores(
     worth in points a game: each kind's gain times its decisions."""
     count = len(lessons["pick"])
     rows = np.arange(count)
-    top = _top3(player, lessons["x"])[:, 0]
+    top = top_bid(player, lessons["x"])
     slots = lessons["options"] == top[:, None]
     tried = slots.any(1)
     slot = slots.argmax(1)
