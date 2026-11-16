@@ -52,12 +52,11 @@ import optax
 from estimation.rl.config import section_from
 
 from .bid_leads import Reading, cross_fit, picks, tried
-from .lessons import Lessons, load_all
+from .lessons import Lessons, careful_pick, examined, load_all
 from .nets import Net, apply_player, load_player, parse_size, save_player
 from .shards import KIND_CARD, NUM_ACTIONS, load_shard, shard_paths
 
 PLAY_BASE = 68
-CAREFUL = 1.0  # standard errors an exam lead needs for the teacher's careful pick
 PHASES = ("Dash Calls", "the auction", "estimates")
 Floats = npt.NDArray[np.float32]
 Batch = dict[str, Any]
@@ -140,14 +139,6 @@ def _say(text: str) -> None:
 # The lessons as targets.
 
 
-def examined(lessons: Lessons) -> npt.NDArray[np.bool_]:
-    """The lessons whose finalist sat its whole exam, to the search's last deal."""
-    rows = np.arange(len(lessons["pick"]))
-    total = lessons["deals"][:, 0].max() if len(rows) else 0
-    sat = lessons["deals"][rows, lessons["finalist"]]
-    return (sat == total) & (lessons["exam_deals"] > 0) & (lessons["finalist"] > 0)
-
-
 def tilts(leads: Floats, config: LearnConfig) -> Floats:
     """``[L, K]``: the log of the odds each option is given against the player's own move, from
     the leads read for it (``bid_leads``): the lead less ``margin``, over ``temperature``, at
@@ -169,16 +160,6 @@ def aimed(chances: jax.Array, options: jax.Array, used: jax.Array, tilt: jax.Arr
     new = jnp.where(tilt > 0, level, jnp.minimum(own, level))
     change = jnp.where(used, new - own, 0.0)
     return chances + (jax.nn.one_hot(options, NUM_ACTIONS) * change[..., None]).sum(1)
-
-
-def careful_pick(lessons: Lessons) -> npt.NDArray[np.int64]:
-    """Each lesson's careful pick, as an action id: the finalist where it sat its whole exam
-    and led it by ``CAREFUL`` standard errors, else the player's own move."""
-    rows = np.arange(len(lessons["pick"]))
-    sure = examined(lessons) & (lessons["exam"] >= CAREFUL * lessons["exam_error"])
-    sure &= lessons["exam"] > 0
-    slot = np.where(sure, lessons["finalist"], 0)
-    return lessons["options"][rows, slot].astype(np.int64)
 
 
 def lesson_batch(lessons: Lessons, tilt: Floats, rows: npt.NDArray[np.intp]) -> Batch:

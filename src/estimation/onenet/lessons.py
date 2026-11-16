@@ -71,6 +71,7 @@ DTYPES: dict[str, Any] = {
     "pick": np.int8,
 }
 PER_OPTION = ("options", "chance", "rank", "value", "deals", "margin", "error", "opening")
+CAREFUL = 1.0  # standard errors an exam lead needs for the teacher's careful pick
 Lessons = dict[str, npt.NDArray[Any]]
 
 
@@ -113,6 +114,24 @@ def save_lessons(path: Path, lessons: Lessons) -> None:
 def load_lessons(path: Path) -> Lessons:
     with np.load(path) as data:
         return {name: data[name] for name in DTYPES}
+
+
+def examined(lessons: Lessons) -> npt.NDArray[np.bool_]:
+    """The lessons whose finalist sat its whole exam, to the search's last deal."""
+    rows = np.arange(len(lessons["pick"]))
+    total = lessons["deals"][:, 0].max() if len(rows) else 0
+    sat = lessons["deals"][rows, lessons["finalist"]]
+    return (sat == total) & (lessons["exam_deals"] > 0) & (lessons["finalist"] > 0)
+
+
+def careful_pick(lessons: Lessons) -> npt.NDArray[np.int64]:
+    """Each lesson's careful pick, as an action id: the finalist where it sat its whole exam
+    and led it by ``CAREFUL`` standard errors, else the player's own move."""
+    rows = np.arange(len(lessons["pick"]))
+    sure = examined(lessons) & (lessons["exam"] >= CAREFUL * lessons["exam_error"])
+    sure &= lessons["exam"] > 0
+    slot = np.where(sure, lessons["finalist"], 0)
+    return lessons["options"][rows, slot].astype(np.int64)
 
 
 def load_all(out: Path) -> Lessons:

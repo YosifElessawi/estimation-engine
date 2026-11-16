@@ -20,13 +20,20 @@ others', players ahead counting double (``worth``).
   its careful pick (``bid_learn.careful_pick``), a player its top bid (``--player name=file``),
   a picks file whatever it holds (``--picks name=file``, with ``game``, ``step`` and ``action``
   arrays). A source's changes are the lessons where its bid is not the bid that was made.
-- ``run``: plays them, one Bola's decisions a task, on worker processes; a stopped run resumes,
-  and ``--bolas`` plays only so many Bolas (drawn by the seed) for a shorter run.
+- ``run``: plays them, one Bola's decisions a task, on worker processes. A play that is
+  already saved is never played again, so a stopped run resumes, and after ``changes`` is run
+  again with more sources only their new bids are played. ``--bolas`` plays only so many Bolas
+  (drawn by the seed) for a shorter run.
 - ``report``: each source's changes in real play, next to the teacher's own measure of the same
   changes: its first-stage lead, which is fair to every option it tried.
+- ``outcomes``: no play at all. What really became of the estimates the lessons were taught at,
+  in the games as they were recorded: the ones the teacher would keep next to the ones it would
+  change by a trick or two. It shows one side only, how the estimate that was made did, on every
+  taught estimate of the recording.
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 import time
@@ -47,13 +54,15 @@ from estimation.rl.config import CHECK_STAGE, derive_seed
 from estimation.rl.onenet_record import RecordConfig, load_part, part_path
 from estimation.rl.train import worker_pool
 
-from .lessons import Lessons, load_all
+from .lessons import CAREFUL, Lessons, examined, load_all
 
 Arrays = dict[str, npt.NDArray[Any]]
 Scores = tuple[int, int, int, int]
 PHASES = ("Dash Calls", "the auction", "estimates")
 TEACHER = "teacher"
 ACTIONS = 120
+ESTIMATE_BASE = 54  # an estimate of k tricks is action 54 + k
+CHANGES_OF_ESTIMATE = (-2, -1, 1, 2)
 CHANGES = "changes.npz"
 CONFIG = "config.json"
 SUMMARY = "summary.json"
@@ -95,8 +104,6 @@ def find_changes(lessons: Lessons, sources: Sequence[Source]) -> Arrays:
     which sources make it (``source``, a column each), and the teacher's measures of it where it
     tried it (``tried``): its first-stage lead (``opening``) and, where the bid was the finalist
     that sat its whole exam (``examined``), its exam lead (``exam``)."""
-    from .bid_learn import examined  # the learner imports JAX: only this command needs it
-
     own = lessons["options"][:, 0].astype(np.int64)
     keys = [
         np.flatnonzero(source.picks != own) * ACTIONS + source.picks[source.picks != own]
@@ -162,8 +169,9 @@ def play_round(
 @dataclass(frozen=True, slots=True)
 class BolaTask:
     """One Bola's changes to play: its recording part (``record`` folder, the part's ``first``
-    Bola), the table ``player`` (a bot spec), the run's ``seed``, and each change's ``steps``,
-    ``seats``, bids made (``owns``) and ``others``."""
+    Bola), the table ``player`` (a bot spec), the run's ``seed``, each change's ``steps``,
+    ``seats``, bids made (``owns``) and ``others``, and the plays already saved for the Bola
+    (``done``: step and bid), which are not played again."""
 
     record: str
     first: int
@@ -174,13 +182,21 @@ class BolaTask:
     seats: tuple[int, ...]
     owns: tuple[int, ...]
     others: tuple[int, ...]
+    done: tuple[tuple[int, int], ...] = ()
+
+    def plays(self) -> set[tuple[int, int]]:
+        """The plays its changes need, as step and bid: each decision's bid made and its other
+        bids."""
+        return set(zip(self.steps, self.owns, strict=True)) | set(
+            zip(self.steps, self.others, strict=True)
+        )
 
 
 def check_bola(task: BolaTask) -> Arrays:
-    """Play every change of ``task``: at each decision the round with the bid made, and with
-    each other bid, by four table players seeded from the decision, the same four seeds in each
-    play. One row a play: its ``step`` and ``action``, the ``standings`` the round began at and
-    the round's ``result``."""
+    """Play every change of ``task`` that is not played yet: at each decision the round with
+    the bid made, and with each other bid, by four table players seeded from the decision, the
+    same four seeds in each play. One row a play: its ``step`` and ``action``, the ``standings``
+    the round began at and the round's ``result``."""
     part = load_part(part_path(Path(task.record), task.first))
     found = np.flatnonzero(part["game"] == task.game)
     if not len(found):
@@ -205,8 +221,11 @@ def check_bola(task: BolaTask) -> Arrays:
     tried: list[int] = []
     standings: list[Scores] = []
     results: list[Scores] = []
+    done = set(task.done)
     for step, tries in sorted(plays.items()):
         for action in tries:
+            if (step, action) in done:
+                continue
             bots = [
                 make_bot(task.player, derive_seed(task.seed, CHECK_STAGE, task.game, step, seat))
                 for seat in range(4)
@@ -262,25 +281,41 @@ def tasks_of(changes: Arrays, config: dict[str, Any], seed: int) -> list[BolaTas
 
 def run(out: Path, workers: int = 5, bolas: int = 0, seed: int = 0) -> dict[str, Any]:
     """Play the changes kept in ``out`` (``changes``): every Bola's, or the first ``bolas`` of
-    the seed's random order, skipping the Bolas already played. Returns the report."""
+    the seed's random order, skipping every play already saved. Returns the report."""
     changes = _load(out / CHANGES)
     config = json.loads((out / CONFIG).read_text())
     tasks = tasks_of(changes, config, seed)
     if bolas:
         tasks = tasks[:bolas]
     (out / "parts").mkdir(exist_ok=True)
-    missing = [task for task in tasks if not check_path(out, task.game).exists()]
+    missing: list[tuple[BolaTask, int]] = []
+    for task in tasks:
+        path = check_path(out, task.game)
+        saved = _load(path) if path.exists() else None
+        done = (
+            set(zip(saved["step"].tolist(), saved["action"].tolist(), strict=True))
+            if saved is not None
+            else set[tuple[int, int]]()
+        )
+        left = len(task.plays() - done)
+        if left:
+            missing.append((dataclasses.replace(task, done=tuple(sorted(done))), left))
     if missing:
-        plays = sum(len(set(task.steps)) + len(task.steps) for task in missing)
+        plays = sum(left for _, left in missing)
         _say(f"{len(missing)} of {len(tasks)} Bolas to play on {workers} workers: {plays:,} rounds")
         started = time.perf_counter()
         done = 0
         with worker_pool(workers) as pool:
-            futures = {pool.submit(check_bola, task): task for task in missing}
+            futures = {pool.submit(check_bola, task): (task, left) for task, left in missing}
             for future in as_completed(futures):
-                task = futures[future]
-                save_check(check_path(out, task.game), future.result())
-                done += len(set(task.steps)) + len(task.steps)
+                task, left = futures[future]
+                path = check_path(out, task.game)
+                new = future.result()
+                if path.exists():
+                    old = _load(path)
+                    new = {name: np.concatenate([old[name], new[name]]) for name in new}
+                save_check(path, new)
+                done += left
                 elapsed = time.perf_counter() - started
                 _say(
                     f"{done:,}/{plays:,} rounds, {elapsed / 60:.1f} min, "
@@ -443,6 +478,112 @@ def report(out: Path) -> dict[str, Any]:
     return summary
 
 
+# What really became of the taught estimates.
+
+
+def estimates_made(record: Path) -> Arrays:
+    """Every estimate made in the recording at ``record``, from a replay of its Bolas: its
+    ``game`` and ``step``, the number (``estimate``), whether it was still the seat's estimate
+    when the round was scored (``stood``: no super call replaced it and the round was played),
+    the ``tricks`` the seat took and what the round was worth to it (``worth``)."""
+    rows: list[tuple[int, int, int, int, bool, float]] = []
+    for path in sorted((record / "parts").glob("part-*.npz")):
+        if ".tmp" in path.name:
+            continue
+        part = load_part(path)
+        actions = part["actions"].tolist()
+        for row in range(len(part["seed"])):
+            game = int(part["game"][row])
+            bola = Bola(int(part["seed"][row]), DEFAULT_CONFIG)
+            start, end = int(part["log_start"][row]), int(part["log_start"][row + 1])
+            made: list[tuple[int, int, int, Scores, int]] = []
+            for step, action in enumerate(actions[start:end]):
+                if ESTIMATE_BASE <= action < ESTIMATE_BASE + 14:
+                    seat = bola.current_player
+                    if seat is None:
+                        raise ValueError(f"Bola {game} has nobody to estimate at step {step}")
+                    made.append(
+                        (step, seat, len(bola.history), bola.scores, action - ESTIMATE_BASE)
+                    )
+                bola.step(action)
+            for step, seat, index, standings, estimate in made:
+                result = bola.history[index]
+                mine = result.seats[seat]
+                stood = not result.skipped and mine.estimate == estimate
+                value = worth(result.scores, standings, seat)
+                rows.append((game, step, estimate, mine.tricks, stood, value))
+    return {
+        "game": np.array([r[0] for r in rows], np.int64),
+        "step": np.array([r[1] for r in rows], np.int64),
+        "estimate": np.array([r[2] for r in rows], np.int64),
+        "tricks": np.array([r[3] for r in rows], np.int64),
+        "stood": np.array([r[4] for r in rows], bool),
+        "worth": np.array([r[5] for r in rows], np.float64),
+    }
+
+
+def outcomes(lessons: Lessons, made: Arrays) -> dict[str, Any]:
+    """The taught estimates that stood, by what the teacher says of them: ``kept`` (its finalist
+    did not lead a whole exam) and, for each change of -2, -1, +1 and +2 tricks, the estimates
+    its careful pick would change by that. For each group: how many, how often the seat took
+    exactly its estimate (``made``), one trick fewer (``short``) and one more (``over``), what
+    the round was really worth to it (``real``), what the teacher's rounds made the same
+    estimate worth (``imagined``) and the teacher's lead for its finalist (``lead``)."""
+    count = len(lessons["pick"])
+    rows = np.arange(count)
+    key = made["game"] * (1 << 32) + made["step"]
+    order = np.argsort(key)
+    wanted = lessons["game"].astype(np.int64) * (1 << 32) + lessons["step"].astype(np.int64)
+    if not len(key):
+        return {"estimates": 0, "groups": {}}
+    at = order[np.clip(np.searchsorted(key[order], wanted), 0, len(key) - 1)]
+    own = lessons["options"][:, 0].astype(np.int64)
+    final = lessons["options"][rows, lessons["finalist"]].astype(np.int64)
+    number = own - ESTIMATE_BASE
+    stood = (
+        (key[at] == wanted)
+        & (lessons["phase"] == 2)
+        & (own >= ESTIMATE_BASE)
+        & (final >= ESTIMATE_BASE)
+        & made["stood"][at]
+        & (made["estimate"][at] == number)
+    )
+    lead = lessons["exam"].astype(np.float64)
+    led = examined(lessons) & (lead > 0)
+    careful = led & (lead >= CAREFUL * lessons["exam_error"])
+    groups = {"kept": stood & ~led}
+    for change in CHANGES_OF_ESTIMATE:
+        groups[f"{change:+d}"] = stood & careful & (final - own == change)
+    off = made["tricks"][at] - number
+    summary: dict[str, Any] = {"estimates": int(stood.sum()), "groups": {}}
+    for name, of in groups.items():
+        real, real_error = _mean(made["worth"][at][of])
+        summary["groups"][name] = {
+            "estimates": int(of.sum()),
+            "made": float((off[of] == 0).mean()) if of.any() else 0.0,
+            "short": float((off[of] == -1).mean()) if of.any() else 0.0,
+            "over": float((off[of] == 1).mean()) if of.any() else 0.0,
+            "real": real,
+            "real_error": real_error,
+            "imagined": _mean(lessons["value"][of, 0].astype(np.float64))[0],
+            "lead": _mean(lead[of])[0],
+        }
+    return summary
+
+
+def outcome_lines(summary: dict[str, Any]) -> list[str]:
+    out = [f"{summary['estimates']:,} taught estimates stood to the end of their round"]
+    for name, row in summary["groups"].items():
+        what = "the teacher keeps it" if name == "kept" else f"the teacher would go {name}"
+        out.append(
+            f"  {what}: {row['estimates']:,} | made {row['made']:.1%}, one short "
+            f"{row['short']:.1%}, one over {row['over']:.1%} | the round's worth: really "
+            f"{row['real']:+.2f} (give or take {row['real_error']:.2f}), in the teacher's rounds "
+            f"{row['imagined']:+.2f} | its finalist's lead {row['lead']:+.1f}"
+        )
+    return out
+
+
 # The commands.
 
 
@@ -519,7 +660,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     play.add_argument("--seed", type=int, default=0)
     show = commands.add_parser("report", help="the plays saved so far")
     show.add_argument("--out", type=Path, required=True)
+    happened = commands.add_parser("outcomes", help="what became of the taught estimates")
+    happened.add_argument("--lessons", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "outcomes":
+        record = Path(json.loads((args.lessons / CONFIG).read_text())["record"])
+        for line in outcome_lines(outcomes(load_all(args.lessons), estimates_made(record))):
+            print(line)
+        return 0
     if args.command == "changes":
         changes = keep_changes(
             args.out,

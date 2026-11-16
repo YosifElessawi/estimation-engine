@@ -57,8 +57,8 @@ def test_examined_lessons_are_those_whose_finalist_sat_its_whole_exam():
     lessons = examined_lessons([1.0, 1.0, 1.0, 1.0], [1.0] * 4)
     lessons["deals"][1] = [2, 2, 2]  # stopped early: every alternative hopeless
     lessons["exam_deals"][2] = 0  # never left alone to sit an exam
-    assert B.examined(lessons).tolist() == [True, False, False, True]
-    assert B.examined(blank(0)).tolist() == []
+    assert L.examined(lessons).tolist() == [True, False, False, True]
+    assert L.examined(blank(0)).tolist() == []
 
 
 def test_a_tilt_is_the_read_lead_less_the_margin_over_the_temperature():
@@ -93,7 +93,7 @@ def test_a_lesson_aims_every_tried_option_against_the_players_own_move():
 def test_the_careful_pick_is_the_finalist_only_a_standard_error_ahead():
     lessons = examined_lessons([2.0, 0.5, -3.0, 2.0], [1.0, 1.0, 1.0, 1.0])
     lessons["deals"][3] = [2, 2, 2]
-    assert B.careful_pick(lessons).tolist() == [7, 3, 3, 3]
+    assert L.careful_pick(lessons).tolist() == [7, 3, 3, 3]
 
 
 # The card set.

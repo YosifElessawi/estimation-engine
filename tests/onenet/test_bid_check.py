@@ -208,6 +208,9 @@ def test_check_bola_plays_the_bid_made_once_and_then_each_other_bid(games: Path)
     rows += [(step, seat, own, other) for other in others]
     steps, seats, owns, tries = (tuple(column) for column in zip(*rows, strict=True))
     task = C.BolaTask(str(games), 0, 0, spec, 7, steps, seats, owns, tries)
+    assert task.plays() == {(later, later_own), (later, later_other), (step, own)} | {
+        (step, other) for other in others
+    }
     plays = C.check_bola(task)
     # Each decision's bid made first, the decisions in the Bola's order.
     assert plays["step"].tolist() == [step] * (1 + len(others)) + [later, later]
@@ -215,6 +218,8 @@ def test_check_bola_plays_the_bid_made_once_and_then_each_other_bid(games: Path)
     assert plays["result"].shape == plays["standings"].shape == (len(others) + 3, 4)
     again = C.check_bola(task)
     assert again["result"].tolist() == plays["result"].tolist()  # seeded from the decision
+    rest = C.check_bola(dataclasses.replace(task, done=((step, own), (later, later_other))))
+    assert rest["action"].tolist() == [*others, later_own]  # the saved plays are left out
     wrong = dataclasses.replace(task, owns=(later_other, *owns[1:]))
     with pytest.raises(ValueError, match="did not play move"):
         C.check_bola(wrong)
@@ -329,9 +334,9 @@ def test_the_summary_counts_each_sources_changes_for_real_and_in_the_teachers_ro
 
 def test_a_run_plays_every_bola_once_and_reports(games: Path, tmp_path: Path):
     part = part_of(games)
-    found = bidding(part)
+    found = [decision for decision in bidding(part) if len(decision[3]) >= 3]
     rows = []
-    for step, seat, own, legal in (found[1], found[4]):
+    for step, seat, own, legal in (found[0], found[1]):
         other = next(action for action in legal if action != own)
         rows.append((step, seat, 1, own, other, [True], 0.5))
     out = tmp_path / "check"
@@ -355,3 +360,82 @@ def test_a_run_plays_every_bola_once_and_reports(games: Path, tmp_path: Path):
     assert C.run(out, workers=1, seed=3) == summary  # nothing is played twice
     assert path.stat().st_mtime_ns == stamp
     assert C.main(["report", "--out", str(out)]) == 0
+    # A source added later: another bid at the first decision, and a third decision. Only the
+    # three new plays are played, after the four that were saved.
+    step, seat, own, legal = found[2]
+    more = next(action for action in found[0][3] if action not in (rows[0][3], rows[0][4]))
+    other = next(action for action in legal if action != own)
+    rows += [(rows[0][0], rows[0][1], 1, rows[0][3], more, [True], 0.5)]
+    rows += [(step, seat, 1, own, other, [True], 0.5)]
+    np.savez_compressed(out / C.CHANGES, allow_pickle=False, **changes_of(rows))
+    grown = C.run(out, workers=1, seed=3)
+    assert grown["played"] == 4
+    again = C._load(path)  # pyright: ignore[reportPrivateUsage]
+    assert again["action"][:4].tolist() == plays["action"].tolist()
+    assert again["result"][:4].tolist() == plays["result"].tolist()
+    assert again["action"][4:].tolist() == [more, own, other]
+    assert again["step"][4:].tolist() == [rows[0][0], step, step]
+
+
+# What really became of the taught estimates.
+
+
+def test_the_outcomes_are_what_the_taught_estimates_really_took(games: Path, tmp_path: Path):
+    part = part_of(games)
+    made = C.estimates_made(games)
+    actions = part["actions"][: int(part["log_start"][1])].tolist()
+    assert len(made["step"]) == sum(54 <= action < 68 for action in actions)  # every estimate
+    chosen = [(step, seat, own) for step, seat, own, _ in bidding(part) if own >= 54]
+    assert len(chosen) > 8
+    # A lesson at every estimate with a choice: the teacher tried one trick more. At every
+    # other one that led its exam by 5 standard errors; at the rest it trailed.
+    lessons = lessons_of([[own, own + 1] for _, _, own in chosen])
+    lessons["step"][:] = [step for step, _, _ in chosen]
+    lessons["phase"][:] = 2
+    lessons["exam"][:] = np.where(np.arange(len(chosen)) % 2 == 0, 5.0, -5.0)
+    lessons["exam_error"][:] = 1.0
+    lessons["value"][:, 0] = 2.0
+    # The same from the engine alone: each estimate's round, replayed to its end.
+    bola = Bola(int(part["seed"][0]), DEFAULT_CONFIG)
+    at: dict[int, int] = {}
+    for step, action in enumerate(actions):
+        at[step] = len(bola.history)
+        bola.step(action)
+    stood, off, worths = [], [], []
+    for step, seat, own in chosen:
+        result = bola.history[at[step]]
+        mine = result.seats[seat]
+        stood.append(not result.skipped and mine.estimate == own - 54)
+        off.append(mine.tricks - (own - 54))
+        replay = Bola(int(part["seed"][0]), DEFAULT_CONFIG)
+        for action in actions[:step]:
+            replay.step(action)
+        worths.append(C.worth(result.scores, replay.scores, seat))
+    stood, off, worths = np.array(stood), np.array(off), np.array(worths)
+    led = np.arange(len(chosen)) % 2 == 0
+    summary = C.outcomes(lessons, made)
+    assert summary["estimates"] == stood.sum() > 4
+    higher, kept = summary["groups"]["+1"], summary["groups"]["kept"]
+    assert higher["estimates"] == (stood & led).sum()
+    assert kept["estimates"] == (stood & ~led).sum()
+    assert summary["groups"]["-1"]["estimates"] == 0  # no lesson tried a trick fewer
+    assert higher["made"] == pytest.approx((off[stood & led] == 0).mean())
+    assert higher["short"] == pytest.approx((off[stood & led] == -1).mean())
+    assert higher["over"] == pytest.approx((off[stood & led] == 1).mean())
+    assert higher["real"] == pytest.approx(worths[stood & led].mean())
+    assert kept["real"] == pytest.approx(worths[stood & ~led].mean())
+    assert (higher["imagined"], higher["lead"]) == (pytest.approx(2.0), pytest.approx(5.0))
+    assert kept["lead"] == pytest.approx(-5.0)
+    text = "\n".join(C.outcome_lines(summary))
+    assert f"{stood.sum()} taught estimates stood" in text
+    assert "the teacher would go +1" in text
+    # The command reads the recording the lessons name.
+    folder = tmp_path / "lessons"
+    (folder / "parts").mkdir(parents=True)
+    L.save_lessons(L.lesson_path(folder, 0), lessons)
+    (folder / "config.json").write_text(json.dumps({"record": str(games)}))
+    assert C.main(["outcomes", "--lessons", str(folder)]) == 0
+    assert C.outcomes(lessons, {name: values[:0] for name, values in made.items()}) == {
+        "estimates": 0,
+        "groups": {},
+    }
