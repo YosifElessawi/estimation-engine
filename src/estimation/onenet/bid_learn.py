@@ -4,33 +4,32 @@ teacher's lessons and keeps everything else as it is.
     PYTHONPATH=src ~/jax-env/bin/python -m estimation.onenet.bid_learn \\
         --config configs/onenet-bids-1-learn.toml --out runs/onenet/bids-1/learn
 
-- **Bids** (``aimed``). A lesson whose finalist sat its whole exam says by how many points
-  that alternative led the player's own move (``estimation.onenet.lessons``). The target is
-  the starting player's move chances with the finalist's chance set against the move's: the
-  move's chance times exp(tilt), the tilt being the lead over ``temperature``. A finalist that
-  led overtakes the move, however sure the player was of it: self-play left the player sure of
-  moves it had stopped trying the alternatives to. A finalist that trailed is lowered to that
-  level if it stood above it and otherwise left alone. Every other option, and every lesson
-  without a whole exam, keeps the starting player's chances.
-- **The noise in a lead** (``tilts``). A measured lead is the true one plus the luck of its
-  exam's deals. Each is first pulled toward its phase's average lead by its share of noise
-  (how the leads spread across the lessons, less their errors, says how much of a lead is
-  real), and what noise is left comes off the tilt (minus variance / (2 temperature squared)),
-  so that on average an alternative's odds against the move are those of its true lead: one
-  no better than the move does not overtake it by luck.
+- **Leads read from the view** (``estimation.onenet.bid_leads``). A lesson is one decision's
+  verdict, luck included. Lead models read what the lessons say about decisions that look alike:
+  at each lesson, the lead of every tried option over the player's own move, read by a model
+  that never saw that lesson's Bola. The player learns these read leads, not the measured ones:
+  it is taught only what holds beyond the one decision.
+- **Bids** (``aimed``). The target is the starting player's move chances with every tried
+  option set against its own move by its tilt (``tilts``): the read lead less ``margin``, over
+  ``temperature``. An option read ahead by more than the margin overtakes the move, however sure
+  the player was of it: self-play left the player sure of moves it had stopped trying the
+  alternatives to. An option read behind is lowered to that level if it stood above it and
+  otherwise left alone. The margin is there because the best of several read leads reads high.
 - **Everything else stays.** On card decisions (a training set of the player's own games,
   ``estimation.onenet.shards``) the move chances are held to the starting player's, and on
   every row so are the practice answers, which the search reads for its guesses. Only the bids
   the lessons speak about move.
 - **Held out.** A share of the lessons' Bolas, never trained on, scores the start and every
-  pass: how often the player's top bid changed, what the changed bids are worth by the
-  teacher's own measure on those lessons (``gain``, in points a decision: the exam lead when
-  the new bid is the finalist, the first-stage lead when it is another option tried; and in
-  points a game, by how many decisions of each kind a seat has in a Bola), and how often the
-  top bid is the teacher's careful pick (the finalist when it led its exam by a standard
-  error, else the player's own move). Round 2's held-out card decisions give the points the
-  top card, and the best of the top 2 and 3, lose against the 256-deal teacher, which should
-  not move.
+  pass (``score_bids``): how often the player's top bid changed and what the changed bids are
+  worth by the teacher's own measures on those lessons, in points a decision and a game.
+  ``gain`` counts a new bid by its first-stage lead: every option played the first stage
+  whatever became of it, so it is fair to any bid, if short (32 deals). ``exam_gain`` counts
+  the bid by its long exam where it was the examined finalist and by its first stage elsewhere:
+  steadier, but it reads low, since a bid gets its exam only when its first stage went well
+  and is left with its first stage when that went badly. The lead models' own bids are scored
+  the same way: what the lessons hold for any player that can read them. Round 2's held-out card
+  decisions give the points the top card, and the best of the top 2 and 3, lose against the
+  256-deal teacher, which should not move.
 """
 
 import argparse
@@ -52,8 +51,9 @@ import optax
 
 from estimation.rl.config import section_from
 
+from .bid_leads import Reading, cross_fit, picks, tried
 from .lessons import Lessons, load_all
-from .nets import Net, apply_player, load_player, save_player
+from .nets import Net, apply_player, load_player, parse_size, save_player
 from .shards import KIND_CARD, NUM_ACTIONS, load_shard, shard_paths
 
 PLAY_BASE = 68
@@ -70,13 +70,19 @@ class LearnConfig:
     lessons: str = ""  # the lessons' folder (estimation.onenet.bid_lessons)
     cards: str = ""  # a training set of the player's games: its card play is held on these
     start: str = ""  # the player's file to start from
-    epochs: int = 10  # passes over the lessons
+    folds: int = 5  # lead models: each reads the fold of training Bolas it was not fit on
+    lead_size: str = "512x3"  # a lead model's units x layers
+    lead_epochs: int = 40  # a lead model's passes over its lessons
+    lead_lr: float = 1e-3
+    floor: float = 0.5  # points: the least error a measured lead is credited with
+    shuffle: bool = True  # the lead models see every estimate under new suit shuffles
+    margin: float = 0.5  # points a read lead must clear before the option overtakes the move
+    temperature: float = 0.5  # points of read lead, past the margin, that multiply the odds by e
+    clip: float = 5.0  # the most a lesson may move an option's log odds
+    epochs: int = 40  # the player's passes over the lessons
     batch: int = 2048  # lessons a step, with as many card decisions
-    lr: float = 1e-4
+    lr: float = 3e-4
     lr_end: float = 1e-5
-    temperature: float = 1.0  # points of lead that multiply an alternative's odds by e
-    shrink: bool = True  # pull each lead toward the average lead by its share of noise
-    clip: float = 5.0  # the most a lesson may move an alternative's log odds
     card_weight: float = 1.0  # holding the card moves to the start's
     practice_weight: float = 1.0  # holding the practice answers to the start's
     held_out: float = 0.05  # share of the lessons' Bolas kept out of training, to score on
@@ -86,14 +92,26 @@ class LearnConfig:
     seed: int = 0
 
     def __post_init__(self) -> None:
-        if self.epochs < 1 or self.batch < 1 or self.card_shards < 1:
-            raise ValueError("learn.epochs, batch and card_shards must be at least 1")
-        if min(self.lr, self.lr_end, self.temperature, self.clip) <= 0:
-            raise ValueError("learn.lr, lr_end, temperature and clip must be above 0")
-        if min(self.card_weight, self.practice_weight) < 0:
-            raise ValueError("learn.card_weight and practice_weight must be 0 or more")
+        parse_size(self.lead_size)
+        if min(self.epochs, self.batch, self.card_shards, self.lead_epochs) < 1:
+            raise ValueError("learn.epochs, lead_epochs, batch and card_shards must be at least 1")
+        if self.folds < 2:
+            raise ValueError("learn.folds must be at least 2: a model never reads its own Bolas")
+        if min(self.lr, self.lr_end, self.lead_lr, self.temperature, self.clip, self.floor) <= 0:
+            raise ValueError(
+                "learn.lr, lr_end, lead_lr, temperature, clip and floor must be above 0"
+            )
+        if min(self.card_weight, self.practice_weight, self.margin) < 0:
+            raise ValueError("learn.card_weight, practice_weight and margin must be 0 or more")
         if not 0 < self.held_out < 1 or not 0 < self.card_held_out < 1:
             raise ValueError("learn.held_out and card_held_out must be between 0 and 1")
+
+    @property
+    def reading(self) -> Reading:
+        """How the lead models are fit."""
+        return Reading(
+            self.lead_size, self.lead_epochs, self.batch, self.lead_lr, self.floor, self.shuffle
+        )
 
 
 def config_of(data: dict[str, Any]) -> LearnConfig:
@@ -130,69 +148,27 @@ def examined(lessons: Lessons) -> npt.NDArray[np.bool_]:
     return (sat == total) & (lessons["exam_deals"] > 0) & (lessons["finalist"] > 0)
 
 
-class Leads(NamedTuple):
-    """How the examined lessons' leads spread in each phase (Dash Calls, the auction,
-    estimates): their mean, and the variance of the true leads behind them (the measured leads'
-    variance less their errors')."""
-
-    mean: tuple[float, float, float]
-    variance: tuple[float, float, float]
-
-
-def spread_of(lessons: Lessons) -> Leads:
-    """``Leads`` of the examined lessons; a phase with fewer than two has no spread to show."""
-    whole = examined(lessons)
-    mean, variance = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-    for phase in range(3):
-        rows = whole & (lessons["phase"] == phase)
-        if rows.sum() < 2:
-            continue
-        exam = lessons["exam"][rows].astype(np.float64)
-        noise = float((lessons["exam_error"][rows].astype(np.float64) ** 2).mean())
-        mean[phase] = float(exam.mean())
-        variance[phase] = max(float(exam.var()) - noise, 0.0)
-    return Leads((mean[0], mean[1], mean[2]), (variance[0], variance[1], variance[2]))
+def tilts(leads: Floats, config: LearnConfig) -> Floats:
+    """``[L, K]``: the log of the odds each option is given against the player's own move, from
+    the leads read for it (``bid_leads``): the lead less ``margin``, over ``temperature``, at
+    most ``clip`` either way."""
+    tilt = (leads.astype(np.float64) - config.margin) / config.temperature
+    return np.clip(tilt, -config.clip, config.clip).astype(np.float32)
 
 
-def tilts(lessons: Lessons, config: LearnConfig, leads: Leads) -> Floats:
-    """``[L]``: each lesson's tilt, the log of the odds its finalist is given against the
-    player's own move: 0 where the finalist did not sit its whole exam, else its lead over
-    ``temperature`` less the noise's share.
-
-    With ``shrink`` the lead is first taken as its likeliest true value given how leads spread
-    in its phase (``leads``, measured on the training lessons): the measured lead pulled toward
-    the mean lead by variance of its error / (that + variance of the true leads), with what
-    uncertainty that leaves. The odds are exp(tilt), and the mean of exp(noise) is above 1, so
-    half the variance over temperature squared comes off: on average the odds are
-    exp(true lead / temperature), not more. At most ``clip`` either way."""
-    whole = examined(lessons)
-    lead = lessons["exam"].astype(np.float64)
-    variance = lessons["exam_error"].astype(np.float64) ** 2
-    if config.shrink:
-        mean = np.array(leads.mean)[lessons["phase"]]
-        spread = np.array(leads.variance)[lessons["phase"]]
-        kept = spread / np.maximum(spread + variance, 1e-12)
-        lead = mean + (lead - mean) * kept
-        variance = variance * kept
-    t = config.temperature
-    tilt = np.clip(lead / t - variance / (2 * t * t), -config.clip, config.clip)
-    return np.where(whole, tilt, 0.0).astype(np.float32)
-
-
-def aimed(
-    chances: jax.Array, favourite: jax.Array, finalist: jax.Array, tilt: jax.Array
-) -> jax.Array:
-    """``[B, 120]``: the log chances a lesson aims the player at, from the starting player's
-    log chances ``[B, 120]``, its own move and the finalist (action ids) and the tilt ``[B]``.
-    Only the finalist's entry differs: with a tilt above 0 it is the move's log chance plus the
-    tilt, so the finalist overtakes the move; with a tilt below 0 it is that or the finalist's
-    own, whichever is lower, so a finalist is never lifted for trailing by less than the player
-    thought; with a tilt of 0 nothing moves. (Not renormalised: a softmax does that.)"""
-    rows = jnp.arange(chances.shape[0])
-    own = chances[rows, finalist]
-    level = chances[rows, favourite] + tilt
-    new = jnp.where(tilt > 0, level, jnp.where(tilt < 0, jnp.minimum(own, level), own))
-    return chances.at[rows, finalist].set(new)
+def aimed(chances: jax.Array, options: jax.Array, used: jax.Array, tilt: jax.Array) -> jax.Array:
+    """``[B, 120]``: the log chances a lesson aims the player at, from the starting player's log
+    chances ``[B, 120]``, the lesson's ``options`` ``[B, K]`` (action ids, the player's own move
+    first), which of them count (``used``: the tried alternatives) and their tilts ``[B, K]``.
+    Only those options' entries differ. With a tilt above 0 an option's is the move's log chance
+    plus the tilt, so it overtakes the move; with a tilt below 0 it is that or the option's own,
+    whichever is lower, so an option is never lifted for trailing by less than the player
+    thought. (Not renormalised: a softmax does that.)"""
+    own = jnp.take_along_axis(chances, options, axis=1)
+    level = own[:, :1] + tilt
+    new = jnp.where(tilt > 0, level, jnp.minimum(own, level))
+    change = jnp.where(used, new - own, 0.0)
+    return chances + (jax.nn.one_hot(options, NUM_ACTIONS) * change[..., None]).sum(1)
 
 
 def careful_pick(lessons: Lessons) -> npt.NDArray[np.int64]:
@@ -206,12 +182,11 @@ def careful_pick(lessons: Lessons) -> npt.NDArray[np.int64]:
 
 
 def lesson_batch(lessons: Lessons, tilt: Floats, rows: npt.NDArray[np.intp]) -> Batch:
-    at = np.arange(len(rows))
     options = lessons["options"][rows]
     return {
         "x": lessons["x"][rows],
-        "favourite": options[:, 0].astype(np.int32),
-        "finalist": options[at, lessons["finalist"][rows]].astype(np.int32),
+        "options": np.where(options >= 0, options, 0).astype(np.int32),
+        "used": tried({"options": options}),
         "tilt": tilt[rows],
     }
 
@@ -289,7 +264,7 @@ def loss(
     logits, answers = apply_player(player, x)
     base, base_answers = apply_player(start, x)
     chances = jax.nn.log_softmax(jnp.where(legal, base, -1e9))
-    aim = aimed(chances, taught["favourite"], taught["finalist"], taught["tilt"])
+    aim = aimed(chances, taught["options"], taught["used"], taught["tilt"])
     bids = _cross_entropy(aim, logits, legal)
     cx = cards.astype(jnp.float32)
     card_logits, card_answers = apply_player(player, cx)
@@ -323,34 +298,34 @@ def top_bid(player: Net, x: npt.NDArray[np.float16]) -> npt.NDArray[np.int64]:
     return _top3(player, x)[:, 0]
 
 
-def bid_scores(
-    player: Net, lessons: Lessons, seat_game: Sequence[float] | None = None
+def score_bids(
+    top: npt.NDArray[np.int64], lessons: Lessons, seat_game: Sequence[float] | None = None
 ) -> dict[str, Any]:
-    """How the player's top bids stand on (held-out) lessons: how often the top bid is no longer
-    the starting player's move (``changed``); what its changes are worth, in points a decision,
-    by the teacher's measures (``gain``: the exam lead where the new bid is the examined
-    finalist, the first-stage lead where it is another option the teacher tried, 0 where the
-    bid did not change), over the lessons where the new bid was tried at all; how often it was
-    not (``untried``); how often the top bid is the teacher's careful pick (``agree``), and how
-    often where that pick is not the player's own move (``followed``, of ``overruled``).
-    ``phases`` holds ``changed`` and ``gain`` for each kind of decision. With ``seat_game``,
-    each kind's decisions a seat has in a Bola (``per_seat_game``), ``game`` is the changes'
-    worth in points a game: each kind's gain times its decisions."""
+    """How bids ``top`` (an action id for each lesson) stand on (held-out) lessons: how often
+    the bid is not the starting player's move (``changed``); what the changes are worth, in
+    points a decision, by the teacher's measures, over the lessons where the bid was tried at
+    all (``gain``: the new bid's first-stage lead, 0 where the bid did not change; ``exam_gain``:
+    its exam lead where it is the examined finalist, its first-stage lead elsewhere); how often
+    it was not tried (``untried``); how often the bid is the teacher's careful pick (``agree``),
+    and how often where that pick is not the player's own move (``followed``, of ``overruled``).
+    ``phases`` holds ``changed`` and the gains for each kind of decision. With ``seat_game``,
+    each kind's decisions a seat has in a Bola (``per_seat_game``), ``game`` and ``exam_game``
+    are the changes' worth in points a game: each kind's gain times its decisions."""
     count = len(lessons["pick"])
     rows = np.arange(count)
-    top = top_bid(player, lessons["x"])
     slots = lessons["options"] == top[:, None]
-    tried = slots.any(1)
+    was_tried = slots.any(1)
     slot = slots.argmax(1)
     changed = top != lessons["options"][:, 0]
-    is_finalist = tried & (slot == lessons["finalist"]) & examined(lessons)
-    worth = np.where(is_finalist, lessons["exam"], lessons["opening"][rows, slot])
-    worth = np.where(changed, worth, 0.0)
+    first_stage = lessons["opening"][rows, slot]
+    is_finalist = was_tried & (slot == lessons["finalist"]) & examined(lessons)
+    fair = np.where(changed, first_stage, 0.0)
+    steady = np.where(changed, np.where(is_finalist, lessons["exam"], first_stage), 0.0)
     pick = careful_pick(lessons)
     overruled = pick != lessons["options"][:, 0]
 
-    def gain(of: npt.NDArray[np.bool_]) -> tuple[float, float]:
-        w = worth[of & tried]
+    def gain(worth: npt.NDArray[Any], of: npt.NDArray[np.bool_]) -> tuple[float, float]:
+        w = worth[of & was_tried]
         mean = float(w.mean()) if len(w) else 0.0
         return mean, float(w.std(ddof=1) / np.sqrt(len(w))) if len(w) > 1 else 0.0
 
@@ -358,31 +333,43 @@ def bid_scores(
     scores: dict[str, Any] = {
         "lessons": float(count),
         "changed": float(changed.mean()) if count else 0.0,
-        "gain": gain(everything)[0],
-        "gain_error": gain(everything)[1],
-        "untried": float((~tried).mean()) if count else 0.0,
+        "gain": gain(fair, everything)[0],
+        "gain_error": gain(fair, everything)[1],
+        "exam_gain": gain(steady, everything)[0],
+        "untried": float((~was_tried).mean()) if count else 0.0,
         "agree": float((top == pick).mean()) if count else 0.0,
         "overruled": float(overruled.mean()) if count else 0.0,
         "followed": float((top == pick)[overruled].mean()) if overruled.any() else 0.0,
         "phases": {},
     }
-    game, game_variance = 0.0, 0.0
+    game, game_variance, exam_game = 0.0, 0.0, 0.0
     for phase, name in enumerate(PHASES):
         of = lessons["phase"] == phase
-        mean, error = gain(of)
+        mean, error = gain(fair, of)
+        exam_mean = gain(steady, of)[0]
         scores["phases"][name] = {
             "lessons": float(of.sum()),
             "changed": float(changed[of].mean()) if of.any() else 0.0,
             "gain": mean,
             "gain_error": error,
+            "exam_gain": exam_mean,
         }
         if seat_game is not None:
             game += mean * seat_game[phase]
             game_variance += (error * seat_game[phase]) ** 2
+            exam_game += exam_mean * seat_game[phase]
     if seat_game is not None:
         scores["game"] = game
         scores["game_error"] = float(np.sqrt(game_variance))
+        scores["exam_game"] = exam_game
     return scores
+
+
+def bid_scores(
+    player: Net, lessons: Lessons, seat_game: Sequence[float] | None = None
+) -> dict[str, Any]:
+    """``score_bids`` of the player's top bids."""
+    return score_bids(top_bid(player, lessons["x"]), lessons, seat_game)
 
 
 def per_seat_game(lessons: Lessons, folder: Path) -> list[float] | None:
@@ -436,17 +423,24 @@ def split(lessons: Lessons, share: float, seed: int) -> tuple[Lessons, Lessons]:
     )
 
 
-def score_line(bids: dict[str, Any], cards: dict[str, float]) -> str:
+def bid_line(bids: dict[str, Any]) -> str:
     line = (
         f"top bid changed at {bids['changed']:.1%}, worth {bids['gain']:+.3f} points a decision "
         f"(give or take {bids['gain_error']:.3f})"
     )
     if "game" in bids:
-        line += f", {bids['game']:+.1f} a game (give or take {bids['game_error']:.1f})"
-    line += (
+        line += (
+            f", {bids['game']:+.1f} a game (give or take {bids['game_error']:.1f}; by the "
+            f"exams {bids['exam_game']:+.1f})"
+        )
+    return line + (
         f"; the teacher's careful pick at {bids['agree']:.1%} "
         f"(where it overrules the player: {bids['followed']:.1%})"
     )
+
+
+def score_line(bids: dict[str, Any], cards: dict[str, float]) -> str:
+    line = bid_line(bids)
     if cards.get("cards"):
         line += (
             f" | top card loses {cards['top_card']:.3f}, best of top 2 {cards['top_2']:.3f}, "
@@ -456,34 +450,42 @@ def score_line(bids: dict[str, Any], cards: dict[str, float]) -> str:
 
 
 def run(config: LearnConfig, out: Path) -> dict[str, Any]:
-    """Learn the lessons from the start; save the last pass's player in ``out`` with the scores
-    of the start and of every pass. Returns the summary."""
+    """Read the lessons' leads, teach them to the player from the start, and save the last
+    pass's player in ``out`` with the scores of the start, of every pass and of the lead
+    models' own bids, and those bids on the held-out lessons (``picks.npz``, as
+    ``estimation.onenet.bid_check`` takes them). Returns the summary."""
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(dataclasses.asdict(config), indent=2) + "\n")
     _say(f"device {jax.devices()[0]}; lessons {config.lessons}; cards {config.cards}")
     lessons = load_all(Path(config.lessons))
     seat_game = per_seat_game(lessons, Path(config.lessons))
     train, held = split(lessons, config.held_out, config.seed)
-    cards = load_cards(Path(config.cards), config)
-    leads = spread_of(train)
-    tilt = tilts(train, config, leads)
-    whole = examined(train)
-    spreads = ", ".join(
-        f"{name} {mean:+.2f} give or take {np.sqrt(variance):.2f}"
-        for name, mean, variance in zip(PHASES, leads.mean, leads.variance, strict=True)
-    )
-    _say(
-        f"{len(tilt):,} lessons to learn ({whole.mean():.0%} with a whole exam; true leads: "
-        f"{spreads}), {len(held['pick']):,} held out; {len(cards.held):,} card decisions held, "
-        f"{len(cards.scored):,} scored"
-    )
+    del lessons
     start, meta = load_player(Path(config.start))
-    own = float((_top3(start, train["x"])[:, 0] == train["options"][:, 0]).mean())
+    own = float((top_bid(start, train["x"]) == train["options"][:, 0]).mean())
     if own < 0.99:
         raise ValueError(
             f"{config.start} makes the lessons' own move at only {own:.0%} of them: "
             "the lessons were taught for another player"
         )
+    _say(f"{len(train['pick']):,} lessons to learn, {len(held['pick']):,} held out")
+    leads, held_leads = cross_fit(train, held, config.reading, config.folds, config.seed, _say)
+    lead_picks = picks(held_leads, held, config.margin)
+    readers = score_bids(lead_picks, held, seat_game)
+    _say(f"the lead models' own bids: {bid_line(readers)}")
+    np.savez_compressed(
+        out / "picks.npz",
+        allow_pickle=False,
+        game=held["game"],
+        step=held["step"],
+        action=lead_picks.astype(np.int16),
+    )
+    cards = load_cards(Path(config.cards), config)
+    tilt = tilts(leads, config)
+    _say(
+        f"{float((tilt.max(1) > 0).mean()):.1%} of the lessons put another bid first; "
+        f"{len(cards.held):,} card decisions held, {len(cards.scored):,} scored"
+    )
     player = start
     steps = max(1, len(tilt) // config.batch)
     schedule = optax.cosine_decay_schedule(
@@ -527,7 +529,8 @@ def run(config: LearnConfig, out: Path) -> dict[str, Any]:
         rows.append(row)
         log.write(json.dumps(row) + "\n")
         log.flush()
-        _say(f"pass {epoch}/{config.epochs}: {score_line(row['bids'], row['cards'])}")
+        if epoch % 5 == 0 or epoch == config.epochs:
+            _say(f"pass {epoch}/{config.epochs}: {score_line(row['bids'], row['cards'])}")
     log.close()
     save_player(
         out / "player.npz",
@@ -537,7 +540,7 @@ def run(config: LearnConfig, out: Path) -> dict[str, Any]:
     summary = {
         "lessons": {"train": len(tilt), "held_out": len(held["pick"])},
         "per_seat_game": seat_game,
-        "leads": {"mean": list(leads.mean), "variance": list(leads.variance)},
+        "lead_models": readers,
         "start": before,
         "learned": {"bids": rows[-1]["bids"], "cards": rows[-1]["cards"]},
     }

@@ -1,5 +1,5 @@
-"""Step 6's learning: the lessons as targets, the card set, the held-out scores, and a run that
-learns big leads while the card play stays."""
+"""Step 6's learning: the read leads as targets, the card set, the held-out scores, and a run
+that learns big leads while the card play stays."""
 
 import json
 from pathlib import Path
@@ -61,56 +61,32 @@ def test_examined_lessons_are_those_whose_finalist_sat_its_whole_exam():
     assert B.examined(blank(0)).tolist() == []
 
 
-NONE = B.Leads((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+def test_a_tilt_is_the_read_lead_less_the_margin_over_the_temperature():
+    leads = np.array([[0.0, 3.0, -1.0], [0.0, 0.5, 30.0]], np.float32)
+    config = B.LearnConfig(margin=0.5, temperature=2.0, clip=5.0)
+    # (3 - 0.5) / 2, (-1 - 0.5) / 2; a lead at the margin tilts nothing; then the clip.
+    assert B.tilts(leads, config).tolist() == [[-0.25, 1.25, -0.75], [-0.25, 0.0, 5.0]]
 
 
-def test_the_spread_of_leads_is_their_variance_less_their_errors_phase_by_phase():
-    exam = [2.0, -4.0, 0.0, -2.0, 9.0, 1.0, -1.0, 5.0]
-    lessons = examined_lessons(exam, [1.0, 1.0, 2.0, 2.0, 1.0, 3.0, 3.0, 1.0])
-    lessons["phase"][:] = [1, 1, 1, 1, 1, 2, 2, 0]
-    lessons["deals"][4] = [2, 2, 2]  # not examined: left out
-    leads = B.spread_of(lessons)
-    # The auction: leads' variance 5, mean squared error 2.5. The estimates: all noise, so no
-    # spread of true leads is shown. One Dash Call lesson: nothing to measure a spread from.
-    assert leads.mean == pytest.approx((0.0, -1.0, 0.0))
-    assert leads.variance == pytest.approx((0.0, 2.5, 0.0))
-    assert B.spread_of(blank(0)) == NONE
-
-
-def test_a_tilt_is_the_lead_over_the_temperature_less_the_noises_share():
-    lessons = examined_lessons([3.0, -2.0, 30.0, 3.0], [1.0, 2.0, 1.0, 1.0])
-    lessons["deals"][3] = [2, 2, 2]  # not examined: no tilt
-    config = B.LearnConfig(temperature=2.0, shrink=False, clip=5.0)
-    tilt = B.tilts(lessons, config, NONE)
-    # 3/2 - 1/8, -2/2 - 4/8, then the clip.
-    assert tilt.tolist() == pytest.approx([1.375, -1.5, 5.0, 0.0])
-
-
-def test_a_shrunk_lead_is_pulled_toward_its_phases_mean_lead_by_its_noise():
-    lessons = examined_lessons([3.0, 3.0, 3.0], [1.0, 3.0, 1.0])
-    lessons["phase"][:] = [2, 2, 1]
-    config = B.LearnConfig(temperature=1.0, shrink=True, clip=50.0)
-    tilt = B.tilts(lessons, config, B.Leads((0.0, -1.0, -1.0), (0.0, 0.0, 3.0)))
-    # Estimates spread by 3. Error 1: 3/4 of the lead is kept: -1 + 4 * 0.75 = 2, variance left
-    # 0.75: 2 - 0.375. Error 3: 1/4 is kept: -1 + 4 * 0.25 = 0, variance left 2.25: 0 - 1.125.
-    # The auction shows no spread: every lead there is its mean, -1.
-    assert tilt.tolist() == pytest.approx([1.625, -1.125, -1.0])
-
-
-def test_a_lesson_aims_the_finalist_against_the_players_own_move():
+def test_a_lesson_aims_every_tried_option_against_the_players_own_move():
     chances = np.full((4, 120), -np.inf, np.float32)
-    chances[:, [3, 7, 12]] = np.log([0.9, 0.08, 0.02])  # the move, the finalist, another option
-    favourite, finalist = jnp.full(4, 3), jnp.full(4, 7)
-    tilt = np.array([1.0, -1.0, -4.0, 0.0], np.float32)
-    aim = np.asarray(B.aimed(jnp.asarray(chances), favourite, finalist, jnp.asarray(tilt)))
+    chances[:, [3, 7, 12]] = np.log([0.9, 0.08, 0.02])  # the move and two options
+    options = jnp.asarray([[3, 7, 12], [3, 7, 12], [3, 7, 12], [3, 7, 0]])
+    used = jnp.asarray([[False, True, True]] * 3 + [[False, True, False]])
+    tilt = np.array(
+        [[0.0, 1.0, 2.0], [0.0, -1.0, -4.0], [0.0, 0.0, 0.0], [0.0, 1.0, 3.0]], np.float32
+    )
+    aim = np.asarray(B.aimed(jnp.asarray(chances), options, used, jnp.asarray(tilt)))
     odds = np.exp(aim[:, [3, 7, 12]])
-    # It led: it overtakes the move, at e times the move's chance, however unlikely it was.
-    assert odds[0].tolist() == pytest.approx([0.9, 0.9 * np.e, 0.02], rel=1e-5)
-    # It trailed by less than the player thought (0.08 is under 0.9 / e): left alone.
-    assert odds[1].tolist() == pytest.approx([0.9, 0.08, 0.02], rel=1e-5)
-    # It trailed by more: lowered to the move's chance over e to the 4th.
-    assert odds[2].tolist() == pytest.approx([0.9, 0.9 * np.exp(-4.0), 0.02], rel=1e-5)
-    assert odds[3].tolist() == pytest.approx([0.9, 0.08, 0.02], rel=1e-5)  # no exam: as it was
+    # Read ahead: each overtakes the move, at e and e squared times its chance, however
+    # unlikely the player thought it.
+    assert odds[0].tolist() == pytest.approx([0.9, 0.9 * np.e, 0.9 * np.e**2], rel=1e-5)
+    # Read behind. By less than the player thought (0.08 is under 0.9 / e): left alone. By
+    # more (0.02 is over 0.9 / e to the 4th): lowered to that.
+    assert odds[1].tolist() == pytest.approx([0.9, 0.08, 0.9 * np.exp(-4.0)], rel=1e-5)
+    assert odds[2].tolist() == pytest.approx([0.9, 0.08, 0.02], rel=1e-5)  # level: as it was
+    # A slot that does not count changes nothing, whatever its tilt.
+    assert odds[3].tolist() == pytest.approx([0.9, 0.9 * np.e, 0.02], rel=1e-5)
     assert np.isneginf(aim[:, 0]).all()  # the other moves are untouched
 
 
@@ -199,31 +175,40 @@ def test_bid_scores_value_the_changed_bids_by_the_teachers_measures(start: Path,
     count = len(lessons["pick"])
     assert count > 30
     lessons["exam"][:] = 4.0
+    lessons["opening"][:, 1] = 3.0
     lessons["opening"][:, 2] = -6.0
     player, _ = nets.load_player(start)
     same = B.bid_scores(player, lessons)  # the player's top bid is slot 0 everywhere
     assert (same["changed"], same["gain"], same["untried"]) == (0.0, 0.0, 0.0)
+    assert same["exam_gain"] == 0.0
     assert same["overruled"] == 1.0  # the finalist leads by 40 standard errors everywhere
     assert (same["agree"], same["followed"]) == (0.0, 0.0)
     # Lessons that call another option the starting player's move: the player has "changed" to
-    # what is now the finalist (worth its exam lead) or the dropped option (its opening lead).
+    # what is now the finalist (its first-stage lead, or its exam lead by the exams) or the
+    # dropped option (its first-stage lead by both).
     moved = {name: values.copy() for name, values in lessons.items()}
     moved["options"][:, [0, 1]] = lessons["options"][:, [1, 0]]
     to_finalist = B.bid_scores(player, moved)
-    assert (to_finalist["changed"], to_finalist["gain"]) == (1.0, pytest.approx(4.0))
+    assert (to_finalist["changed"], to_finalist["gain"]) == (1.0, pytest.approx(3.0))
+    assert to_finalist["exam_gain"] == pytest.approx(4.0)
     assert (to_finalist["agree"], to_finalist["followed"]) == (1.0, 1.0)
     moved["options"][:, [1, 2]] = moved["options"][:, [2, 1]]  # the player's bid is slot 2 now
     to_dropped = B.bid_scores(player, moved)
     assert (to_dropped["changed"], to_dropped["gain"]) == (1.0, pytest.approx(-6.0))
+    assert to_dropped["exam_gain"] == pytest.approx(-6.0)
     assert to_dropped["gain_error"] == 0.0
     moved["options"][:, 2] = -1  # the player's bid is not among the options the teacher tried
     assert B.bid_scores(player, moved)["untried"] == 1.0
+    # Any bids are scored the same way, a player's or not.
+    slot_1 = lessons["options"][:, 1].astype(np.int64)
+    assert B.score_bids(slot_1, lessons)["gain"] == pytest.approx(3.0)
 
 
 def test_bid_scores_by_kind_of_decision_and_in_points_a_game(start: Path, data: Path):
     lessons = bidding_lessons(start, data)
     count = len(lessons["pick"])
     lessons["exam"][:] = 4.0
+    lessons["opening"][:, 1] = 2.0
     lessons["phase"][:] = np.where(np.arange(count) % 2 == 0, 1, 2)  # auction, estimate, ...
     # The player has "changed" to the finalist at every estimate and nowhere else.
     estimates = lessons["phase"] == 2
@@ -235,14 +220,18 @@ def test_bid_scores_by_kind_of_decision_and_in_points_a_game(start: Path, data: 
         "changed": 0.0,
         "gain": 0.0,
         "gain_error": 0.0,
+        "exam_gain": 0.0,
     }
     assert scores["phases"]["the auction"]["lessons"] == (~estimates).sum()
     assert scores["phases"]["the auction"]["changed"] == 0.0
     assert scores["phases"]["estimates"]["changed"] == 1.0
-    assert scores["phases"]["estimates"]["gain"] == pytest.approx(4.0)
-    assert scores["gain"] == pytest.approx(4.0 * estimates.mean())
-    # 15 estimates a seat a Bola, each worth 4 points; nothing from the other kinds.
-    assert (scores["game"], scores["game_error"]) == (pytest.approx(60.0), 0.0)
+    assert scores["phases"]["estimates"]["gain"] == pytest.approx(2.0)
+    assert scores["phases"]["estimates"]["exam_gain"] == pytest.approx(4.0)
+    assert scores["gain"] == pytest.approx(2.0 * estimates.mean())
+    # 15 estimates a seat a Bola, each worth 2 points by its first stage and 4 by its exam;
+    # nothing from the other kinds.
+    assert (scores["game"], scores["game_error"]) == (pytest.approx(30.0), 0.0)
+    assert scores["exam_game"] == pytest.approx(60.0)
     assert "game" not in B.bid_scores(player, lessons)
 
 
@@ -267,11 +256,14 @@ def learn_config(lessons: Path, data: Path, start: Path, **changes: Any) -> B.Le
         "lessons": str(lessons),
         "cards": str(data),
         "start": str(start),
+        "folds": 4,
+        "lead_size": "32x2",
+        "lead_epochs": 100,
+        "lead_lr": 3e-3,
         "epochs": 60,
         "batch": 32,
         "lr": 3e-3,
         "lr_end": 3e-4,
-        "shrink": False,
         "clip": 50.0,
         "held_out": 0.34,
         "card_held_out": 0.34,
@@ -285,12 +277,24 @@ def learn_config(lessons: Path, data: Path, start: Path, **changes: Any) -> B.Le
 def learned(
     start: Path, data: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> tuple[B.LearnConfig, Path, dict[str, Any], L.Lessons]:
-    """A run on lessons whose finalist led its exam by 40 points at every auction decision (Pass
-    is legal there) and trailed by 40 at every estimate: something a view shows."""
+    """A run on lessons that say one thing a view shows: Pass, wherever it is legal and not the
+    player's own move, is the finalist and led its exam by 40 points; any other finalist
+    trailed by 40, and the dropped option by 30. The lessons are dealt out as twelve Bolas, so
+    every fold has every kind of decision."""
     folder = tmp_path_factory.mktemp("learn")
     lessons = bidding_lessons(start, data)
-    auction = lessons["x"][:, -120 + PASS] > 0.5
-    lessons["exam"][:] = np.where(auction, 40.0, -40.0)
+    lessons["game"][:] = np.arange(len(lessons["pick"])) % 12
+    options = lessons["options"]
+    offered = (lessons["x"][:, -120 + PASS] > 0.5) & (options[:, 0] != PASS)
+    third = offered & (options[:, 2] == PASS)
+    options[third] = options[third][:, [0, 2, 1]]  # Pass was the dropped option: the finalist
+    absent = offered & (options[:, 1] != PASS)
+    options[absent] = np.stack(
+        [options[absent, 0], np.full(absent.sum(), PASS), options[absent, 1]], 1
+    )
+    lessons["exam"][:] = np.where(offered, 40.0, -40.0)
+    lessons["margin"][:, 2] = -30.0
+    lessons["error"][:, 2] = 1.0
     (folder / "lessons" / "parts").mkdir(parents=True)
     L.save_lessons(L.lesson_path(folder / "lessons", 0), lessons)
     config = learn_config(folder / "lessons", data, start)
@@ -346,6 +350,16 @@ def test_a_run_scores_the_start_and_every_pass_and_saves_its_summary(
     assert summary["lessons"]["train"] + summary["lessons"]["held_out"] == len(lessons["pick"])
     assert 0.1 < summary["start"]["bids"]["overruled"] < 0.9  # the auction decisions held out
     assert json.loads((out / "config.json").read_text())["temperature"] == config.temperature
+    # The lead models' own bids on the held-out lessons: the finalist at the auction decisions,
+    # as the teacher's careful pick is, kept as picks for the real-play check.
+    assert summary["lead_models"]["agree"] > 0.9
+    assert summary["lead_models"]["changed"] == pytest.approx(
+        summary["start"]["bids"]["overruled"], abs=0.1
+    )
+    _, held = B.split(lessons, config.held_out, config.seed)
+    with np.load(out / "picks.npz") as kept:
+        assert kept["step"].tolist() == held["step"].tolist()
+        assert (kept["action"] != held["options"][:, 0]).mean() == summary["lead_models"]["changed"]
     with np.load(out / "player.npz") as saved:
         meta = json.loads(str(saved["meta"]))
     assert meta["epoch"] == config.epochs
@@ -381,3 +395,11 @@ def test_a_learning_config_is_one_checked_section():
         B.LearnConfig(held_out=1.0)
     with pytest.raises(ValueError, match="epochs"):
         B.LearnConfig(epochs=0)
+    with pytest.raises(ValueError, match="folds"):
+        B.LearnConfig(folds=1)
+    with pytest.raises(ValueError, match="units x layers"):
+        B.LearnConfig(lead_size="wide")
+    with pytest.raises(ValueError, match="margin"):
+        B.LearnConfig(margin=-1.0)
+    reading = B.LearnConfig(lead_size="64x2", lead_epochs=7, batch=16, lead_lr=0.01).reading
+    assert (reading.size, reading.epochs, reading.batch, reading.lr) == ("64x2", 7, 16, 0.01)

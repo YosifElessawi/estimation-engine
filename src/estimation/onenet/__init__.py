@@ -13,8 +13,13 @@ Step 6, learning bids from a slow bid search:
 - ``bid_teacher`` (GPU) searches one bidding decision slowly, many decisions at once;
 - ``bid_lessons`` replays recorded games and keeps the teacher's verdicts at their bidding
   decisions, laid out in ``lessons``;
-- ``bid_learn`` (GPU) teaches the player those verdicts and holds the rest of it still.
+- ``bid_leads`` (GPU) reads from the lessons what a view says of each bid's lead, with the
+  suit shuffles of ``suits``;
+- ``bid_learn`` (GPU) teaches the player those read leads and holds the rest of it still;
+- ``bid_check`` (Mac) plays other bids for real, on the recorded deals with the table player
+  in every seat, to see what the teacher's leads are worth outside the rounds it imagines.
 
-The training code the GPU side imports (``copy_hybrid``, ``selfplay``, ``bid_learn``) needs only
-numpy, JAX and optax, never PyTorch; the recorders replay games with the engine and the bots.
+The training code the GPU side imports (``copy_hybrid``, ``selfplay``, ``bid_leads``,
+``bid_learn``) needs only numpy, JAX and optax, never PyTorch; the recorders and the check
+replay games with the engine and the bots.
 """
