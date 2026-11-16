@@ -15,6 +15,10 @@ teacher's lessons and keeps everything else as it is.
   the player was of it: self-play left the player sure of moves it had stopped trying the
   alternatives to. An option read behind is lowered to that level if it stood above it and
   otherwise left alone. The margin is there because the best of several read leads reads high.
+- **Which lessons** (``kinds``). Only the lessons of the kinds named are read and learned;
+  at the other kinds' lessons the player's bids are held to the starting player's. The
+  real-play check (``estimation.onenet.bid_check``) found the teacher's leads real at
+  estimates and not at the auction, so round 1 learns its estimates.
 - **Everything else stays.** On card decisions (a training set of the player's own games,
   ``estimation.onenet.shards``) the move chances are held to the starting player's, and on
   every row so are the practice answers, which the search reads for its guesses. Only the bids
@@ -58,6 +62,7 @@ from .shards import KIND_CARD, NUM_ACTIONS, load_shard, shard_paths
 
 PLAY_BASE = 68
 PHASES = ("Dash Calls", "the auction", "estimates")
+KINDS = ("dash", "auction", "estimates")  # the same kinds, as a config names them
 Floats = npt.NDArray[np.float32]
 Batch = dict[str, Any]
 
@@ -69,6 +74,7 @@ class LearnConfig:
     lessons: str = ""  # the lessons' folder (estimation.onenet.bid_lessons)
     cards: str = ""  # a training set of the player's games: its card play is held on these
     start: str = ""  # the player's file to start from
+    kinds: tuple[str, ...] = KINDS  # the kinds of decision whose lessons are learned
     folds: int = 5  # lead models: each reads the fold of training Bolas it was not fit on
     lead_size: str = "512x3"  # a lead model's units x layers
     lead_epochs: int = 40  # a lead model's passes over its lessons
@@ -92,6 +98,12 @@ class LearnConfig:
 
     def __post_init__(self) -> None:
         parse_size(self.lead_size)
+        if (
+            not self.kinds
+            or len(set(self.kinds)) != len(self.kinds)
+            or set(self.kinds) - set(KINDS)
+        ):
+            raise ValueError(f"learn.kinds must name one or more of {', '.join(KINDS)}, each once")
         if min(self.epochs, self.batch, self.card_shards, self.lead_epochs) < 1:
             raise ValueError("learn.epochs, lead_epochs, batch and card_shards must be at least 1")
         if self.folds < 2:
@@ -104,6 +116,11 @@ class LearnConfig:
             raise ValueError("learn.card_weight, practice_weight and margin must be 0 or more")
         if not 0 < self.held_out < 1 or not 0 < self.card_held_out < 1:
             raise ValueError("learn.held_out and card_held_out must be between 0 and 1")
+
+    @property
+    def phases(self) -> tuple[int, ...]:
+        """The lessons' phase numbers of the kinds that are learned."""
+        return tuple(KINDS.index(kind) for kind in self.kinds)
 
     @property
     def reading(self) -> Reading:
@@ -449,8 +466,17 @@ def run(config: LearnConfig, out: Path) -> dict[str, Any]:
             f"{config.start} makes the lessons' own move at only {own:.0%} of them: "
             "the lessons were taught for another player"
         )
-    _say(f"{len(train['pick']):,} lessons to learn, {len(held['pick']):,} held out")
-    leads, held_leads = cross_fit(train, held, config.reading, config.folds, config.seed, _say)
+    learned = np.isin(train["phase"], config.phases)
+    _say(
+        f"{int(learned.sum()):,} lessons to learn ({', '.join(config.kinds)}) of "
+        f"{len(learned):,}, {len(held['pick']):,} held out"
+    )
+    taught = {name: values[learned] for name, values in train.items()}
+    read, held_leads = cross_fit(taught, held, config.reading, config.folds, config.seed, _say)
+    del taught
+    leads = np.zeros(train["options"].shape, np.float32)
+    leads[learned] = read
+    held_leads[~np.isin(held["phase"], config.phases)] = 0.0  # nothing is read of other kinds
     lead_picks = picks(held_leads, held, config.margin)
     readers = score_bids(lead_picks, held, seat_game)
     _say(f"the lead models' own bids: {bid_line(readers)}")
@@ -462,7 +488,7 @@ def run(config: LearnConfig, out: Path) -> dict[str, Any]:
         action=lead_picks.astype(np.int16),
     )
     cards = load_cards(Path(config.cards), config)
-    tilt = tilts(leads, config)
+    tilt = np.where(learned[:, None], tilts(leads, config), 0.0).astype(np.float32)
     _say(
         f"{float((tilt.max(1) > 0).mean()):.1%} of the lessons put another bid first; "
         f"{len(cards.held):,} card decisions held, {len(cards.scored):,} scored"

@@ -3,15 +3,17 @@
 #
 # On the home server's GPU, from the repo, with its JAX env:
 #   PYTHONPATH=src ~/jax-env/bin/python -m estimation.onenet.bid_learn \
-#       --config configs/onenet-bids-1-learn.toml --out runs/onenet/bids-1/learn-2
+#       --config configs/onenet-bids-1-learn.toml --out runs/onenet/bids-1/learn-3
 #
-# (runs/onenet/bids-1/learn holds the first try, which taught the player each lesson's measured
-# lead directly: about half as much reached its bids.)
+# Earlier runs of this round, in runs/onenet/bids-1: learn taught the player each lesson's
+# measured lead directly; learn-2 is this config with every kind of lesson learned. The
+# real-play check then found the teacher's auction leads worth nothing at a real table.
 
 [learn]
 lessons = "runs/onenet/bids-1/lessons"
 cards = "runs/onenet/expert-2/data"  # round 2's training set: the player's own games
 start = "runs/onenet/selfplay/snapshots/player-04000.npz"
+kinds = ["estimates"]   # of dash, auction and estimates: the kinds whose lessons are learned
 
 # The lead models: what the lessons say about a decision, read from its view.
 folds = 5               # each model reads the fifth of the training Bolas it was not fit on

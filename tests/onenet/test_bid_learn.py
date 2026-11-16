@@ -366,6 +366,42 @@ def test_a_run_scores_the_start_and_every_pass_and_saves_its_summary(
     assert meta["bid_lessons"]["lessons"] == config.lessons
 
 
+def test_only_the_kinds_named_are_learned(
+    start: Path, data: Path, learned: tuple[B.LearnConfig, Path, dict[str, Any], L.Lessons]
+):
+    full, out, _, lessons = learned
+    # The same lessons with every lesson called an estimate but the ones that offer Pass, which
+    # are the auction's: Pass led there by 40, and a run that learns estimates alone must not
+    # learn it.
+    offered = lessons["exam"] > 0
+    lessons = {name: values.copy() for name, values in lessons.items()}
+    lessons["phase"][:] = np.where(offered, 1, 2)
+    folder = out.parent / "kinds"
+    (folder / "lessons" / "parts").mkdir(parents=True)
+    L.save_lessons(L.lesson_path(folder / "lessons", 0), lessons)
+    config = learn_config(
+        folder / "lessons",
+        data,
+        start,
+        kinds=("estimates",),
+        epochs=10,
+        lr=3e-4,
+        lr_end=3e-5,
+        lead_epochs=20,
+    )
+    summary = B.run(config, folder / "out")
+    assert summary["lead_models"]["phases"]["the auction"]["changed"] == 0.0
+    assert summary["lead_models"]["overruled"] > 0.1  # the teacher's picks are still there
+    player = load_net(str(folder / "out" / "player.npz"))
+    legal = lessons["x"][:, -120:] > 0.5
+    top = np.where(legal, player(lessons["x"].astype(np.float32)), -np.inf).argmax(1)
+    # Its own bid stays where Pass led (a toy net: nearly all of them), and Pass is never
+    # learned; the run that was taught every kind bids Pass at over 9 in 10 of them.
+    assert (top[offered] == lessons["options"][offered, 0]).mean() > 0.9
+    assert (top[offered] == PASS).mean() < 0.05
+    assert full.kinds == B.KINDS
+
+
 def test_a_split_holds_out_whole_bolas(start: Path, data: Path):
     lessons = bidding_lessons(start, data)
     train, held = B.split(lessons, 0.34, 1)
@@ -397,6 +433,11 @@ def test_a_learning_config_is_one_checked_section():
         B.LearnConfig(epochs=0)
     with pytest.raises(ValueError, match="folds"):
         B.LearnConfig(folds=1)
+    assert B.config_of({"learn": {**section, "kinds": ["estimates", "dash"]}}).phases == (2, 0)
+    assert B.LearnConfig().phases == (0, 1, 2)
+    for kinds in ((), ("estimates", "estimates"), ("cards",)):
+        with pytest.raises(ValueError, match="kinds"):
+            B.LearnConfig(kinds=kinds)
     with pytest.raises(ValueError, match="units x layers"):
         B.LearnConfig(lead_size="wide")
     with pytest.raises(ValueError, match="margin"):
