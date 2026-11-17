@@ -28,7 +28,8 @@ played them:
 
 - Everything runs on the Mac, one heavy job at a time, each after Yosif's yes (what runs, how
   long, workers, RAM). Heavy runs slow the public B-Tig table, so each ask says so. Step 5's copy
-  and self-play run on the home server's GPU instead, under the same rule.
+  and self-play and step 6's bid teacher run on the home server's GPU instead, under the same
+  rule.
 - Each step is built with tests and the full gate (pre-commit, pytest on 2 workers, pyright),
   then measured against the previous Hybrid and the frozen yardsticks (RL v2, Search bot) with
   head-to-head duplicate matches, the ladder and the bidding and card-play evaluators.
@@ -50,6 +51,7 @@ played them:
 | 3. Hybrid uses the guesses | Imagine deals where step 1's guesses say the cards are, plus a settings check. | No training; about 2-3 h of measuring. | Card-play evaluator and new vs previous Hybrid. |
 | 4. Search the bidding | For each bid, try the net's best few options on imagined deals played out by the nets. | No training; about 2 h of measuring. | Bidding evaluator and new vs previous Hybrid. |
 | 5. One net for every decision | One player net copies Hybrid v4, then learns final place by GPU self-play (Essam's design). | Recording on the Mac (about 5 h per 2,000 Bolas); copy and self-play on the home server's GPU, sized by a timing test. | The player inside the search vs Hybrid v4: weighted place, King only and points per game. |
+| 6. Learn bids from a slow bid search | A bid teacher too slow for the table searches the one net's recorded bidding decisions; the net learns its verdicts. | One night of lessons (the Mac records the games, the home server's GPU teaches them), then minutes of learning. | The real-play check: the learned player's changed bids played at a real table, both ways, on held-out Bolas. The table test first planned (vs Hybrid v4, 100 sets) cannot see a gain this size. |
 
 Steps 1-4 took about 25-30 hours of compute over several days.
 
@@ -215,6 +217,102 @@ Essam Gouda's, from estimation-arena (MIT licence).
 fixes there can be diffed in, and its move-by-move check against our engine runs in our tests.
 Step 5's own code sits next to it and only imports it.
 
+### Step 6: learn bids from a slow bid search (Yosif, 2026-11-15)
+
+The one net in its own search (step 5's loop 4,000 player, even with Hybrid v4) is the main line.
+Nothing since has beaten it: two rounds of learning cards from the search, search tuning, judging
+by final place, and step 4's bid search at the table all came out even or worse. Its bids have had
+no teacher since the copy from Hybrid v4. In bridge, bidding got better by searching while
+training, not at the table. Step 6 does that: a bid teacher too slow for the table searches
+recorded bidding decisions overnight, and the player learns its verdicts.
+
+**The bid teacher** (`estimation.onenet.bid_teacher`, in JAX on the home server's GPU, on the card
+search's batched play-outs). At a Dash Call, bid, With, Pass, estimate or super call:
+
+1. **Options.** The player's legal options by its move chances until they hold 97% of them, at
+   least 5 and at most 8. Calls more than 3 tricks above the tricks the player expects to take
+   (its own `my_tricks` answer) and estimates more than 3 tricks from them are left out. The
+   player's own move, the one it makes at the table, is always tried.
+2. **Deals.** Imagined as the card search imagines them: the player's hidden-card guesses place
+   the cards, twice the deals needed are drawn, and the half that best explains the other seats'
+   bidding so far is kept.
+3. **Play-outs.** On each deal the option is made, the bidding is finished and the round is played
+   out, the player in every seat. The deciding seat bids its top move, as at the table. The other
+   seats' bids are drawn from the player's move chances, so the imagined opponents do not all bid
+   the one favourite line. Every card is the player's top card. Two options on the same deal meet
+   the same draws.
+4. **Score.** Round points, as the card search scores them.
+5. **Narrowing.** Four stages of 32, 64, 128 and 256 deals. After each, the worse half of the
+   alternatives is dropped, and at once any alternative more than 3 standard errors behind the
+   player's own move; with none left the search ends early. The player's own move always stays.
+6. **The exam.** The deals the last alternative plays once it is alone against the player's
+   move. Nothing was kept or dropped on those deals, so its lead over them is a fair measure of
+   it; a lead over the earlier deals is flattered by the luck that kept the option in. The
+   teacher overrules the player only if the alternative led its exam.
+
+What it changes from step 4's bid search at the table:
+
+| Step 4 at the table | The teacher |
+|---|---|
+| The net's top 3 bids | 5 to 8 options: the top 3 miss over a quarter of its picks |
+| 16 deals each, the best mean wins | Up to 480 deals for the last two, and the verdict from deals no option was chosen on |
+| Every imagined opponent bids its favourite | Their bids are drawn from the player's move chances |
+| Worst on openings and super calls | Calls far above the hand's expected tricks are not tried |
+
+**Lessons** (`estimation.onenet.bid_lessons`). The engine replays recorded games of the player in
+its own search, and the teacher searches a share of their bidding decisions: a quarter of the Dash
+Calls, half of the auction's decisions and every estimate (the timing test found the gain in the
+estimates). A lesson keeps the player's view, the options tried and each one's lead over the
+player's move with its error. One lesson part per recording part, so the Mac and the home server
+share a night's run as they shared round 2's recording.
+
+**Learning** (`estimation.onenet.bid_learn`, minutes on the GPU), in two steps since the first
+try (results below):
+
+1. **Lead models** (`estimation.onenet.bid_leads`). A lesson is one decision's verdict, the luck
+   of its deals included, and the player never meets that decision again. What it can learn is
+   what the lessons say about decisions that look alike. A lead model reads that: from a view,
+   the lead over the player's own move of every option the teacher tried there. It is a fresh
+   net, fit by squared error, each measured lead counting by its precision, so on like views it
+   gives their mean lead. Estimates are shown under every renaming of the suits other than the
+   trump (`estimation.onenet.suits`), which a round's play does not tell apart. The training
+   Bolas are cut in five folds, and each fold's leads are read by a model fit on the other
+   four, so no lesson is read by a model that saw its luck. The models are training tools, like
+   step 5's judge: never in the player's file or at the table.
+2. **The player** learns the read leads. Its bid chances are aimed at every tried option set
+   against its own move by the option's read lead: an option read more than half a point ahead
+   overtakes the move, however sure the player was of it. Everything else is held to the
+   starting player: its card moves (on round 2's training set, its own games) and its practice
+   answers, which the search reads for its guesses.
+
+A share of the lessons' Bolas is held out of both steps: there the learned top bids, and the
+lead models' own, are valued by the teacher's measures, and round 2's held-out cards say whether
+the card play moved.
+
+**Real-play check** (`estimation.onenet.bid_check`, added after the first learning). The teacher
+values a bid in rounds it imagines: guessed hands, drawn bids, every card the player's top card
+with no search. The check plays the round for real. At a held-out bidding decision of the
+recorded games it finishes the round twice on the deal as it was dealt, the table player with
+its search in every seat and the same seeds in both plays: once with the bid that was made, once
+with another bid. The difference, counted as the teacher counts a round, is that bid's real
+lead. It is run for the teacher's own picks and for each learned bidder's changed bids.
+
+| # | What | Where | Time |
+|---|---|---|---|
+| 1 | **Timing and noise test:** the pace, and the same decisions taught twice on fresh deals | home server GPU, the Mac | about 10 min |
+| 2 | **Games:** the loop 4,000 player in its own search plays fresh deals, no card teacher | Mac, 5 workers | about 5.7 h for 5,000 Bolas |
+| 3 | **Lessons:** the teacher searches their bidding decisions | home server GPU from the first part up as the games arrive; the Mac from the last part down once it has recorded them | until every part is taught: about 10.5 h with the games |
+| 4 | **Learning:** lead models read the lessons, the player learns the read leads; held-out checks | home server GPU | minutes |
+| 5 | **Real-play check:** the changed bids of the held-out Bolas played for real, both ways | Mac, 5 workers | under an hour |
+| 6 | **Table test:** the learned player in its own search vs Hybrid v4, 100 duplicate sets, seed 2040 | Mac, 5 workers | about 30 min |
+
+It passes only if it is clearly ahead of the loop 4,000 player's own result on those deals (46 of
+100 sets, place +0.026, King 26.5%, -0.1 points a game, -5.7 to +5.6), beyond that noise.
+
+The table test was not run. The gain the real-play check measures, about 3 points a game, is
+well inside this test's noise of 5.7, so 100 sets could not show it either way. Step 6 closed on
+the check (results below).
+
 ## Parked net changes
 
 - **Suit symmetry built into the net:** an efficiency gain (the bot already learns symmetry from
@@ -233,6 +331,11 @@ Step 5's own code sits next to it and only imports it.
    step: final place is its reward (Yosif, 2026-11-06).
 4. Step 5's JAX code lives in this repo: Essam's `jaxenv` copied in with credit and its MIT
    licence (Yosif, 2026-11-07).
+5. The one net in its own search is the main line, and the bid teacher is its next step (Yosif,
+   2026-11-15).
+6. Step 6 closes with the player that learned its estimates only, judged by the real-play check
+   and with no table match. Next is an exact measure of the card play in a round's last tricks
+   (Yosif, 2026-11-17).
 
 ## Results
 
@@ -649,6 +752,268 @@ teacher as often as the CPU teacher agrees with itself (on 300 positions the sam
 against 60%). On the 1060 it records about 570 Bolas an hour against the Mac's 785: the play-outs
 are arithmetic-bound and the Mac's matrix units match the 1060 on a net this size. It is a second
 recorder to run next to the Mac, about 1,350 Bolas an hour together.
+
+### Step 6 (done 2026-11-17): estimates learned from the bid teacher, calling lessons not kept
+
+**In short.** One night of lessons (5,000 Bolas, 620,097 taught bidding decisions). The teacher's
+advice on estimates holds when the rounds are played for real, about four fifths of what it
+imagines; its advice on the auction does not, and stays out of the learning. The player that
+learned the estimates only bids about **+3.4 points a game (+-1.7)** better at a real table than
+the loop 4,000 player it started from, with the same card play and the same calling. That is
+measured by the real-play check, not by a table match: 100 sets cannot see a gain this size.
+The parts, in the order they were run:
+
+**Timing and noise test (2026-11-15).** The teacher searched 1,536 bidding decisions of round 2's
+recording (the same player's games), half of each kind, twice, on fresh deals each time
+(`estimation.onenet.bid_lessons time`, on the 1060):
+
+| | |
+|---|---|
+| Pace on the 1060 | 57,800 decisions an hour: 3.8 options and 658 play-outs a decision |
+| Pace on the Mac (JAX on its CPU) | about 11,500 an hour, a fifth of the 1060's |
+| Searched to the last deal | 51% of decisions, with an exam of 394 deals, good to 1.3 points; the rest ended early, every alternative hopeless |
+| The teacher overrules the player | at 18% of decisions, by 2.2 points in the exam; at 8% by at least a standard error |
+| Same pick on fresh deals | 83%; 91% counting a pick only when it led its exam by a standard error, 97% by two |
+| Its pick is outside the player's top 3 | at 5% of decisions, over a quarter of its picks |
+| Following its picks | worth +0.21 points a decision (+-0.05) on the other teaching's deals |
+
+A pick's worth is measured on the other teaching's deals, so none of the luck that got it picked
+is in it. By kind of decision, counting a pick only when it led its exam by a standard error:
+
+| Decision | Tested | Play-outs each | Same pick | The teacher overrules | Following it, points a decision |
+|---|---|---|---|---|---|
+| Dash Calls | 391 | 129 | 99% | 0.3% | +0.01 (+-0.02) |
+| The auction (bids, With, Pass) | 684 | 812 | 86% | 9% | +0.09 (+-0.05) |
+| Estimates | 461 | 878 | 93% | 13% | +0.55 (+-0.13) |
+
+**Reading:** the player's Dash Calls are right, and its auction bids are close to the teacher's:
+the teacher often prefers another bid there, but by little, and its picks change from one teaching
+to the next. The estimates are where the player loses points. At about one estimate in eight the
+teacher finds another number worth about 4 points more, mostly one trick lower or higher than the
+player's (of 54 such changes 34 lower it), and the player gave those numbers a chance under 1%:
+self-play left it sure of its estimate and no longer trying the numbers next to it. A seat makes
+about 15 estimates with a choice in a Bola, so the estimates alone are worth about 8 points a game
+in the teacher's imagined rounds, and the auction about 2. Those rounds are played by the player's
+top cards with no search; the table test says how much of it survives real play.
+
+So the lessons teach every estimate, half the auction's decisions and a quarter of the Dash Calls.
+The raw picks agree on fresh deals 83% of the time, short of 9 in 10; the picks that lead their
+exam by a standard error agree 91% of the time and carry all of the gain, and the learning
+weighs a lead by its noise in the same way.
+
+**The night of lessons (2026-11-15 to 16, Yosif's yes).** It ran clean on both machines, from
+22:27 to 09:15:
+
+| | |
+|---|---|
+| Games | 5,000 Bolas of the loop 4,000 player in its own search, on the Mac's 5 workers in 3 h 24 min: about 1,470 an hour, well above the timing test's 880 |
+| Lessons | 620,097: 65,052 Dash Calls, 234,131 auction decisions and 320,914 estimates. The 1060 taught 173 of the 200 parts at 14 decisions a second, the Mac the other 27 at 3.3 |
+| The search | 4.3 options and 785 play-outs a decision; 61% searched to the last deal, with an exam of 393 deals, good to 1.3 points |
+| The teacher overrules the player | at 21% of decisions by its raw pick; at 11.3% by at least a standard error, by 3.9 points; at 5.8% by two |
+| Those careful picks | are outside the player's top 3 at 1.6% of decisions, one pick in seven; half of them the player gave a chance under 1% |
+| What the lessons hold | +15 points a game in the teacher's rounds, if every lesson's likely lead were followed: +7.5 from estimates, +7.0 from the auction, +0.6 from Dash Calls |
+
+The last row takes each measured lead pulled toward its kind's mean lead by its share of noise,
+and counts the leads that stay above 0. It needs the teacher's verdict at the very decision, so
+it is a ceiling no player reaches from its view. By kind, counting a pick only when it led its
+exam by a standard error:
+
+| Decision | Lessons | A seat's in a Bola | The teacher overrules | By | What it changes |
+|---|---|---|---|---|---|
+| Dash Calls | 65,052 | 13.0 | 1.1% | 5.4 points | to a Dash Call and away from one, half each |
+| The auction | 234,131 | 23.4 | 10.8% | 3.6 | another bid 52% (a higher number, a lower one or another trump, a third each), a bid to Pass 28%, Pass to a bid 18% |
+| Estimates | 320,914 | 16.0 | 13.7% | 4.1 | one trick lower 55%, one higher 27%, two lower 9%, two higher 9% |
+
+**Learning, first try (2026-11-16): each lesson's measured lead.** The player was taught every
+lesson's own verdict: its bid chances aimed at the finalist set against its move by the exam
+lead, each lead first pulled toward its kind's mean by its noise (commit 9f4aa17, 10 passes, 10
+minutes on the 1060). On the 250 held-out Bolas (31,075 lessons):
+
+| | The start | Learned |
+|---|---|---|
+| Top bid changed | 0% | 5.9% of decisions |
+| Worth, by the first-stage leads | 0 | +3.2 points a game (+-0.5) |
+| Worth, by the exams | 0 | +2.6 (+-0.4) |
+| The teacher's careful picks followed, where they overrule the player | 0% | 20% |
+| Card play: points lost by the top card, the best of the top 2 | 1.355, 0.598 | 1.356, 0.595 |
+
+A changed bid is valued by the teacher's own numbers at that lesson. The first-stage lead is
+fair to any bid: every option played the first 32 deals whatever became of it. Counting a bid by
+its long exam where it had one, and by its first stage elsewhere, is steadier but reads low: a
+bid gets its exam only when its first stage went well, and is left with its first stage when
+that went badly. Both are given from here on.
+
+A fifth of the +15 arrived, and the reason is in the lessons, not the passes: the learned player
+was hardly better on the lessons it trained on (+3.3 by the exams) than on the held-out ones.
+Most of a lesson's verdict belongs to that one decision. A model that reads a finalist's lead
+from the view is off by about 2.6 points at the auction and 2.7 at estimates, when the true
+leads themselves spread by 2.7 and 3.5 around their mean. Taught lesson by lesson, the player is
+pulled toward a bid at one decision and away from it at the next one that looks the same, and
+its one top bid follows the majority of them, not their mean lead.
+
+**Learning from leads read from the view (2026-11-16).** So the learning was split in two
+(design above; commit 4c7fe3d). Five lead models, each a fresh 512x3 net fit on four fifths of
+the training Bolas, read every lesson's leads from its view, and the player learns the read
+leads (40 passes). What settled the design, on Bolas kept aside for choosing: a fresh net read
+the lessons better than the player's own body did when tuned for it, the suit shuffles lowered
+the estimates' error, and several models together read better than any one. The whole learning
+takes 7 minutes on the 1060. On the same 250 held-out Bolas:
+
+| | The lead models' own bids | The player |
+|---|---|---|
+| Top bid changed | 10.6% of decisions | 7.9% |
+| Worth, by the first-stage leads | **+8.2 points a game** (+-0.7) | **+5.4** (+-0.6) |
+| Worth, by the exams | +6.4 | +3.9 |
+| Estimates: changed, worth a decision | 15.3%, +0.34 | 10.5%, +0.21 |
+| The auction: changed, worth a decision | 6.9%, +0.10 | 6.4%, +0.08 |
+| Dash Calls: changed, worth a decision | 0.9%, +0.03 | 0.6%, +0.01 |
+| The teacher's careful picks followed | 46% | 29% |
+| Card play: top card, best of the top 2 | | 1.357, 0.596 (the start: 1.355, 0.598) |
+
+The lead models' +8.2 is what one night of lessons holds for any bidder that reads them from
+the view: over half of the +15. The player takes in two thirds of that, +5.4 against the first
+try's +3.2, with its card play where it was. What it misses is room: its 384x3 body also has to
+keep every card move and practice answer. In a trial with those two holds loosened to a fifth
+it reached +6.5, but its practice answers drifted four times as far, so the holds stay.
+
+**What became of the estimates in the games themselves (2026-11-16, no new play).** The
+teacher's rounds are imagined: guessed hands, every card the player's top card, no search. The
+night's games were played for real, the player in its own search in all four seats, so they
+show how the estimate that was made really did, at the estimates the teacher would keep and
+the ones it would change (`bid_check outcomes`, every taught estimate that stood to the end of
+its round):
+
+| The teacher would | Estimates | Made exactly | One short | One over | The round's real worth to the seat | In the teacher's rounds | Its lead for the other number |
+|---|---|---|---|---|---|---|---|
+| keep the estimate | 241,257 | 62.0% | 16.4% | 14.8% | -1.7 | +0.3 | |
+| go one lower | 21,597 | 58.1% | 24.0% | 9.3% | -2.2 | -1.9 | +3.3 |
+| go one higher | 10,761 | 62.6% | 7.8% | 19.1% | +0.1 | +0.2 | +3.7 |
+| go two lower | 3,580 | 45.4% | 33.2% | 6.4% | -7.3 | -6.7 | +3.9 |
+| go two higher | 3,467 | 45.3% | 4.5% | 31.9% | -7.2 | -6.0 | +3.9 |
+
+The teacher sees something real: where it would lower an estimate the seat really fell short
+more often, and where it would raise one the seat really went over. Where it would move the
+number by two, the estimate that was made is plainly bad: made 45% of the time, 5.5 points worse
+than usual. But where it would move it by one, four changes in five, the seat still made its own
+estimate about as often as anywhere: 58% and 63% against 62%. The other number is worth the 3
+to 4 points the teacher gives it only if it would have been made far more often than that. The
+games show one side only, the estimate that was made; what the other number would have done,
+only play can say.
+
+**Real-play check (2026-11-16, Yosif's yes).** So the other bids were played. On the 250
+held-out Bolas, 6,494 changed bids of four bidders at 6,084 decisions: each round finished for
+real with the bid that was made and with the other bid (`bid_check`, 12,522 rounds, 44 minutes on
+the Mac's 5 workers). The bidders: the teacher's careful picks; the first try's player; and
+trial versions of the two-step learning's lead models (three of them) and player, made just
+before commit 4c7fe3d. A change's real lead on its one real deal spreads by 35 points, so only
+the averages over many changes say anything:
+
+| Bidder | Kind | Changes played | Real points a change | In the teacher's rounds |
+|---|---|---|---|---|
+| The teacher's careful picks | estimates | 2,184 | **+2.9** (+-0.7) | +3.7 |
+| | the auction | 1,289 | **+0.2** (+-1.0) | +3.7 |
+| Lead models (trial) | estimates | 2,483 | +2.0 (+-0.6) | +2.3 |
+| | the auction | 956 | +0.8 (+-1.3) | +1.5 |
+| The player, two-step learning (trial) | estimates | 1,687 | +1.7 (+-0.8) | +2.0 |
+| | the auction | 772 | -1.2 (+-1.5) | +1.4 |
+| The player, first try | estimates | 1,192 | +0.5 (+-0.8) | +1.5 |
+| | the auction | 641 | -1.8 (+-1.3) | +1.0 |
+
+"In the teacher's rounds" is the same changes' first-stage lead. It is fair to the learned
+bidders, whose bids never saw these lessons, but it flatters the teacher's own picks, which
+were picked on the same search: a second teaching on other deals gives its careful auction
+picks +2.2, not +3.7 (the calling test below). Too few Dash Call changes were there to say
+anything (27 of the teacher's). By the size of the change, the teacher's careful estimates: one
+trick lower +2.4 (+-0.8, 1,131 of them), two lower +3.8 (+-2.0), one higher +2.0 (+-1.2), two
+higher -0.8 (+-2.1).
+
+**Reading:**
+
+- **The estimate lessons are real.** Four fifths of what the teacher imagines for an estimate
+  holds when the round is played with the real search in every seat, for its own picks (+2.9 of
+  +3.7) and for the bidders that learned from it (+2.0 of +2.3, +1.7 of +2.0).
+- **The auction lessons are not.** The teacher's careful auction picks are worth nothing at a
+  real table, +0.2 (+-1.0), and the learned players' auction changes came out a point or two
+  behind (inside their noise). The first suspect: in the teacher's rounds the bidding goes on
+  with the other seats' bids drawn from the player's chances, where real players bid their top
+  bid. The calling test below tried that.
+- **So the player as it was trained loses at the auction most of what it gains at estimates:**
+  about +2.8 points a game from its estimates and -1.9 from its auction changes, +1.4 a game in
+  all (+-2.7). The lead models' bids come to +6.3 a game (+-3.1), the teacher's own picks to
+  +7.6 (+-3.1), against +9.2 and +18.2 in the teacher's rounds.
+
+**Learning the estimates only (2026-11-16).** So round 1 learns its estimate lessons and
+nothing else (`kinds = ["estimates"]`, commit 5c8078b): the lead models are fit on the estimate
+lessons alone, and at every other lesson the player's bids are held to the starting player's.
+On the same 250 held-out Bolas, in the teacher's rounds:
+
+| | The lead models' own bids | The player |
+|---|---|---|
+| Estimates changed | 14.9% | 10.1% |
+| Worth, by the first-stage leads | +4.9 points a game (+-0.4) | **+3.5** (+-0.4) |
+| Worth, by the exams | +4.1 | +2.9 |
+| Other bids changed | none | 1.1% of auction decisions, worth nothing either way |
+| Card play: top card, best of the top 2 | | 1.357, 0.595 (the start: 1.355, 0.598) |
+
+The player keeps all of the estimate gain it had when it learned every kind (+3.4 of that
+run's +5.4), and its auction is its old one but for a little drift.
+
+Its changed bids were then played for real in the same check (Yosif's yes; most were already
+played for the trial bidders, the other 656 rounds took 3 minutes):
+
+| Estimates only | Changes played | Real points a change | In the teacher's rounds | Real points a game |
+|---|---|---|---|---|
+| The player's estimates | 1,618 | **+1.9** (+-0.8) | +2.1 | about +3.1 |
+| The player, all its changes | 1,754 | +1.9 (+-0.8) | +2.0 | **+3.4** (+-1.7) |
+| The lead models' estimates | 2,389 | +1.5 (+-0.6) | +2.0 | +3.6 (+-1.5) |
+
+So round 1's player bids about 3 points a game better at a real table than the loop 4,000
+player it started from, with the same cards and the same calling: 1.6 estimates a game changed,
+each worth about 2 points. At a real table its own changes are worth as much as the lead
+models'. It is a small gain and a measured one, the first since the self-play run.
+
+**The calling test (2026-11-16, Yosif's yes).** Why do the auction lessons not hold? The teacher
+taught the held-out Bolas' 11,759 auction decisions again, the very decisions of the night, with
+the other seats bidding their top bid in its rounds (`opponent_temperature = 0`; a one-off run
+of the teacher on those Bolas, 21 minutes on the 1060, its lessons kept in
+`runs/onenet/bids-1/calling-0`), and its careful picks were played for real (5 minutes on the
+Mac):
+
+| | Other seats' bids drawn (the night) | Their top bids |
+|---|---|---|
+| The teacher overrules the player | at 11.0% of auction decisions, by 3.4 points | at 10.8%, by 3.5 |
+| Its picks as the other teaching sees them, on its own deals | +2.2 (+-0.2) | +2.3 (+-0.2) |
+| Its picks played for real | +0.2 (+-1.0), 1,289 picks | +1.6 (+-1.0), 1,275 picks |
+
+- **The other seats' bids are not it.** The teacher's auction advice is as frequent and as
+  strong either way, and each teaching rates the other's picks alike.
+- **A pick's own lead flatters it,** since it was picked for that lead. Seen by the other
+  teaching, a careful auction pick is 2.2 points ahead, not 3.4, and the two teachings pick the
+  same bid at only 3.7% of decisions out of the 11% each overrules: at the auction most leads
+  are small, and a careful pick is often a lucky one. Estimates are steadier (the timing test's
+  two teachings agreed on 93% of them).
+- **For real the picks stay unproven:** +0.2 and +1.6, each good to a point, together about
+  +0.9 (+-0.8): under the +2.2 the teacher's rounds give them and not clearly above nothing.
+  One kind of change is ahead in both: a call of a lower number, +5.1 (+-2.9) and +6.2 (+-3.0).
+- **So the auction lessons stay out of the learning.** What is left to suspect is the play: a
+  call stands or falls on the card play that follows, and the teacher's rounds are played by
+  the player's top card with no search.
+
+**Where step 6 ends (Yosif, 2026-11-17).**
+
+- **Kept:** the player that learned its estimates only, `runs/onenet/bids-1/learn-3/player.npz`
+  (git-ignored; made again by `configs/onenet-bids-1-learn.toml` from the night's lessons). It
+  is the loop 4,000 player with about 1.6 estimates a game changed.
+- **Not kept:** the auction and Dash Call lessons, and the players that learned them (`learn`,
+  `learn-2`).
+- **Not done:** no table match was played, and the main line's player was not swapped: it is
+  still the loop 4,000 player.
+- **A tool that stays:** the real-play check (`estimation.onenet.bid_check`). It values a changed
+  bid in minutes, on the real deal with the real search, where a table match of 100 sets is good
+  to 5.7 points a game.
+- **No second round.** A longer night for more estimate lessons was weighed and dropped: with a
+  quarter fewer lessons the lead models read them almost as well, so the player's room, not
+  the lessons, is the limit.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).

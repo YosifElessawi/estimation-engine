@@ -47,31 +47,32 @@ class Player(NamedTuple):
     holder: tuple[jax.Array, jax.Array]
 
 
+def practice_answer(path: str, name: str) -> tuple[jax.Array, jax.Array]:
+    """The weights of one practice answer (``name``, as estimation.onenet.nets.PRACTICE names
+    them) of the player saved at ``path``: its columns of the practice head."""
+    with np.load(path) as data:
+        if "qw" not in data or "meta" not in data:
+            raise ValueError(f"{path} has no practice answers, which the GPU search reads")
+        start = 0
+        for part, size in json.loads(str(data["meta"])).get("practice", []):
+            if part == name:
+                columns = slice(start, start + size)
+                return jnp.asarray(data["qw"][:, columns]), jnp.asarray(data["qb"][columns])
+            start += size
+    raise ValueError(f"{path} has no {name} answers")
+
+
 def load_player(path: str) -> Player:
     """The player saved at ``path``, with its holder answers (a file saved with its practice
     answers, as step 5 saves its players)."""
+    holder = practice_answer(path, "holder")
     with np.load(path) as data:
         layers: list[tuple[jax.Array, jax.Array]] = []
         k = 0
         while f"w{k}" in data:
             layers.append((jnp.asarray(data[f"w{k}"]), jnp.asarray(data[f"b{k}"])))
             k += 1
-        if "qw" not in data or "meta" not in data:
-            raise ValueError(f"{path} has no practice answers, which the GPU search reads")
-        start = 0
-        holder: slice | None = None
-        for name, size in json.loads(str(data["meta"])).get("practice", []):
-            if name == "holder":
-                holder = slice(start, start + size)
-            start += size
-        if holder is None:
-            raise ValueError(f"{path} has no holder answers")
-        qw, qb = data["qw"][:, holder], data["qb"][holder]
-        return Player(
-            tuple(layers),
-            (jnp.asarray(data["pw"]), jnp.asarray(data["pb"])),
-            (jnp.asarray(qw), jnp.asarray(qb)),
-        )
+        return Player(tuple(layers), (jnp.asarray(data["pw"]), jnp.asarray(data["pb"])), holder)
 
 
 def body(player: Player, x: jax.Array) -> jax.Array:
@@ -304,6 +305,16 @@ def round_values(result: jax.Array, scores: jax.Array, me: jax.Array) -> jax.Arr
     return result[..., me] - (result * w).sum(-1)
 
 
+def values(result: jax.Array, scores: jax.Array, seat: jax.Array, leader_weight: bool) -> jax.Array:
+    """``[P, S]``: what round results ``[P, S, 4]`` are worth to ``seat`` ``[P]``, whose Bola
+    stands at ``scores`` ``[P, 4]``: own round score minus the others', players ahead counting
+    double with ``leader_weight`` (``round_values``), else evenly."""
+    if leader_weight:
+        return jax.vmap(round_values)(result, scores, seat)
+    mine = jnp.take_along_axis(result, seat[:, None, None], axis=-1)[..., 0]
+    return mine - (result.sum(-1) - mine) / 3.0
+
+
 # The whole search for a batch of card decisions.
 
 
@@ -383,11 +394,7 @@ def evaluate(
     played = jax.tree.map(spread, rounds)._replace(hands=hands[which].reshape(p * s, 4, 52))
     first = jnp.broadcast_to(cards[:, None], (p, s)).reshape(-1)
     result = play_outs(player, played, first).result.reshape(p, s, 4)
-    seat, scores = me[which], rounds.scores[which]
-    if leader_weight:
-        return jax.vmap(round_values)(result, scores, seat)
-    mine = jnp.take_along_axis(result, seat[:, None, None], axis=-1)[..., 0]
-    return mine - (result.sum(-1) - mine) / 3.0
+    return values(result, rounds.scores[which], me[which], leader_weight)
 
 
 DEAL_BLOCK = 8192  # imagined deals worked on at once, to bound the bid check's memory

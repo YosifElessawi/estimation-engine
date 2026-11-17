@@ -1,0 +1,24 @@
+# Step 6 of docs/rl/hybrid-iteration-plan.md, bid lessons, round 1: the bid teacher searches the
+# bidding decisions of the loop 4,000 player's own games (configs/onenet-bids-1-games.toml).
+#
+# On the home server's GPU, from the repo, with its recorder env (JAX with CUDA, PyTorch on CPU):
+#   PYTHONPATH=src ~/gpu-record-env/bin/python -m estimation.onenet.bid_lessons run \
+#       --config configs/onenet-bids-1.toml --out runs/onenet/bids-1/lessons --order down
+# On the Mac (JAX on the CPU), sharing the run from the other end:
+#   uv run python -m estimation.onenet.bid_lessons run \
+#       --config configs/onenet-bids-1.toml --out runs/onenet/bids-1/lessons --batch 16
+# The timing and noise test (the same decisions taught twice on fresh deals):
+#   ... -m estimation.onenet.bid_lessons time --config configs/onenet-bids-1.toml
+
+[lessons]
+record = "runs/onenet/bids-1/games"
+label_share = [0.25, 0.5, 1.0]  # of the Dash Calls, the auction's decisions and the estimates
+coverage = 0.97             # the options tried hold 97% of the player's move chances,
+min_options = 5             # are at least 5
+max_options = 8             # and at most 8
+hand_margin = 3.0           # calls and estimates within 3 tricks of the player's expected tricks
+deals = [32, 64, 128, 256]  # 4 stages: the worse half of the alternatives is dropped after each
+hopeless = 3.0              # and any alternative 3 standard errors behind the player's move
+opponent_temperature = 1.0  # the other seats' imagined bids are drawn from the player's chances
+batch = 64
+seed = 20261115
