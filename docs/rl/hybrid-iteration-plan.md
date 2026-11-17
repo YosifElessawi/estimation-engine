@@ -51,7 +51,7 @@ played them:
 | 3. Hybrid uses the guesses | Imagine deals where step 1's guesses say the cards are, plus a settings check. | No training; about 2-3 h of measuring. | Card-play evaluator and new vs previous Hybrid. |
 | 4. Search the bidding | For each bid, try the net's best few options on imagined deals played out by the nets. | No training; about 2 h of measuring. | Bidding evaluator and new vs previous Hybrid. |
 | 5. One net for every decision | One player net copies Hybrid v4, then learns final place by GPU self-play (Essam's design). | Recording on the Mac (about 5 h per 2,000 Bolas); copy and self-play on the home server's GPU, sized by a timing test. | The player inside the search vs Hybrid v4: weighted place, King only and points per game. |
-| 6. Learn bids from a slow bid search | A bid teacher too slow for the table searches the one net's recorded bidding decisions; the net learns its verdicts. | One night of lessons (the Mac records the games, the home server's GPU teaches them), then minutes of learning. | The learned player in its own search vs Hybrid v4, against the loop 4,000 player's result on the same deals. |
+| 6. Learn bids from a slow bid search | A bid teacher too slow for the table searches the one net's recorded bidding decisions; the net learns its verdicts. | One night of lessons (the Mac records the games, the home server's GPU teaches them), then minutes of learning. | The real-play check: the learned player's changed bids played at a real table, both ways, on held-out Bolas. The table test first planned (vs Hybrid v4, 100 sets) cannot see a gain this size. |
 
 Steps 1-4 took about 25-30 hours of compute over several days.
 
@@ -309,9 +309,9 @@ lead. It is run for the teacher's own picks and for each learned bidder's change
 It passes only if it is clearly ahead of the loop 4,000 player's own result on those deals (46 of
 100 sets, place +0.026, King 26.5%, -0.1 points a game, -5.7 to +5.6), beyond that noise.
 
-The table test has not been run. The gain the real-play check measures, about 3 points a game,
-is well inside this test's noise of 5.7, so 100 sets could not show it either way; the check is
-the measure so far (results below).
+The table test was not run. The gain the real-play check measures, about 3 points a game, is
+well inside this test's noise of 5.7, so 100 sets could not show it either way. Step 6 closed on
+the check (results below).
 
 ## Parked net changes
 
@@ -333,6 +333,9 @@ the measure so far (results below).
    licence (Yosif, 2026-11-07).
 5. The one net in its own search is the main line, and the bid teacher is its next step (Yosif,
    2026-11-15).
+6. Step 6 closes with the player that learned its estimates only, judged by the real-play check
+   and with no table match. Next is an exact measure of the card play in a round's last tricks
+   (Yosif, 2026-11-17).
 
 ## Results
 
@@ -750,7 +753,15 @@ against 60%). On the 1060 it records about 570 Bolas an hour against the Mac's 7
 are arithmetic-bound and the Mac's matrix units match the 1060 on a net this size. It is a second
 recorder to run next to the Mac, about 1,350 Bolas an hour together.
 
-### Step 6 (under way): learn bids from a slow bid search
+### Step 6 (done 2026-11-17): estimates learned from the bid teacher, calling lessons not kept
+
+**In short.** One night of lessons (5,000 Bolas, 620,097 taught bidding decisions). The teacher's
+advice on estimates holds when the rounds are played for real, about four fifths of what it
+imagines; its advice on the auction does not, and stays out of the learning. The player that
+learned the estimates only bids about **+3.4 points a game (+-1.7)** better at a real table than
+the loop 4,000 player it started from, with the same card play and the same calling. That is
+measured by the real-play check, not by a table match: 100 sets cannot see a gain this size.
+The parts, in the order they were run:
 
 **Timing and noise test (2026-11-15).** The teacher searched 1,536 bidding decisions of round 2's
 recording (the same player's games), half of each kind, twice, on fresh deals each time
@@ -987,6 +998,22 @@ Mac):
 - **So the auction lessons stay out of the learning.** What is left to suspect is the play: a
   call stands or falls on the card play that follows, and the teacher's rounds are played by
   the player's top card with no search.
+
+**Where step 6 ends (Yosif, 2026-11-17).**
+
+- **Kept:** the player that learned its estimates only, `runs/onenet/bids-1/learn-3/player.npz`
+  (git-ignored; made again by `configs/onenet-bids-1-learn.toml` from the night's lessons). It
+  is the loop 4,000 player with about 1.6 estimates a game changed.
+- **Not kept:** the auction and Dash Call lessons, and the players that learned them (`learn`,
+  `learn-2`).
+- **Not done:** no table match was played, and the main line's player was not swapped: it is
+  still the loop 4,000 player.
+- **A tool that stays:** the real-play check (`estimation.onenet.bid_check`). It values a changed
+  bid in minutes, on the real deal with the real search, where a table match of 100 sets is good
+  to 5.7 points a game.
+- **No second round.** A longer night for more estimate lessons was weighed and dropped: with a
+  quarter fewer lessons the lead models read them almost as well, so the player's room, not
+  the lessons, is the limit.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
