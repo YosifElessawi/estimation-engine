@@ -29,6 +29,24 @@ def standings_weights(
     return (raw[0] / total, raw[1] / total, raw[2] / total, raw[3] / total)
 
 
+def outcome_of(obs: Observation) -> RoundOutcome:
+    """The round in ``obs``, during card play, as ``score_round`` needs it, but for the final
+    trick counts: replace its ``tricks`` with them."""
+    return RoundOutcome(
+        estimates=estimates_of(obs),
+        tricks=(13, 0, 0, 0),
+        caller=obs.caller,
+        dash_callers=obs.dash_callers,
+        with_players=tuple(w.seat for w in obs.with_players),
+        last_estimator=obs.last_estimator,
+        risks=obs.risks or 0,
+        carry=obs.carry,
+        round_no=obs.round_no,
+        trump=obs.trump,
+        fixed_trump=obs.fixed_trump,
+    )
+
+
 class RoundScorer:
     """Scores final trick counts of the round in ``obs`` by SPEC §3, from ``obs.seat``'s side:
     its own round score minus the mean round score of the other three, or with ``weights``
@@ -46,19 +64,7 @@ class RoundScorer:
         self._rules = rules
         self._weights = weights
         self._cache: dict[tuple[int, ...], float] = {}
-        self._outcome = RoundOutcome(
-            estimates=estimates_of(obs),
-            tricks=(13, 0, 0, 0),
-            caller=obs.caller,
-            dash_callers=obs.dash_callers,
-            with_players=tuple(w.seat for w in obs.with_players),
-            last_estimator=obs.last_estimator,
-            risks=obs.risks or 0,
-            carry=obs.carry,
-            round_no=obs.round_no,
-            trump=obs.trump,
-            fixed_trump=obs.fixed_trump,
-        )
+        self._outcome = outcome_of(obs)
 
     def value(self, tricks: Sequence[int]) -> float:
         key = tuple(tricks)

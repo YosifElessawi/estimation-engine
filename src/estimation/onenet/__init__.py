@@ -19,6 +19,12 @@ Step 6, learning bids from a slow bid search:
 - ``bid_check`` (Mac) plays other bids for real, on the recorded deals with the table player
   in every seat, to see what the teacher's leads are worth outside the rounds it imagines.
 
+Step 7, the last tricks played exactly:
+
+- ``endgame`` plays every line of a round's last tricks on imagined deals, each seat for itself;
+- ``endgame_check`` (Mac) holds the cards the table player played there against that answer,
+  and plays the cards it would change for real.
+
 The training code the GPU side imports (``copy_hybrid``, ``selfplay``, ``bid_leads``,
 ``bid_learn``) needs only numpy, JAX and optax, never PyTorch; the recorders and the check
 replay games with the engine and the bots.
