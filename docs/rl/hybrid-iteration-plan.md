@@ -52,6 +52,7 @@ played them:
 | 4. Search the bidding | For each bid, try the net's best few options on imagined deals played out by the nets. | No training; about 2 h of measuring. | Bidding evaluator and new vs previous Hybrid. |
 | 5. One net for every decision | One player net copies Hybrid v4, then learns final place by GPU self-play (Essam's design). | Recording on the Mac (about 5 h per 2,000 Bolas); copy and self-play on the home server's GPU, sized by a timing test. | The player inside the search vs Hybrid v4: weighted place, King only and points per game. |
 | 6. Learn bids from a slow bid search | A bid teacher too slow for the table searches the one net's recorded bidding decisions; the net learns its verdicts. | One night of lessons (the Mac records the games, the home server's GPU teaches them), then minutes of learning. | The real-play check: the learned player's changed bids played at a real table, both ways, on held-out Bolas. The table test first planned (vs Hybrid v4, 100 sets) cannot see a gain this size. |
+| 7. The last tricks played exactly | With 4 cards or fewer in each hand, an imagined deal is finished by playing every line, each seat for itself, where the search finishes it with the player's top cards. A yardstick first, in the search only if it shows a real loss. | No training. The check takes about 3 minutes a Bola on one Mac process. | The cards the table player played against the exact answer on its own imagined deals, then the cards it would change played for real (step 6's real-play check). |
 
 Steps 1-4 took about 25-30 hours of compute over several days.
 
@@ -312,6 +313,62 @@ It passes only if it is clearly ahead of the loop 4,000 player's own result on t
 The table test was not run. The gain the real-play check measures, about 3 points a game, is
 well inside this test's noise of 5.7, so 100 sets could not show it either way. Step 6 closed on
 the check (results below).
+
+### Step 7: the last tricks played exactly (Yosif, 2026-11-17)
+
+At a card decision the search imagines deals and finishes each one roughly: every seat plays the
+player's top card to the end of the round. Late in a round that is a loose way to count: making
+an estimate exactly is a matter of which seat takes which of the last few tricks. With few cards
+left there are few enough ways to finish a deal that all of them can be played.
+
+**How many ways.** Lines of play from the lead of a trick with k cards in each hand, counted on
+971 real positions of step 6's recorded games (60 for 5 cards), following suit enforced:
+
+| Cards in each hand | With no suit to follow, (k!)^4 | Real mean | Real most |
+|---|---|---|---|
+| 2 | 16 | 12 | |
+| 3 | 1,296 | 530 | 1,296 |
+| 4 | 331,776 | 52,128 | 331,776 |
+| 5 | 207,360,000 | 7,771,209 | 78,174,720 |
+
+Following suit prunes little this late (2 times at 3 cards, 6 at 4, 27 at 5): hands are short
+and a seat is often out of the led suit. Many lines meet in the same position, 1,277 different
+trick starts a deal at 4 cards and 14,996 at 5, which a solver that remembers them could use.
+
+**The solver** (`estimation.onenet.endgame`). `solve` takes a batch of imagined deals, all four
+hands open, and plays every legal line to the round's last trick:
+
+- **Each seat plays its best for itself.** A finished round is worth to a seat what the search
+  counts: its own round score less the others', players ahead of it in the game counting double.
+  At its turn a seat takes the card whose finish is worth the most to it.
+- **Level cards.** A seat that is as well off with several cards plays each of them equally
+  often: its turn is worth the mean over them. This is a choice of the solver, not a rule of the
+  game: a seat with nothing left to play for has to play something.
+- **Up to 4 cards in each hand.** It plays all (k!)^4 lines as arrays, the illegal ones masked,
+  with no memory of positions: 3 cards or fewer take milliseconds a deal, 4 cards about 0.1
+  seconds on the Mac. 5 cards are out of reach this way.
+
+The answer is exact for open hands. The table has them hidden, so a card is never judged by the
+one real deal, where a card can be right for what the seat knows and still lose. It is judged by
+its mean over many imagined deals, drawn as the table player draws them (its own guesses, then
+the half that best explains the bidding).
+
+**The check** (`estimation.onenet.endgame_check`), on games the table player recorded:
+
+1. `run`: at every recorded card decision with a choice and at most 4 cards in the hand, the
+   table player imagines 64 deals. Every legal card is valued on each of them twice, by the
+   exact finish and by the rough one. The deals are kept as two halves: a card picked on one
+   half is judged on the other, so no pick is flattered by the luck of the deals that picked it.
+2. `play`: step 6's real-play check, for cards. Where the exact answer over all 64 deals is
+   another card than the one played, the round is finished twice on the deal as it was really
+   dealt, the table player in every seat and the same seeds in both plays: once with the card
+   played, once with the exact answer's card. Hidden hands and real opponents are what the exact
+   answer cannot see, so this is what says whether it would have helped at the table.
+3. `report`: by cards in the hand, how often the exact answer is another card, what the card
+   played loses by the exact finish, and the real leads.
+
+Step 6 showed why the real plays decide: the bid teacher's leads for calling looked as good as
+its leads for estimates in the rounds it imagined, and were worth nothing at a real table.
 
 ## Parked net changes
 
@@ -1014,6 +1071,42 @@ Mac):
 - **No second round.** A longer night for more estimate lessons was weighed and dropped: with a
   quarter fewer lessons the lead models read them almost as well, so the player's room, not
   the lessons, is the limit.
+
+### Step 7 (under way): the last tricks played exactly
+
+**Where the card points go, by cards left (2026-11-17, no new play).** Round 2's 84,473 held-out
+card decisions with a choice, where the slow search (the same search with 256 deals and every
+card) valued every legal card, split by the cards in the hand:
+
+| Cards in the hand | The player's top card is the slow search's best | Points lost by the top card | By the best of its top 2 |
+|---|---|---|---|
+| 13 to 9 | 49% | 1.07 | 0.55 |
+| 8 to 6 | 51% | 1.52 | 0.72 |
+| 5 to 4 | 58% | 1.84 | 0.76 |
+| 3 | 75% | 1.67 | 0.49 |
+| 2 | 88% | 1.27 | 0 |
+
+The top card costs more late in a round, where a wrong card is dearer, but the table player
+searches its top 2, and the better of those two loses about as much late as in the middle. The
+last 5 tricks hold 28% of these decisions, 35% of what the top card loses and 26% of what the
+top 2 lose. By this measure the end of a round is no special weak spot. But the slow search
+finishes its deals the same rough way, so it cannot show a mistake it shares with the player.
+
+**The check on one Bola (2026-11-17, a smoke test).** One recorded Bola of the loop 4,000 player
+in its own search: 199 card decisions with a choice and at most 4 cards in the hand, 64 deals
+each (2.8 minutes on one process), then its changed cards played for real (60 rounds, seconds):
+
+| Cards in the hand | Decisions | The exact answer is another card | The card played loses, by the exact finish | Changed cards played for real | The exact card's real lead |
+|---|---|---|---|---|---|
+| 2 | 64 | 3% | 0.01 (+-0.01) | 2 | |
+| 3 | 69 | 13% | 0.58 (+-0.26) | 9 | |
+| 4 | 66 | 29% | 1.94 (+-0.94) | 19 | |
+| All | 199 | 15% | 0.85 (+-0.33) | 30 | +3.3 (+-5.0) a change |
+
+It runs end to end, and one Bola says nothing yet: a change's real lead on its one real deal
+spreads by about 27 points, so the real lead of 30 changes is good to 5 points. The exact finish
+itself gives those 30 cards +6.0 a change. About 100 Bolas (3,000 changed cards) put the real
+lead within half a point a change, which is 4 points a game at 7.5 changed cards a seat a Bola.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
