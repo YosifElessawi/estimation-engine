@@ -1072,7 +1072,15 @@ Mac):
   quarter fewer lessons the lead models read them almost as well, so the player's room, not
   the lessons, is the limit.
 
-### Step 7 (under way): the last tricks played exactly
+### Step 7 (measured 2026-11-18): the last tricks played exactly
+
+**In short.** The table player loses about **12 points a game (+-2)** in a round's last 4 cards,
+by the real-play check on 100 recorded Bolas: where the exact answer is another card, playing it
+on the real deal is worth +2.0 points a change, and it changes 5.7 cards a seat a Bola. That is
+a third of what the exact finish imagines, and three times step 6's whole gain. All of it comes
+from about one card a seat a Bola, where the exact finish leads by more than 10 points. Nothing
+is in the player yet: whether the exact finish goes into the search is Yosif's call. The parts,
+in the order they were run:
 
 **Where the card points go, by cards left (2026-11-17, no new play).** Round 2's 84,473 held-out
 card decisions with a choice, where the slow search (the same search with 256 deals and every
@@ -1107,6 +1115,52 @@ It runs end to end, and one Bola says nothing yet: a change's real lead on its o
 spreads by about 27 points, so the real lead of 30 changes is good to 5 points. The exact finish
 itself gives those 30 cards +6.0 a change. About 100 Bolas (3,000 changed cards) put the real
 lead within half a point a change, which is 4 points a game at 7.5 changed cards a seat a Bola.
+
+**The full check (2026-11-17 and 18).** 100 recorded Bolas of the same player, the smoke test's
+among them: 19,655 card decisions with a choice and at most 4 cards in the hand, 49.1 a seat a
+Bola. The exact solving took 98.5 minutes on the Mac's 5 workers, not the 55 it was sized at
+(the Mac also slept on an empty battery in the middle and picked the run up when it woke). The
+2,265 changed cards played for real took under a minute. A game is one seat's Bola:
+
+| Cards in the hand | Decisions | The exact answer is another card | The card played loses, by the exact finish | Changed cards played for real | The exact card's real lead a change | The exact finish gave it | Real gain a game |
+|---|---|---|---|---|---|---|---|
+| 2 | 6,686 | 1.6% | 0.18 (+-0.04) | 109 | +8.5 (+-2.0) | +11.2 | +2.3 (+-0.6) |
+| 3 | 6,547 | 11.2% | 0.67 (+-0.05) | 734 | +2.9 (+-0.7) | +6.4 | +5.4 (+-1.3) |
+| 4 | 6,422 | 22.1% | 1.05 (+-0.06) | 1,422 | +1.1 (+-0.5) | +5.3 | +3.9 (+-1.8) |
+| All | 19,655 | 11.5% | 0.63 (+-0.03) | 2,265 | **+2.0 (+-0.4)** | +5.9 | **+11.6 (+-2.3)** |
+
+By the exact finish the card played loses 0.63 points a decision, 30.8 a game. The player's top
+card alone loses 1.14, and the rough finish with every card instead of the top 2 still loses
+0.49, so most of the loss is the rough finish itself and not the cards left out. The rough
+finish puts its own loss at 0.37 a decision. On the lead the exact answer is another card at
+19.1% of decisions, with cards already on the table at 7% to 10%.
+
+Played for real, a change keeps a third of what the exact finish gives it (+2.0 of +5.9), as
+step 6's estimates kept four fifths and its calling nothing. Where the gain is, by how far the
+exact finish puts its card ahead:
+
+| The exact finish leads by | Changes | Of all decisions | The real lead a change |
+|---|---|---|---|
+| up to 0.5 | 427 | 2.2% | -0.4 (+-0.6) |
+| 0.5 to 1 | 261 | 1.3% | -1.8 (+-0.8) |
+| 1 to 2 | 356 | 1.8% | -0.2 (+-0.9) |
+| 2 to 5 | 508 | 2.6% | +0.8 (+-0.7) |
+| 5 to 10 | 317 | 1.6% | -1.4 (+-1.1) |
+| over 10 | 396 | 2.0% | **+13.4 (+-1.5)** |
+
+The whole gain is in the last row: about one card a seat a Bola, +13.3 points a game (+-1.5) on
+its own. The other 1,869 changes are worth -0.4 (+-0.4) a change together, which is nothing.
+Changing the card only above a margin gives the same gain from far fewer changes: +13.1 a game
+at a margin of 1 point (3.9 changes a seat a Bola), +13.3 at 10 (1.0). The two halves of the
+Bolas agree at the margin of 10 (+13.5 and +13.2 a game). At 2 cards the 28 changes above it
+are worth +32 (+-5) each: rare, and dear.
+
+What this does not show. Each change was played alone and the round went on with the table
+player's own card play, so a player with the exact finish built in could do better (it follows
+its own change up exactly) or worse than the sum (241 seat-rounds hold more than one change,
+491 of the 2,265, and their gains are added as if they were apart). The margin was read off
+these same Bolas. So the size is settled only by a player with the exact finish in its search,
+checked the same way on Bolas it has not seen.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
