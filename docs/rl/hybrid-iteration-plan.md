@@ -366,6 +366,20 @@ the half that best explains the bidding).
    answer cannot see, so this is what says whether it would have helped at the table.
 3. `report`: by cards in the hand, how often the exact answer is another card, what the card
    played loses by the exact finish, and the real leads.
+4. `finish` (added 2026-11-18 with the exact player below): every recorded round is finished
+   from the lead of its first trick with 4 cards in each hand, on the deal as it was really
+   dealt: once by the table player in every seat, and once for each seat by the exact player in
+   that seat with the table player in the other three, on the same seeds. A seat's gain is what
+   the round is worth to it with the exact player less what it is worth without. Unlike `play`
+   this is the player as it would sit at the table: it follows its own cards up exactly, and
+   every change of a round counts once.
+
+**In the player** (`exact=4` on the `onenet` bot, off by default). At a card decision with 4
+cards or fewer in the hand the search imagines its deals as before (the player's own guesses,
+then the half that best explains the bidding) and finishes each of them exactly in place of the
+rough play-out. Every legal card is valued, not the top 2, and where several are level the
+player's favourite of them is played. With more than 4 cards nothing changes, and a player
+named without `exact` plays as it always did.
 
 Step 6 showed why the real plays decide: the bid teacher's leads for calling looked as good as
 its leads for estimates in the rounds it imagined, and were worth nothing at a real table.
@@ -393,6 +407,8 @@ its leads for estimates in the rounds it imagined, and were worth nothing at a r
 6. Step 6 closes with the player that learned its estimates only, judged by the real-play check
    and with no table match. Next is an exact measure of the card play in a round's last tricks
    (Yosif, 2026-11-17).
+7. The exact finish goes into the table player's search for a round's last 4 cards, then the
+   new player is checked on recorded games it has not seen (Yosif, 2026-11-18).
 
 ## Results
 
@@ -1078,9 +1094,9 @@ Mac):
 by the real-play check on 100 recorded Bolas: where the exact answer is another card, playing it
 on the real deal is worth +2.0 points a change, and it changes 5.7 cards a seat a Bola. That is
 a third of what the exact finish imagines, and three times step 6's whole gain. All of it comes
-from about one card a seat a Bola, where the exact finish leads by more than 10 points. Nothing
-is in the player yet: whether the exact finish goes into the search is Yosif's call. The parts,
-in the order they were run:
+from about one card a seat a Bola, where the exact finish leads by more than 10 points. On that
+Yosif put the exact finish into the search (decision 7, `exact=4`, off by default); the new
+player's check on Bolas it has not seen is next. The parts, in the order they were run:
 
 **Where the card points go, by cards left (2026-11-17, no new play).** Round 2's 84,473 held-out
 card decisions with a choice, where the slow search (the same search with 256 deals and every
@@ -1161,6 +1177,25 @@ its own change up exactly) or worse than the sum (241 seat-rounds hold more than
 491 of the 2,265, and their gains are added as if they were apart). The margin was read off
 these same Bolas. So the size is settled only by a player with the exact finish in its search,
 checked the same way on Bolas it has not seen.
+
+**In the player (2026-11-18).** Two things were looked at before it went in, both with no new
+play:
+
+- **What it costs in time.** On one recorded Bola the table player thinks 11 seconds for all
+  four seats, and the exact finish adds 56. Nearly all of that is one case, the lead of a trick
+  with 4 cards in the hand: 2.3 seconds, about 5 times a seat a Bola. With a card on the table
+  it is 0.6 seconds, and with 3 cards or fewer under 0.02. A person at the table sees a short
+  pause now and then; a long run of games takes about 6 times as long. A solver that remembers
+  positions it has met would take most of that back and is not built.
+- **Every split of the unseen cards in place of 32 imagined deals.** At 3 cards or fewer every
+  split can be tried (1,680 at 3 cards, 90 at 2); at 4 cards there are 34,650, about 40 minutes
+  a decision. It is not worth building: two separate halves of the check's deals, 32 each, pick
+  the same card at 97.6% of the decisions with 3 cards or fewer, and where they differ the cards
+  are close, 1.2 points a game on paper at most. The gain is in clear mistakes, which 32 deals
+  catch.
+
+`finish` was tried on 2 recorded Bolas the check had not looked at (1.1 minutes a Bola on one
+process). It runs end to end; 2 Bolas say nothing about the size.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
