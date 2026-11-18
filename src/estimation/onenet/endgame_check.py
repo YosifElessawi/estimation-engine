@@ -4,6 +4,8 @@ round's last tricks, against the exact answer.
     uv run python -m estimation.onenet.endgame_check run --record runs/onenet/bids-1/games \\
         --out runs/onenet/endgame-1 --bolas 10 --workers 1
     uv run python -m estimation.onenet.endgame_check play --out runs/onenet/endgame-1 --workers 5
+    uv run python -m estimation.onenet.endgame_check finish --out runs/onenet/endgame-1 \\
+        --bolas 100 --skip 100 --workers 5
     uv run python -m estimation.onenet.endgame_check report --out runs/onenet/endgame-1
 
 The table player finishes an imagined deal roughly, every seat playing the player's top card.
@@ -21,10 +23,18 @@ the table player recorded:
   it was really dealt, the table player in every seat and the same seeds in both plays: once
   with the card played, once with the exact answer's card. Hidden hands are what the exact
   answer cannot see, so this is what says whether it would have helped at the table.
+- ``finish``: the table player with the exact finish in its search (``exact=``) at a real
+  table. Every recorded round is finished from its first card decision with at most ``--cards``
+  cards in the hand, on the deal as it was really dealt: once with the table player in every
+  seat, and once for each seat with the exact player in that seat and the table player in the
+  other three, the same seeds in every play. A seat's gain is what the round is worth to it with
+  the exact player less what it is worth without. Unlike ``play`` this is the player as it would
+  sit at the table: it follows its own cards up exactly, and every change of a round counts once.
+  ``--skip`` leaves out the first Bolas of the run's order, the ones ``run`` looked at.
 - ``report``: by cards in the hand, how often the exact answer is another card, what the card
   played loses by the exact finish (picked on one half of the deals, judged on the other), the
   same for the player's top card and for the rough finish's own pick on the same deals with
-  every card, and the real leads played so far.
+  every card, the real leads played so far, and the exact player's gain in the rounds finished.
 """
 
 import argparse
@@ -32,6 +42,7 @@ import dataclasses
 import json
 import sys
 import time
+from collections.abc import Sequence
 from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,14 +59,14 @@ from estimation.rl.onenet_record import RecordConfig, load_part, part_path
 from estimation.rl.train import worker_pool
 
 from . import bid_check
-from .endgame import MAX_CARDS, solve, worths_of
+from .endgame import LEVEL, MAX_CARDS, solve, worths_of
 
 Arrays = dict[str, npt.NDArray[Any]]
 Floats = npt.NDArray[np.float64]
 CONFIG = "config.json"
 SUMMARY = "summary.json"
 PLAYS = "plays"  # the real plays' folder inside the run's, laid out as bid_check's
-LEVEL = 1e-4  # points: two cards closer than this by the exact finish are the same to it
+FINISH = "finish"  # the finished rounds' folder inside the run's
 DTYPES = {
     "game": np.int32,
     "step": np.int32,
@@ -72,6 +83,16 @@ DTYPES = {
     "rough_b": np.float32,
 }
 WIDE = ("legal", "exact_a", "exact_b", "rough_a", "rough_b")
+FINISH_DTYPES = {
+    "game": np.int32,
+    "round": np.int8,
+    "step": np.int32,  # the recorded step the round is finished from
+    "seat": np.int8,  # the seat the exact player sits in
+    "standings": np.int64,  # [4] the Bola's scores as the round began
+    "base": np.int64,  # [4] the round's scores with the table player in every seat
+    "exact": np.int64,  # [4] the same with the exact player in the seat
+    "changed": np.int8,  # cards in the seat's hand at its first other card, 0 with none
+}
 
 
 def _say(text: str) -> None:
@@ -397,6 +418,8 @@ def lines(summary: dict[str, Any]) -> list[str]:
                 f"exact finish gave it {entry['lead_where_played']:+.2f}; "
                 f"{entry['real'] * share:+.2f} a game (+-{entry['real_error'] * share:.2f})"
             )
+    if FINISH in summary:
+        out += finish_lines(summary[FINISH])
     return out
 
 
@@ -405,8 +428,251 @@ def report(out: Path) -> dict[str, Any]:
     rows = load_rows(out)
     plays = bid_check.played(out / PLAYS) if (out / PLAYS / "parts").exists() else {}
     summary = summarize(rows, real_leads(rows, plays))
+    finished = load_finish(out)
+    if len(finished["game"]):
+        summary[FINISH] = summarize_finish(finished)
     (out / SUMMARY).write_text(json.dumps(summary, indent=2) + "\n")
     return summary
+
+
+# The exact player at a real table.
+
+
+def exact_spec(spec: str, cards: int) -> str:
+    """The table player of ``spec`` with the exact finish from ``cards`` cards in the hand."""
+    if "exact=" in spec:
+        raise ValueError(f"the recording's player already plays an exact finish: {spec}")
+    return f"{spec}:exact={cards}"
+
+
+def finish_round(
+    seed: int, actions: Sequence[int], step: int, bots: Sequence[Any]
+) -> tuple[bid_check.Scores, bid_check.Scores, list[tuple[int, int]]]:
+    """The Bola dealt from ``seed``, replayed through its first ``step`` recorded ``actions``,
+    then the rest of that round by ``bots`` (one a seat). Returns the standings the round began
+    at, the round's scores and the moves made from there (seat and action)."""
+    bola = Bola(seed, DEFAULT_CONFIG)
+    for played in actions[:step]:
+        bola.step(played)
+    index = len(bola.history)
+    standings = bola.scores
+    moves: list[tuple[int, int]] = []
+    while len(bola.history) == index:
+        seat = bola.current_player
+        if seat is None:
+            raise RuntimeError("a round that is not over always has a player to act")
+        action = bots[seat].act(bola.observation(seat), bola.legal_actions())
+        moves.append((seat, action))
+        bola.step(action)
+    return standings, bola.history[index].scores, moves
+
+
+def finish_starts(seed: int, actions: Sequence[int], cards: int) -> list[tuple[int, int, int]]:
+    """Where each round of the recorded Bola is finished from: the step of its first card
+    decision with at most ``cards`` cards in the hand, with the round's number and the cards in
+    the hand there. That decision leads a trick, so every hand holds as many."""
+    bola = Bola(seed, DEFAULT_CONFIG)
+    starts: list[tuple[int, int, int]] = []
+    found: set[int] = set()
+    for step, action in enumerate(actions):
+        seat = bola.current_player
+        index = len(bola.history)
+        if seat is not None and bola.phase is Phase.PLAY and index not in found:
+            obs = bola.observation(seat)
+            if obs.hand.bit_count() <= cards:
+                if obs.trick:
+                    raise RuntimeError("a round's first decision at a hand size leads a trick")
+                found.add(index)
+                starts.append((step, obs.round_no, obs.hand.bit_count()))
+        bola.step(action)
+    return starts
+
+
+def first_change(
+    base: Sequence[tuple[int, int]], moves: Sequence[tuple[int, int]], seat: int, held: int
+) -> int:
+    """The cards in ``seat``'s hand (``held`` as the finish began) at the first move where its
+    finish (``moves``) leaves the table player's (``base``), or 0 where the two are the same.
+    The other seats are the same players on the same seeds, so only ``seat`` can leave first."""
+    for at, (was, now) in enumerate(zip(base, moves, strict=True)):
+        if was != now:
+            if was[0] != seat or now[0] != seat:
+                raise RuntimeError(f"seat {was[0]} left the table player's finish before {seat}")
+            return held - sum(1 for mover, _ in moves[:at] if mover == seat)
+    return 0
+
+
+def table_bots(config: CheckConfig, game: int, step: int, exact_seat: int) -> list[Any]:
+    """The four players that finish a round from ``step`` of Bola ``game``: the table player in
+    every seat but ``exact_seat`` (-1: none), where the exact player sits. A seat's seed is the
+    same whichever of the two sits in it."""
+    exact = exact_spec(config.player, config.cards)
+    return [
+        table_player(
+            exact if seat == exact_seat else config.player,
+            derive_seed(config.seed, ENDGAME_STAGE, game, step, seat),
+        )
+        for seat in range(4)
+    ]
+
+
+def finish_bola(task: BolaTask) -> Arrays:
+    """Every round of the Bola finished from ``finish_starts`` on the deal as it was dealt: by
+    the table player in every seat, and for each seat by the exact player in that seat and the
+    table player in the others (``table_bots``). One row a round and seat
+    (``FINISH_DTYPES``)."""
+    config = task.config
+    part = load_part(part_path(Path(config.record), task.first))
+    found = np.flatnonzero(part["game"] == task.game)
+    if not len(found):
+        raise ValueError(f"Bola {task.game} is not in the part starting at Bola {task.first}")
+    row = int(found[0])
+    start, end = int(part["log_start"][row]), int(part["log_start"][row + 1])
+    actions: list[int] = part["actions"][start:end].tolist()
+    seed = int(part["seed"][row])
+    rows: list[dict[str, Any]] = []
+    for step, round_no, held in finish_starts(seed, actions, config.cards):
+        everyone = table_bots(config, task.game, step, -1)
+        standings, base, base_moves = finish_round(seed, actions, step, everyone)
+        for seat in range(4):
+            bots = table_bots(config, task.game, step, seat)
+            _, result, moves = finish_round(seed, actions, step, bots)
+            rows.append(
+                {
+                    "game": task.game,
+                    "round": round_no,
+                    "step": step,
+                    "seat": seat,
+                    "standings": standings,
+                    "base": base,
+                    "exact": result,
+                    "changed": first_change(base_moves, moves, seat, held),
+                }
+            )
+    return stack_finish(rows)
+
+
+def stack_finish(rows: list[dict[str, Any]]) -> Arrays:
+    """Rows as arrays of ``FINISH_DTYPES``."""
+    wide = ("standings", "base", "exact")
+    return {
+        name: np.array([row[name] for row in rows], dtype).reshape(
+            (len(rows), 4) if name in wide else (len(rows),)
+        )
+        for name, dtype in FINISH_DTYPES.items()
+    }
+
+
+def finish_file(out: Path, game: int) -> Path:
+    return out / FINISH / "parts" / f"finish-{game:05d}.npz"
+
+
+def finish(out: Path, bolas: int, skip: int = 0, workers: int = 5) -> dict[str, Any]:
+    """Finish the rounds of ``bolas`` Bolas of the run's order, after its first ``skip``, that
+    are not saved yet (``finish_bola``), on ``workers`` processes. Returns the report."""
+    config = load_config(out)
+    order = np.random.default_rng(config.seed).permutation(config.games).tolist()
+    order = order[skip : skip + bolas]
+    (out / FINISH / "parts").mkdir(parents=True, exist_ok=True)
+    tasks = [
+        BolaTask(game, game - game % config.part_games, config)
+        for game in order
+        if not finish_file(out, game).exists()
+    ]
+    if tasks:
+        _say(f"{len(tasks)} of {len(order)} Bolas to finish on {workers} workers")
+        started = time.perf_counter()
+        with worker_pool(workers) as pool:
+            futures = {pool.submit(finish_bola, task): task for task in tasks}
+            for done, future in enumerate(as_completed(futures), 1):
+                bid_check.save_check(finish_file(out, futures[future].game), future.result())
+                elapsed = time.perf_counter() - started
+                _say(
+                    f"{done}/{len(tasks)} Bolas, {elapsed / 60:.1f} min, "
+                    f"about {elapsed / done * (len(tasks) - done) / 60:.1f} min left"
+                )
+    return report(out)
+
+
+def load_finish(out: Path) -> Arrays:
+    """Every finished round saved in ``out``."""
+    parts: list[Arrays] = []
+    for path in sorted((out / FINISH / "parts").glob("finish-*.npz")):
+        if ".tmp" in path.name:
+            continue
+        with np.load(path) as data:
+            parts.append({name: data[name] for name in FINISH_DTYPES})
+    if not parts:
+        return stack_finish([])
+    return {name: np.concatenate([part[name] for part in parts]) for name in FINISH_DTYPES}
+
+
+def _by_bola(games: npt.NDArray[Any], values: Floats, seats: int = 4) -> tuple[float, float]:
+    """``values`` (one a round and seat) as a seat's mean total a Bola, and its standard error
+    with the Bola as the unit: a Bola's four seats play the same deals."""
+    totals = np.array([values[games == game].sum() / seats for game in np.unique(games)])
+    return _mean(totals)
+
+
+def summarize_finish(rows: Arrays) -> dict[str, Any]:
+    """The exact player's gain over the table player in the rounds finished: how many Bolas
+    and rounds, how often a seat played another card, and a seat's gain a Bola with its standard
+    error, in what the rounds are worth to it (``bid_check.worth``) and in its own points; then
+    the same worth by the cards in the hand at its first other card."""
+    count = len(rows["game"])
+    seat = rows["seat"].astype(np.int64)
+    plays = zip(
+        rows["exact"].tolist(),
+        rows["base"].tolist(),
+        rows["standings"].tolist(),
+        seat.tolist(),
+        strict=True,
+    )
+    worth = np.array(
+        [
+            bid_check.worth(exact, standings, at) - bid_check.worth(base, standings, at)
+            for exact, base, standings, at in plays
+        ],
+        np.float64,
+    )
+    each = np.arange(count)
+    own = (rows["exact"][each, seat] - rows["base"][each, seat]).astype(np.float64)
+    changed = rows["changed"] > 0
+    summary: dict[str, Any] = {
+        "bolas": len(np.unique(rows["game"])),
+        "rounds": count,
+        "changed": float(changed.mean()) if count else 0.0,
+        "groups": {},
+    }
+    summary["worth"], summary["worth_error"] = _by_bola(rows["game"], worth)
+    summary["own"], summary["own_error"] = _by_bola(rows["game"], own)
+    summary["worth_a_change"], summary["worth_a_change_error"] = _mean(worth[changed])
+    for left in sorted(np.unique(rows["changed"][changed]).tolist(), reverse=True):
+        of = rows["changed"] == left
+        entry: dict[str, Any] = {"rounds": int(of.sum())}
+        entry["worth_a_change"], entry["worth_a_change_error"] = _mean(worth[of])
+        entry["worth"], entry["worth_error"] = _by_bola(rows["game"], np.where(of, worth, 0.0))
+        summary["groups"][str(left)] = entry
+    return summary
+
+
+def finish_lines(summary: dict[str, Any]) -> list[str]:
+    """The finished rounds' summary as text."""
+    out = [
+        f"the exact player at a real table: {summary['rounds']:,} rounds and seats of "
+        f"{summary['bolas']} Bolas; it plays another card in {summary['changed']:.1%} of them",
+        f"  its gain: {summary['worth']:+.2f} points a game (+-{summary['worth_error']:.2f}), "
+        f"{summary['worth_a_change']:+.2f} a changed round (+-"
+        f"{summary['worth_a_change_error']:.2f}); in its own points {summary['own']:+.2f} a game "
+        f"(+-{summary['own_error']:.2f})",
+    ]
+    for left, entry in summary["groups"].items():
+        out.append(
+            f"  first other card with {left} cards in the hand: {entry['rounds']:,} rounds, "
+            f"{entry['worth_a_change']:+.2f} each (+-{entry['worth_a_change_error']:.2f}), "
+            f"{entry['worth']:+.2f} a game (+-{entry['worth_error']:.2f})"
+        )
+    return out
 
 
 # The real plays.
@@ -492,6 +758,11 @@ def main(argv: list[str] | None = None) -> None:
     real.add_argument("--out", type=Path, required=True)
     real.add_argument("--workers", type=int, default=5)
     real.add_argument("--margin", type=float, default=0.0, help="least exact lead of a change")
+    table = commands.add_parser("finish", help="the exact player against the table player")
+    table.add_argument("--out", type=Path, required=True)
+    table.add_argument("--bolas", type=int, required=True, help="Bolas finished, in all")
+    table.add_argument("--skip", type=int, default=0, help="Bolas of the order left out first")
+    table.add_argument("--workers", type=int, default=5)
     show = commands.add_parser("report", help="what is saved so far")
     show.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -500,6 +771,8 @@ def main(argv: list[str] | None = None) -> None:
         summary = run(args.out, args.bolas, args.workers)
     elif args.command == "play":
         summary = play(args.out, args.workers, args.margin)
+    elif args.command == "finish":
+        summary = finish(args.out, args.bolas, args.skip, args.workers)
     else:
         summary = report(args.out)
     for line in lines(summary):

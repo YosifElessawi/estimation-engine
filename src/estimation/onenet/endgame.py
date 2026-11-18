@@ -39,6 +39,7 @@ Worths = Callable[[Tricks], Sequence[float]]
 
 MAX_CARDS = 4  # the most cards in a hand that every line is played from
 TIE = 1e-9  # worths closer than this are the same to a seat
+LEVEL = 1e-4  # points: two cards whose means over the deals are closer than this are level
 _PLAIN = 1.0 / 3.0
 
 

@@ -14,7 +14,7 @@ plain M3 search, a frozen measuring stick.
 """
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from estimation.engine import RulesConfig
 from estimation.engine.config import DEFAULT_CONFIG
@@ -64,8 +64,9 @@ def _onenet(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     """Step 5's one net inside the Hybrid search (estimation.onenet.search): ``net`` is the
     player's file; ``own=true`` plays with no checkpoint, the player guessing the hidden cards
     itself; ``judge`` is ``round`` (round points), ``king`` (its own King chance) or ``place``
-    (the training judge's expected final place, from ``judge_net``); every other option a
-    HybridConfig field."""
+    (the training judge's expected final place, from ``judge_net``); ``exact`` is the most
+    cards in the hand at which a round's last tricks are played exactly (0, the default: never);
+    every other option a HybridConfig field."""
     from estimation.onenet.search import ROUND, make  # PyTorch loads only with the Hybrid
 
     from .hybrid import HybridConfig
@@ -76,12 +77,13 @@ def _onenet(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:
     own = _parse(options.pop("own", "false"), bool, "bot option own") is True
     judge = options.pop("judge", ROUND)
     judge_net = options.pop("judge_net", "")
+    exact = cast(int, _parse(options.pop("exact", "0"), int, "bot option exact"))
     if own and {"checkpoint", "deals"} & options.keys():
         raise ValueError(
             "bot onenet with own=true takes no checkpoint or deals: the player imagines the deals"
         )
     config = configure(HybridConfig(rules=rules), options, "onenet")
-    return make(seed, config, net, own=own, judge=judge, judge_net=judge_net)
+    return make(seed, config, net, own=own, judge=judge, judge_net=judge_net, exact=exact)
 
 
 def _search(seed: int, options: dict[str, str], rules: RulesConfig) -> Bot:

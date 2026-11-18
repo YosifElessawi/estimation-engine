@@ -3,6 +3,7 @@
     onenet:net=<player.npz>:checkpoint=<hybrid.pt>:deals=both:top_k=2:samples=32
     onenet:net=<player.npz>:own=true:top_k=2:samples=32
     onenet:net=<player.npz>:own=true:judge=place:judge_net=<judge.npz>:top_k=2:samples=32
+    onenet:net=<player.npz>:own=true:top_k=2:samples=32:exact=4
 
 The player bids alone (its top legal move), keeps its ``top_k`` cards to search and, on each
 imagined deal, plays all four seats to the end of the round. Two things are set per bot:
@@ -26,6 +27,12 @@ imagined deal, plays all four seats to the end of the round. Two things are set 
   spread of outcomes over the imagined deals counts too, toward the long shot when behind the
   leader and away from it when leading (``risk``).
 
+With ``exact=k`` (step 7, 1 to 4, and ``judge=round``) a card decision with ``k`` cards or
+fewer in the hand is not searched that way: the deals are imagined as before, and on each of them
+every line of play to the round's last trick is played, each seat for itself
+(``estimation.onenet.endgame``). Every legal card is valued, not the ``top_k``, and where several
+are level the player's favourite of them is played.
+
 This started as Essam Gouda's bitter-search (estimation-arena bots/bitter-search, commit e43b15b,
 MIT licence, see estimation/jaxenv/LICENSE), which runs his net inside the Hybrid search. Changes
 in this copy: it reads the view from estimation.jaxenv, takes the player's file as ``net``, drops
@@ -39,6 +46,7 @@ seat was dealt. The tests check both against encode_np in real games.
 """
 
 import json
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import cache
@@ -54,7 +62,7 @@ from estimation.bots.hybrid.beliefs import (
     PublicBidding,
     choice_log_likelihoods,
 )
-from estimation.bots.hybrid.bot import BOTH, HybridBot, HybridConfig
+from estimation.bots.hybrid.bot import BOTH, CardSearch, HybridBot, HybridConfig
 from estimation.bots.hybrid.rollout import (
     Start,
     _beats,  # pyright: ignore[reportPrivateUsage]  # the Hybrid's own trick rule, shared
@@ -67,6 +75,9 @@ from estimation.bots.scoring import RoundScorer, estimates_of, standings_weights
 from estimation.engine import Observation, Phase, RulesConfig, legal_plays, play_action
 from estimation.engine.cards import SUIT_MASKS
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
+from estimation.rl.networks import REWARD_SCALE
+
+from .endgame import LEVEL, MAX_CARDS, solve, worths_of
 
 PLAYED, TABLE, SHOWN, WON, LEADER, MASK = 52, 260, 468, 580, 594, SIZE - 120
 ROUND, KING, PLACE, LATE, SPREAD = "round", "king", "place", "late", "spread"
@@ -366,9 +377,18 @@ def play_out(
                 return PlayOut(won, value)
 
 
+def first_level(means: Sequence[float]) -> int:
+    """The index of the first value within ``LEVEL`` of the highest: of the cards the exact
+    finish finds level, the one listed first."""
+    top = max(means)
+    return next(k for k, mean in enumerate(means) if mean >= top - LEVEL)
+
+
 class OneNetSearch(HybridBot):
     """The Hybrid search with the one net choosing the cards to search and playing them out; with
-    ``own`` it also imagines the deals, and ``judge`` says how each searched card is valued."""
+    ``own`` it also imagines the deals, ``judge`` says how each searched card is valued, and
+    ``exact`` is the most cards in the hand at which the round's last tricks are played exactly
+    instead (0: never)."""
 
     def __init__(
         self,
@@ -379,9 +399,14 @@ class OneNetSearch(HybridBot):
         own: bool = False,
         judge: str = ROUND,
         judge_net: str = "",
+        exact: int = 0,
     ) -> None:
         if judge not in JUDGES:
             raise ValueError(f"judge must be one of {', '.join(JUDGES)}, not {judge!r}")
+        if not 0 <= exact <= MAX_CARDS:
+            raise ValueError(f"exact must be 0 (off) to {MAX_CARDS} cards in the hand, not {exact}")
+        if exact and judge != ROUND:
+            raise ValueError("exact counts a round's points, so it goes with judge=round only")
         if (judge in (PLACE, LATE)) != bool(judge_net):
             raise ValueError(
                 "judge=place and judge=late take judge_net=<the judge file>, and only they do"
@@ -396,6 +421,7 @@ class OneNetSearch(HybridBot):
         self._net = player
         self.own = own
         self.judge = judge
+        self.exact = exact
         self._views: BiddingHistory | None = None
         self._views_key: tuple[Any, ...] | None = None
 
@@ -406,8 +432,41 @@ class OneNetSearch(HybridBot):
             logits = self._net(encode(obs, legal))
             return max(legal, key=lambda a: logits[a])
         cards = [a - PLAY_BASE for a in legal]
-        search = self.search(obs, cards, self.card_advantages(obs, cards))
+        advantages = self.card_advantages(obs, cards)
+        if obs.hand.bit_count() <= self.exact:
+            search = self.search_exact(obs, cards, advantages)
+            return play_action(search.cards[first_level(search.means)])
+        search = self.search(obs, cards, advantages)
         return play_action(search.cards[best_index(search.means)])
+
+    def search_exact(
+        self, obs: Observation, cards: list[int], advantages: list[float]
+    ) -> CardSearch:
+        """Every legal card valued by the exact finish (``estimation.onenet.endgame``): on each
+        imagined deal every line of play to the round's last trick, each seat playing its best
+        for itself, and the card's mean worth to this seat over the deals. The cards come back
+        the player's favourite first (by its ``advantages``), so that ``first_level`` plays its
+        favourite of the cards that are level."""
+        if obs.leader is None or obs.trump is None:
+            raise ValueError("the one net's search runs only during card play")
+        started = time.perf_counter()
+        deals = self.sample_deals(obs)
+        worths = worths_of(obs, self.config.rules, self.config.leader_weight)
+        solved = solve(deals, obs.trick, obs.leader, obs.tricks_won, obs.trump, worths)
+        if solved.cards != sorted(cards):
+            raise RuntimeError("the solver and the engine disagree on the legal cards")
+        means = solved.worths[:, :, obs.seat].mean(axis=0).tolist()
+        by_card = dict(zip(solved.cards, means, strict=True))
+        order = sorted(range(len(cards)), key=lambda k: (-advantages[k], cards[k]))
+        search = CardSearch(
+            [cards[k] for k in order],
+            [by_card[cards[k]] for k in order],
+            [advantages[k] * REWARD_SCALE for k in order],
+            len(deals),
+            time.perf_counter() - started,
+        )
+        self.last_search = search
+        return search
 
     def card_advantages(self, obs: Observation, cards: list[int]) -> list[float]:
         """The player's move logits of the legal ``cards``, which order them for the search."""
@@ -537,7 +596,8 @@ def make(
     own: bool = False,
     judge: str = ROUND,
     judge_net: str = "",
+    exact: int = 0,
 ) -> OneNetSearch:
     if not Path(net).exists():
         raise ValueError(f"onenet: no player file at {net}")
-    return OneNetSearch(seed, config, net, own=own, judge=judge, judge_net=judge_net)
+    return OneNetSearch(seed, config, net, own=own, judge=judge, judge_net=judge_net, exact=exact)

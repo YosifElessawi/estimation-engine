@@ -21,10 +21,12 @@ from estimation.bots.knowledge import read_knowledge
 from estimation.engine import Observation, Phase, RulesConfig, legal_plays
 from estimation.jaxenv.encode_np import PLAY_BASE, SIZE, encode
 from estimation.onenet import nets
+from estimation.onenet.endgame import LEVEL, solve, worths_of
 from estimation.onenet.nets import PRACTICE, PRACTICE_SIZE
 from estimation.onenet.search import (
     OneNetSearch,
     bidding_views,
+    first_level,
     load_judge,
     load_net,
     play_out,
@@ -319,6 +321,89 @@ def test_it_needs_the_players_file_and_valid_settings(tmp_path: Path):
         make_bot(f"onenet:net={path}:own=true:judge_net={path}", 0)
     with pytest.raises(ValueError, match="not a judge"):
         make_bot(f"onenet:net={path}:own=true:judge=place:judge_net={path}", 0)
+    for exact in (-1, 5):
+        with pytest.raises(ValueError, match="exact must be 0"):
+            make_bot(f"onenet:net={path}:own=true:exact={exact}", 0)
+    with pytest.raises(ValueError, match="judge=round only"):
+        make_bot(f"onenet:net={path}:own=true:judge=king:exact=4", 0)
+    with pytest.raises(ValueError, match="bot option exact"):
+        make_bot(f"onenet:net={path}:own=true:exact=four", 0)
+
+
+def late_card(rounds: list[Seen], least: int, most: int, choices: int = 2) -> Seen:
+    """The card decisions with ``least`` to ``most`` cards in the hand and at least ``choices``
+    legal cards."""
+    return [
+        row
+        for decisions in rounds
+        for row in cards_of_round(decisions)
+        if least <= row[0].hand.bit_count() <= most and len(row[1]) >= choices
+    ]
+
+
+def test_the_exact_finish_values_every_legal_card_on_the_deals_it_imagines(
+    game: tuple[Any, list[Seen]], tmp_path: Path
+):
+    _, rounds = game
+    spec = f"onenet:net={random_net(tmp_path)}:own=true:samples=4:top_k=2:exact=4"
+    found = late_card(rounds, 3, 4, choices=3)
+    assert found
+    for obs, legal, _ in found[:6]:
+        bot, twin = make_bot(spec, 5), make_bot(spec, 5)
+        assert isinstance(bot, OneNetSearch)
+        assert isinstance(twin, OneNetSearch)
+        assert bot.exact == 4
+        action = bot.act(obs, legal)
+        assert obs.leader is not None
+        assert obs.trump is not None
+        worths = worths_of(obs, twin.config.rules, twin.config.leader_weight)
+        deals = twin.sample_deals(obs)  # the same seed imagines the same deals
+        solved = solve(deals, obs.trick, obs.leader, obs.tricks_won, obs.trump, worths)
+        means = dict(zip(solved.cards, solved.worths[:, :, obs.seat].mean(0).tolist(), strict=True))
+        search = bot.last_search
+        assert search is not None
+        assert search.deals == 4
+        assert sorted(search.cards) == [a - PLAY_BASE for a in legal]  # not only its top 2
+        assert dict(zip(search.cards, search.means, strict=True)) == pytest.approx(means)
+        favourites = twin.card_advantages(obs, search.cards)
+        assert favourites == sorted(favourites, reverse=True)  # its favourite card first
+        level = [c for c in search.cards if means[c] >= max(means.values()) - LEVEL]
+        assert action == PLAY_BASE + level[0]  # the best card, its favourite of the level ones
+
+
+def test_of_level_cards_the_exact_finish_plays_the_first_listed():
+    assert first_level([1.0, 1.0 + LEVEL / 2, 0.0]) == 0
+    assert first_level([0.0, 1.0, 1.0]) == 1
+    assert first_level([1.0, 1.0 + 2 * LEVEL]) == 1
+    assert first_level([-3.0]) == 0
+
+
+def test_the_exact_finish_leaves_the_search_alone_above_its_cards_and_when_off(
+    game: tuple[Any, list[Seen]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _, rounds = game
+    plain = f"onenet:net={random_net(tmp_path)}:own=true:samples=4:top_k=2"
+    early, four = late_card(rounds, 5, 13)[0], late_card(rounds, 4, 4)[0]
+
+    def never(*_: Any) -> None:
+        raise AssertionError("the exact finish ran above its cards")
+
+    monkeypatch.setattr(OneNetSearch, "search_exact", never)
+    for spec, (obs, legal, _) in (
+        (f"{plain}:exact=4", early),  # more than 4 cards in the hand
+        (f"{plain}:exact=3", four),  # 4 cards, counted from 3
+        (plain, four),  # off by default
+    ):
+        assert make_bot(spec, 3).act(obs, legal) == make_bot(plain, 3).act(obs, legal)
+
+
+def test_the_exact_player_plays_a_set(tmp_path: Path):
+    spec = f"onenet:net={random_net(tmp_path)}:own=true:samples=2:top_k=2:exact=3"
+    bot = make_bot(spec, 0)
+    assert isinstance(bot, OneNetSearch)
+    assert bot.exact == 3
+    result, _ = play_set((spec, "random", spec, "random"), 1, 0, RulesConfig())
+    assert len(result.scores) == 4
 
 
 def test_a_place_judged_bot_plays_a_set_scoring_each_card_by_the_judge(

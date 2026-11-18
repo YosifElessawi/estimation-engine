@@ -1,9 +1,10 @@
-"""Step 7's yardstick: the rows it keeps of a recorded Bola's last cards, what they say, and the
-changed cards played for real."""
+"""Step 7's yardstick: the rows it keeps of a recorded Bola's last cards, what they say, the
+changed cards played for real, and the rounds finished by the exact player."""
 
 import dataclasses
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -282,6 +283,164 @@ def test_run_saves_each_bola_once_and_play_plays_its_changed_cards(games: Path, 
 
     with pytest.raises(ValueError, match="another run"):
         C.start(out, games, deals=8, cards=3, seed=9)
+
+
+def recorded(games: Path) -> tuple[int, list[int]]:
+    """The recorded Bola's seed and actions."""
+    with np.load(part_path(games, 0)) as part:
+        return int(part["seed"][0]), part["actions"][: int(part["log_start"][1])].tolist()
+
+
+class Replay:
+    """Plays the moves it is given, in order, whoever asks."""
+
+    def __init__(self, moves: list[int]) -> None:
+        self.moves = iter(moves)
+
+    def act(self, obs: Observation, legal: list[int]) -> int:
+        return next(self.moves)
+
+
+@pytest.fixture(scope="module")
+def finished(games: Path) -> C.Arrays:
+    return C.finish_bola(C.BolaTask(0, 0, config_of(games)))
+
+
+def test_a_round_is_finished_from_the_lead_of_its_first_trick_with_few_enough_cards(games: Path):
+    seed, actions = recorded(games)
+    starts = C.finish_starts(seed, actions, 3)
+    late = decisions(games, 3)
+    assert len(starts) >= 18
+    assert [round_no for _, round_no, _ in starts] == sorted({r for _, r, _ in starts})
+    for step, round_no, held in starts:
+        assert held == 3
+        bola = Bola(seed, DEFAULT_CONFIG)
+        for action in actions[:step]:
+            bola.step(action)
+        seat = bola.current_player
+        assert seat is not None
+        obs = bola.observation(seat)
+        assert (obs.round_no, len(obs.trick), obs.hand.bit_count()) == (round_no, 0, 3)
+        assert all(bola.observation(s).hand.bit_count() == 3 for s in range(4))
+        earlier = [at for at, (seen, _, _) in late.items() if seen.round_no == round_no]
+        assert all(at >= step for at in earlier)
+
+
+def test_finish_round_plays_the_rest_of_the_round_and_keeps_its_moves(games: Path):
+    seed, actions = recorded(games)
+    bola = Bola(seed, DEFAULT_CONFIG)
+    for action in actions:
+        bola.step(action)
+    step, _, held = C.finish_starts(seed, actions, 3)[2]
+    replay = Replay(actions[step:])
+    standings, result, moves = C.finish_round(seed, actions, step, [replay] * 4)
+    assert [action for _, action in moves] == actions[step : step + 4 * held]
+    assert result == bola.history[2].scores
+    before = [0, 0, 0, 0]
+    for done in bola.history[:2]:
+        before = [had + got for had, got in zip(before, done.scores, strict=True)]
+    assert list(standings) == before
+
+
+def test_finish_bola_finishes_every_round_for_each_seat(games: Path, finished: C.Arrays):
+    seed, actions = recorded(games)
+    starts = C.finish_starts(seed, actions, 3)
+    assert finished["step"].tolist() == [step for step, _, _ in starts for _ in range(4)]
+    assert finished["round"].tolist() == [number for _, number, _ in starts for _ in range(4)]
+    assert finished["seat"].tolist() == [0, 1, 2, 3] * len(starts)
+    by_round = finished["base"].reshape(-1, 4, 4)
+    assert (by_round == by_round[:, :1]).all()  # one play of the table players a round
+    assert set(finished["changed"].tolist()) <= {0, 2, 3}  # with one card there is no choice
+    same = finished["changed"] == 0
+    assert (finished["exact"][same] == finished["base"][same]).all()
+    step = int(finished["step"][0])
+    everyone = C.table_bots(config_of(games), 0, step, -1)
+    standings, base, _ = C.finish_round(seed, actions, step, everyone)
+    assert finished["standings"][0].tolist() == list(standings)
+    assert finished["base"][0].tolist() == list(base)
+    again = C.finish_bola(C.BolaTask(0, 0, config_of(games)))
+    for name in C.FINISH_DTYPES:
+        np.testing.assert_array_equal(again[name], finished[name])
+
+
+def test_the_exact_player_takes_one_seat_on_the_seats_own_seed(games: Path):
+    config = config_of(games)
+    bots = C.table_bots(config, 0, 40, 2)
+    assert [bot.exact for bot in bots] == [0, 0, 3, 0]
+    assert [bot.exact for bot in C.table_bots(config, 0, 40, -1)] == [0, 0, 0, 0]
+    with pytest.raises(ValueError, match="already plays an exact finish"):
+        C.exact_spec(f"{config.player}:exact=3", 3)
+
+
+def test_first_change_is_the_seats_hand_at_its_first_other_card():
+    base = [(0, 70), (1, 80), (2, 90), (3, 100), (1, 81), (2, 91), (3, 101), (0, 71)]
+    assert C.first_change(base, base, 0, 2) == 0
+    later = [*base[:4], (1, 82), *base[5:]]
+    assert C.first_change(base, later, 1, 2) == 1
+    first = [(0, 71), *base[1:]]
+    assert C.first_change(base, first, 0, 2) == 2
+    with pytest.raises(RuntimeError, match="left the table player's finish"):
+        C.first_change(base, later, 0, 2)
+
+
+def finish_row(game: int, seat: int, base: Any, exact: Any, changed: int) -> dict[str, Any]:
+    return {
+        "game": game,
+        "round": 1,
+        "step": 10,
+        "seat": seat,
+        "standings": (0, 0, 0, 0),
+        "base": base,
+        "exact": exact,
+        "changed": changed,
+    }
+
+
+def test_summarize_finish_counts_a_seats_gain_a_bola():
+    base = (10, -5, 20, 0)
+    better = (22, -5, 20, -12)  # seat 0 makes 12 more and seat 3 loses 12
+    rows = C.stack_finish(
+        [
+            finish_row(0, 0, base, better, 4),
+            *(finish_row(0, seat, base, base, 0) for seat in (1, 2, 3)),
+            *(finish_row(1, seat, base, base, 0) for seat in range(4)),
+        ]
+    )
+    summary = C.summarize_finish(rows)
+    assert (summary["bolas"], summary["rounds"]) == (2, 8)
+    assert summary["changed"] == pytest.approx(1 / 8)
+    gain = C.bid_check.worth(better, (0, 0, 0, 0), 0) - C.bid_check.worth(base, (0, 0, 0, 0), 0)
+    assert gain == pytest.approx(16.0)  # 12 of its own, and a third of the 12 seat 3 lost
+    totals = np.array([gain / 4, 0.0])  # a seat's mean in each Bola
+    assert summary["worth"] == pytest.approx(totals.mean())
+    assert summary["worth_error"] == pytest.approx(totals.std(ddof=1) / np.sqrt(2))
+    assert summary["own"] == pytest.approx(12 / 4 / 2)
+    assert summary["worth_a_change"] == pytest.approx(gain)
+    assert list(summary["groups"]) == ["4"]
+    assert summary["groups"]["4"]["rounds"] == 1
+    assert summary["groups"]["4"]["worth"] == pytest.approx(totals.mean())
+    text = C.finish_lines(summary)
+    assert "8 rounds and seats of 2 Bolas" in text[0]
+    assert "first other card with 4 cards in the hand: 1 rounds" in text[2]
+
+
+def test_finish_saves_each_bola_once_and_reports_the_gain(
+    games: Path, tmp_path: Path, finished: C.Arrays
+):
+    out = tmp_path / "check"
+    C.start(out, games, deals=4, cards=3, seed=9)
+    summary = C.finish(out, bolas=1, workers=1)
+    saved = C.finish_file(out, 0)
+    stamp = saved.stat().st_mtime_ns
+    loaded = C.load_finish(out)
+    for name in C.FINISH_DTYPES:
+        np.testing.assert_array_equal(loaded[name], finished[name])
+    assert summary[C.FINISH] == C.summarize_finish(finished)
+    assert any("the exact player at a real table" in line for line in C.lines(summary))
+    assert C.finish(out, bolas=1, workers=1) == summary  # no Bola is finished twice
+    assert saved.stat().st_mtime_ns == stamp
+    assert C.finish(out, bolas=1, skip=1, workers=1) == summary  # the order holds no more Bolas
+    assert json.loads((out / C.SUMMARY).read_text()) == summary
 
 
 def test_the_check_refuses_what_it_cannot_judge(games: Path, tmp_path: Path):
