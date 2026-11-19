@@ -1088,15 +1088,17 @@ Mac):
   quarter fewer lessons the lead models read them almost as well, so the player's room, not
   the lessons, is the limit.
 
-### Step 7 (measured 2026-11-18): the last tricks played exactly
+### Step 7 (measured 2026-11-18, in the player 2026-11-19): the last tricks played exactly
 
 **In short.** The table player loses about **12 points a game (+-2)** in a round's last 4 cards,
 by the real-play check on 100 recorded Bolas: where the exact answer is another card, playing it
 on the real deal is worth +2.0 points a change, and it changes 5.7 cards a seat a Bola. That is
 a third of what the exact finish imagines, and three times step 6's whole gain. All of it comes
 from about one card a seat a Bola, where the exact finish leads by more than 10 points. On that
-Yosif put the exact finish into the search (decision 7, `exact=4`, off by default); the new
-player's check on Bolas it has not seen is next. The parts, in the order they were run:
+Yosif put the exact finish into the search (decision 7, `exact=4`, off by default). On 100
+recorded Bolas it had not seen, the new player in one seat gains **+13.3 points a game (+-2.0)**
+over the table player in that seat, +8.3 of them in its own score. No table plays it yet. The
+parts, in the order they were run:
 
 **Where the card points go, by cards left (2026-11-17, no new play).** Round 2's 84,473 held-out
 card decisions with a choice, where the slow search (the same search with 256 deals and every
@@ -1196,6 +1198,32 @@ play:
 
 `finish` was tried on 2 recorded Bolas the check had not looked at (1.1 minutes a Bola on one
 process). It runs end to end; 2 Bolas say nothing about the size.
+
+**The exact player at a real table (2026-11-19).** `finish` on 100 recorded Bolas the check had
+not looked at (the next 100 of its order, the 2 tried ones among them), 35 minutes on the Mac's
+5 workers. 7,756 rounds and seats, each finished from the lead of its first trick with 4 cards
+in every hand, on the real deal: by the table player in every seat, and by the exact player in
+the seat with the table player in the other three. The exact player plays another card in 30.8%
+of them. By the cards in its hand at its first other card:
+
+| The first other card | Rounds and seats | Gain each | Gain a game |
+|---|---|---|---|
+| With 4 cards in the hand | 1,674 | +2.4 (+-0.4) | +10.1 (+-1.8) |
+| With 3 | 615 | +1.5 (+-0.6) | +2.2 (+-0.9) |
+| With 2 | 99 | +3.9 (+-1.9) | +1.0 (+-0.4) |
+| All | 2,388 | +2.2 (+-0.3) | **+13.3 (+-2.0)** |
+
+The gain is what the rounds are worth to the seat, as everywhere in this check: its own round
+score less the others', players ahead counting double. In its own score alone the seat gains
++8.3 points a game (+-1.7); the rest is what the other three lose. The errors take the Bola as
+the unit.
+
+It holds: +13.3 a game here against the +11.6 that one card at a time gave on other Bolas, and
+with the player as it would really sit, following its own cards up and every round counted
+once. The rows are not the earlier table's: a round whose first other card comes with 4 cards
+in the hand also holds what the player does with 3 and 2 after it. What this check still does
+not show is a whole game: the standings a better round leaves for the next, and the places at
+the end. A table match shows those, about 6 points a game either way at 100 sets.
 
 
 See also `docs/rl/next-steps.md` (the RL v2 run's own notes).
